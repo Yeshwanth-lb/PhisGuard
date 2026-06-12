@@ -1,0 +1,60 @@
+version: "3.8"
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.2
+    container_name: phishguard-es
+    environment:
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=changeme
+      - xpack.security.enabled=true
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD","curl","-f","http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.2
+    container_name: phishguard-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=changeme
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: phishguard-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.2
+    container_name: phishguard-mlflow
+    command: mlflow server --host 0.0.0.0 --port 5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+
+networks:
+  phishguard-sandbox:
+    driver: bridge
+    internal: false
+  default:
+    driver: bridge
+
+volumes:
+  es_data:
+  redis_data:
+  mlflow_data:
