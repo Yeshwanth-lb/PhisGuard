@@ -12,8 +12,8 @@ URL_SHORTENERS = {
     "rb.gy", "cutt.ly", "shorturl.at",
 }
 
-URL_REGEX = re.compile(r"https?://[^\s<>"'\)\]]+", re.IGNORECASE)
-HREF_REGEX = re.compile(r"href=["']?(https?://[^"'>\s]+)", re.IGNORECASE)
+URL_REGEX  = re.compile(r'https?://[A-Za-z0-9._%+~:/?#@!&()=;,\[\]-]+', re.IGNORECASE)
+HREF_REGEX = re.compile(r'href=[\x22\x27]?(https?://[^\x22\x27>\s]+)', re.IGNORECASE)
 
 
 def extract_urls(body_text: str = "", body_html: str = "") -> List[str]:

@@ -147,6 +147,7 @@ def parse_email(raw: bytes) -> Dict[str, Any]:
         "body_text": text_plain,
         "body_html": text_html,
         "attachments": attachments,
+        "attachment_hashes": [a["sha256"] for a in attachments],
         "headers": {
             "From": from_header,
             "Reply-To": reply_to,
