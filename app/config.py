@@ -8,6 +8,8 @@ class Settings(BaseSettings):
 
     # API auth
     phishguard_api_key: str = Field(default="dev-key")
+    api_key: str = Field(default="dev-key")
+    jwt_secret: str = Field(default="change-me-in-production")
 
     # OpenAI
     openai_api_key: str = Field(default="")
@@ -25,11 +27,14 @@ class Settings(BaseSettings):
     misp_default_tlp: str = Field(default="TLP:AMBER")
     misp_org_id: int = Field(default=1)
 
+    elasticsearch_url: str = Field(default="")
     # Elasticsearch
     elasticsearch_host: str = Field(default="http://127.0.0.1:9200")
     elasticsearch_username: str = Field(default="elastic")
     elasticsearch_password: str = Field(default="changeme")
 
+    opencti_url: str = Field(default="")
+    opencti_token: str = Field(default="")
     # OpenCTI
     opencti_admin_email: str = Field(default="admin@phishguard.local")
     opencti_admin_password: str = Field(default="changeme")
@@ -58,6 +63,10 @@ class Settings(BaseSettings):
     smtp_relay_port: int = Field(default=587)
     smtp_allowed_ips: str = Field(default="")
     max_smtp_connections: int = Field(default=50)
+
+    # ML training storage
+    ml_s3_bucket: str = Field(default="")
+    ml_local_data_dir: str = Field(default="data/training")
 
     # Cloud storage
     aws_s3_bucket: str = Field(default="phishguard-threat-samples")

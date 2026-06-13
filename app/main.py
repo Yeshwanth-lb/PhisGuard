@@ -1,8 +1,11 @@
 import time
 import uuid
 import structlog
-from fastapi import FastAPI, UploadFile, Form, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, Form, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer
+from app.security.auth import require_auth, create_token
+from app.security.rate_limiter import get_rate_limiter
+from app.security.sanitizer import validate_email_payload, validate_url_list
 from typing import Optional
 
 from app.config import settings
@@ -20,14 +23,16 @@ structlog.configure(
 
 logger = structlog.get_logger()
 app = FastAPI(title="PhishGuard", version="1.5.0")
-_bearer = HTTPBearer(auto_error=False)
+_rate_limit = get_rate_limiter(limit=120, window=60)
 
 
-def verify_api_key(token=Depends(HTTPBearer(auto_error=False))):
-    key = token.token if hasattr(token, "token") else (token.cred if hasattr(token, "cred") else "")
-    if not token or getattr(token, "scheme", "").lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return token
+@app.post("/token")
+async def get_token(body: dict):
+    ak = body.get("api_key", "")
+    expected = getattr(settings, "api_key", "")
+    if not expected or ak != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {"access_token": create_token({"sub": "client"}), "token_type": "bearer"}
 
 
 @app.get("/health")
@@ -48,7 +53,13 @@ async def health():
 
 
 @app.post("/analyze")
-async def analyze_email(email_file=None, raw_email=None):
+async def analyze_email(
+    request: Request,
+    email_file=None,
+    raw_email=None,
+    _rl=Depends(_rate_limit),
+    _auth=Depends(require_auth),
+):
     start = time.time()
     email_id = str(uuid.uuid4())
     if email_file:
