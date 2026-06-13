@@ -7,6 +7,8 @@ from app.layer1.verdicts import run_layer1
 from app.layer1.cache import L1Cache
 from app.layer2_ai.orchestrator import run_layer2
 from app.layer4_soar.soar_orchestrator import run_soar
+from app.layer5_ml.storage_exporter import save_training_record
+from app.layer5_ml.mlflow_tracker import log_verdict_to_mlflow
 from app.layer3_sandbox.verdicts import run_layer3
 
 logger = structlog.get_logger()
@@ -77,5 +79,7 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
         "parsed": parsed,
     }
     await run_soar(final, settings)
+    await save_training_record(final, settings)
+    log_verdict_to_mlflow(final, settings)
     return final
 
