@@ -6,6 +6,7 @@ from app.parser.url_extractor import extract_urls, resolve_shortened_urls
 from app.layer1.verdicts import run_layer1
 from app.layer1.cache import L1Cache
 from app.layer2_ai.orchestrator import run_layer2
+from app.layer3_sandbox.verdicts import run_layer3
 
 logger = structlog.get_logger()
 
