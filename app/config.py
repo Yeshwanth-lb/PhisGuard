@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = Field(default="")
 
+    # Anthropic (Claude) — used by NLP engine if set, takes priority over OpenAI
+    anthropic_api_key: str = Field(default="")
+
     # OSINT APIs
     virustotal_api_key: str = Field(default="")
     abuseipdb_api_key: str = Field(default="")

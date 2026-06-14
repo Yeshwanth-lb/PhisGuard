@@ -21,7 +21,7 @@ async def run_layer2(parsed: dict, settings) -> dict:
     """Run all 3 AI engines concurrently, produce weighted verdict."""
     results = await asyncio.gather(
         run_structural(parsed),
-        run_nlp(parsed, settings.openai_api_key),
+        run_nlp(parsed, openai_api_key=settings.openai_api_key, anthropic_api_key=getattr(settings, 'anthropic_api_key', '')),
         run_behavioral(parsed),
         return_exceptions=True,
     )
