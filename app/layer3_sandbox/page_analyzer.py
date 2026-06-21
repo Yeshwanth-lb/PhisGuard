@@ -1,6 +1,6 @@
 """Layer 3 - Page Analyzer: DOM, redirect, credential field detection."""
+
 import structlog
-from typing import List
 
 logger = structlog.get_logger()
 
@@ -19,7 +19,7 @@ SUSPICIOUS_JS = [
 
 def analyze_page(crawl_result: dict) -> dict:
     """Analyze Puppeteer crawl result dict."""
-    score = 0.0; findings: List[str] = []
+    score = 0.0; findings: list[str] = []
     dom = (crawl_result.get("dom_html", "") or "").lower()
     scripts = crawl_result.get("scripts", [])
     fdata = crawl_result.get("form_data", [])

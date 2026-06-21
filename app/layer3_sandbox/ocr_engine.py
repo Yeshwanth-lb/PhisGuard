@@ -1,8 +1,8 @@
 """Layer 3 - OCR Engine: extract text from screenshot using Tesseract."""
 import base64
 import io
+
 import structlog
-from typing import Optional
 
 logger = structlog.get_logger()
 
@@ -13,7 +13,7 @@ URGENCY_WORDS = [
 ]
 
 
-def ocr_screenshot(screenshot_b64: Optional[str]) -> dict:
+def ocr_screenshot(screenshot_b64: str | None) -> dict:
     """Run Tesseract OCR on a base64-encoded PNG screenshot."""
     if not screenshot_b64:
         return {"text": "", "score": 0.0, "findings": []}

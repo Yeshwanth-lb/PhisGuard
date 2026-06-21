@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
-from enum import Enum
+
 import uuid
 from datetime import datetime
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class Verdict(str, Enum):
@@ -46,26 +48,26 @@ class BaselineConfidence(str, Enum):
 
 class EmailContext(BaseModel):
     email_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    sender_ip: Optional[str] = None
-    sender_domain: Optional[str] = None
-    sender_email: Optional[str] = None
-    recipient: Optional[str] = None
-    subject: Optional[str] = None
-    body_text: Optional[str] = None
-    body_html: Optional[str] = None
-    urls: List[str] = Field(default_factory=list)
-    attachment_hashes: List[Dict[str, str]] = Field(default_factory=list)
-    headers: Dict[str, Any] = Field(default_factory=dict)
-    spf_result: Optional[str] = None
-    dkim_result: Optional[str] = None
-    dmarc_result: Optional[str] = None
-    send_timestamp: Optional[datetime] = None
-    raw_email: Optional[bytes] = None
+    sender_ip: str | None = None
+    sender_domain: str | None = None
+    sender_email: str | None = None
+    recipient: str | None = None
+    subject: str | None = None
+    body_text: str | None = None
+    body_html: str | None = None
+    urls: list[str] = Field(default_factory=list)
+    attachment_hashes: list[dict[str, str]] = Field(default_factory=list)
+    headers: dict[str, Any] = Field(default_factory=dict)
+    spf_result: str | None = None
+    dkim_result: str | None = None
+    dmarc_result: str | None = None
+    send_timestamp: datetime | None = None
+    raw_email: bytes | None = None
 
 
 class NLPResult(BaseModel):
     intent_score: float = 0.5
-    detected_patterns: List[str] = Field(default_factory=list)
+    detected_patterns: list[str] = Field(default_factory=list)
     primary_intent: str = "clean"
     confidence: float = 0.0
     explanation: str = ""
@@ -77,7 +79,7 @@ class BehavioralResult(BaseModel):
     anomaly_score: float = 0.5
     baseline_confidence: BaselineConfidence = BaselineConfidence.none
     cold_start_tier: int = 0
-    deviation_dimensions: Dict[str, float] = Field(default_factory=dict)
+    deviation_dimensions: dict[str, float] = Field(default_factory=dict)
     dominant_deviation: str = "none"
     emails_in_baseline: int = 0
     duration_ms: int = 0
@@ -92,8 +94,8 @@ class StructuralFlag(BaseModel):
 
 class StructuralResult(BaseModel):
     structural_score: float = 0.0
-    red_flags: List[StructuralFlag] = Field(default_factory=list)
-    domain_age_days: Optional[int] = None
+    red_flags: list[StructuralFlag] = Field(default_factory=list)
+    domain_age_days: int | None = None
     auth_alignment: str = "unknown"
     attachment_risk: str = "none"
     duration_ms: int = 0
@@ -103,25 +105,25 @@ class StructuralResult(BaseModel):
 class Layer2Result(BaseModel):
     verdict: Layer2Verdict = Layer2Verdict.deliver
     triggered_tier: TriggeredTier = TriggeredTier.fallback
-    triggered_engine: Optional[str] = None
+    triggered_engine: str | None = None
     composite_score: float = 0.0
-    weights_used: Dict[str, float] = Field(default_factory=dict)
-    engine2_nlp: Optional[NLPResult] = None
-    engine3_behavioral: Optional[BehavioralResult] = None
-    engine4_structural: Optional[StructuralResult] = None
+    weights_used: dict[str, float] = Field(default_factory=dict)
+    engine2_nlp: NLPResult | None = None
+    engine3_behavioral: BehavioralResult | None = None
+    engine4_structural: StructuralResult | None = None
     total_duration_ms: int = 0
 
 
 class MISPExport(BaseModel):
     exported: bool = False
-    misp_event_id: Optional[str] = None
-    misp_event_uuid: Optional[str] = None
-    misp_event_url: Optional[str] = None
-    attributes_exported: List[Dict[str, str]] = Field(default_factory=list)
-    threat_level: Optional[str] = None
+    misp_event_id: str | None = None
+    misp_event_uuid: str | None = None
+    misp_event_url: str | None = None
+    attributes_exported: list[dict[str, str]] = Field(default_factory=list)
+    threat_level: str | None = None
     tlp: str = "TLP:AMBER"
-    tags: List[str] = Field(default_factory=list)
-    exported_at: Optional[datetime] = None
+    tags: list[str] = Field(default_factory=list)
+    exported_at: datetime | None = None
     export_status: str = "not_applicable"
     opencti_synced: bool = False
 
@@ -130,35 +132,35 @@ class PipelineEvent(BaseModel):
     email_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     ingestion_source: str = "rest_api"
-    sender_ip: Optional[str] = None
-    sender_domain: Optional[str] = None
-    subject: Optional[str] = None
-    recipient: Optional[str] = None
-    spf_result: Optional[str] = None
-    dkim_result: Optional[str] = None
-    dmarc_result: Optional[str] = None
-    layer1_verdict: Optional[Layer1Verdict] = None
-    layer1_flags: List[str] = Field(default_factory=list)
+    sender_ip: str | None = None
+    sender_domain: str | None = None
+    subject: str | None = None
+    recipient: str | None = None
+    spf_result: str | None = None
+    dkim_result: str | None = None
+    dmarc_result: str | None = None
+    layer1_verdict: Layer1Verdict | None = None
+    layer1_flags: list[str] = Field(default_factory=list)
     layer1_misp_hit: bool = False
-    layer1_misp_event_id: Optional[str] = None
-    layer2_verdict: Optional[Layer2Verdict] = None
-    layer2_result: Optional[Layer2Result] = None
+    layer1_misp_event_id: str | None = None
+    layer2_verdict: Layer2Verdict | None = None
+    layer2_result: Layer2Result | None = None
     layer2_composite_score: float = 0.0
-    layer2_triggered_tier: Optional[TriggeredTier] = None
+    layer2_triggered_tier: TriggeredTier | None = None
     layer2_nlp_intent_score: float = 0.0
-    layer2_nlp_primary_intent: Optional[str] = None
+    layer2_nlp_primary_intent: str | None = None
     layer2_behavioral_anomaly_score: float = 0.0
-    layer2_behavioral_dominant_deviation: Optional[str] = None
+    layer2_behavioral_dominant_deviation: str | None = None
     layer2_behavioral_cold_start_tier: int = 0
     layer2_structural_score: float = 0.0
-    layer2_structural_red_flags: List[str] = Field(default_factory=list)
-    layer3_verdict: Optional[Layer3Verdict] = None
-    layer3_redirect_chain: List[str] = Field(default_factory=list)
-    layer3_final_url: Optional[str] = None
-    layer3_ocr_flags: List[str] = Field(default_factory=list)
-    layer3_screenshot_path: Optional[str] = None
-    final_verdict: Optional[Verdict] = None
-    misp_export: Optional[MISPExport] = None
+    layer2_structural_red_flags: list[str] = Field(default_factory=list)
+    layer3_verdict: Layer3Verdict | None = None
+    layer3_redirect_chain: list[str] = Field(default_factory=list)
+    layer3_final_url: str | None = None
+    layer3_ocr_flags: list[str] = Field(default_factory=list)
+    layer3_screenshot_path: str | None = None
+    final_verdict: Verdict | None = None
+    misp_export: MISPExport | None = None
     processing_time_ms: int = 0
 
 
@@ -168,5 +170,5 @@ class AnalyzeResponse(BaseModel):
     confidence: float
     route: str
     threat_summary: str
-    misp_event_id: Optional[str] = None
+    misp_event_id: str | None = None
     processing_time_ms: int

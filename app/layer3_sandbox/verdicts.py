@@ -1,8 +1,10 @@
 """Layer 3 - Sandbox verdict aggregator."""
 import structlog
-from app.layer3_sandbox.page_analyzer import analyze_page
+
 from app.layer3_sandbox.ocr_engine import ocr_screenshot
+from app.layer3_sandbox.page_analyzer import analyze_page
 from app.layer3_sandbox.sandbox_runner import detonate_url
+
 logger = structlog.get_logger()
 SANDBOX_THRESHOLD = 0.55
 
@@ -27,4 +29,9 @@ async def run_layer3(urls: list, settings) -> dict:
         "score": combined,
         "page_findings": page["findings"],
         "ocr_findings": ocr["findings"],
+        "screenshot_b64": crawl.get("screenshot_b64"),
+        "final_url": crawl.get("final_url"),
+        "title": crawl.get("title"),
+        "redirects": crawl.get("redirects", []),
+        "detonated_url": target_url,
     }

@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>PhishGuard SOC Console</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#0a0d14;color:#e2e8f0;font-size:14px;line-height:1.5}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+a{color:#60a5fa;text-decoration:none}
+a:hover{text-decoration:underline}
+header{background:#141925;border-bottom:1px solid #2a3346;padding:0 24px;height:58px;display:flex;align-items:center;gap:24px;position:sticky;top:0;z-index:50}
+.logo{font-size:18px;font-weight:800;letter-spacing:-.4px;color:#60a5fa}
+.logo span{color:#f87171}
+nav{display:flex;gap:2px;flex:1}
+nav a{padding:8px 13px;border-radius:6px;color:#94a3b8;cursor:pointer;font-size:13px;font-weight:500;transition:.15s;display:flex;align-items:center;gap:6px}
+nav a:hover{background:#1c2333;color:#e2e8f0;text-decoration:none}
+nav a.active{background:#3b82f6;color:#fff}
+nav a.hidden{display:none}
+.user-pill{display:flex;align-items:center;gap:10px;padding:6px 10px 6px 12px;background:#1c2333;border:1px solid #2a3346;border-radius:24px}
+.user-pill .role{font-size:10px;text-transform:uppercase;letter-spacing:.6px;font-weight:700;padding:2px 8px;border-radius:10px}
+.user-pill .role.admin{background:#7c2d12;color:#fdba74}
+.user-pill .role.analyst{background:#1e3a8a;color:#93c5fd}
+.user-pill .role.readonly{background:#334155;color:#cbd5e1}
+.user-pill .name{font-size:12px;color:#e2e8f0}
+.btn-logout{padding:6px 10px;background:transparent;border:1px solid #2a3346;border-radius:6px;color:#94a3b8;cursor:pointer;font-size:12px;transition:.15s}
+.btn-logout:hover{border-color:#f87171;color:#f87171}
+.login-overlay{position:fixed;inset:0;background:rgba(10,13,20,.95);backdrop-filter:blur(8px);z-index:1000;display:flex;align-items:center;justify-content:center}
+.login-card{background:#141925;border:1px solid #2a3346;border-radius:14px;padding:36px 32px;width:380px;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.login-logo{font-size:26px;font-weight:800;letter-spacing:-.5px;margin-bottom:6px;color:#60a5fa}
+.login-logo span{color:#f87171}
+.login-sub{font-size:12px;color:#94a3b8;margin-bottom:24px}
+.login-card label{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#94a3b8;margin:14px 0 6px}
+.login-card input,.login-card select{width:100%;padding:10px 12px;background:#0a0d14;border:1px solid #2a3346;border-radius:8px;outline:none;color:#e2e8f0}
+.login-card input:focus,.login-card select:focus{border-color:#60a5fa}
+.login-card button{width:100%;margin-top:20px;padding:11px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer}
+.login-card button:hover{background:#60a5fa}
+.login-err{margin-top:14px;color:#f87171;font-size:12px;min-height:16px}
+.container{max-width:1280px;margin:24px auto;padding:0 20px;padding-bottom:60px}
+.section{display:none;animation:fadeIn .25s ease}
+.section.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.section-title{font-size:20px;font-weight:700;margin-bottom:6px;letter-spacing:-.3px}
+.section-sub{font-size:12px;color:#94a3b8;margin-bottom:20px}
+.card{background:#141925;border:1px solid #2a3346;border-radius:12px;padding:20px;margin-bottom:18px}
+.card h2{font-size:12px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
+.card h2 .badge{font-size:10px;background:#1c2333;color:#94a3b8;padding:2px 8px;border-radius:10px;letter-spacing:.5px}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.stat-card{background:#141925;border:1px solid #2a3346;border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:14px;transition:.2s}
+.stat-card:hover{border-color:#60a5fa;transform:translateY(-1px)}
+.stat-icon{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#1c2333;font-size:20px}
+.stat-num{font-size:24px;font-weight:800;letter-spacing:-.3px;line-height:1}
+.stat-lbl{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
+.overview-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:900px){.overview-grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}}
+.donut{width:180px;height:180px;margin:0 auto;display:block}
+.legend{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.legend-row{display:flex;align-items:center;gap:10px;font-size:13px}
+.legend-dot{width:10px;height:10px;border-radius:2px}
+.legend-row .pct{margin-left:auto;color:#94a3b8;font-family:JetBrains Mono,monospace;font-size:12px}
+.feed{max-height:380px;overflow-y:auto}
+.feed-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:10px 12px;border-radius:8px;transition:.15s;cursor:pointer}
+.feed-row:hover{background:#1c2333}
+.feed-row + .feed-row{margin-top:2px}
+.verdict-pill{font-size:10px;font-weight:700;text-transform:uppercase;padding:3px 9px;border-radius:10px;letter-spacing:.6px}
+.verdict-pill.phishing{background:#2d1418;color:#f87171}
+.verdict-pill.suspicious{background:#2d2415;color:#fbbf24}
+.verdict-pill.clean{background:#0f2419;color:#34d399}
+.feed-meta{font-size:11px;color:#94a3b8;font-family:JetBrains Mono,monospace}
+.feed-from{font-size:13px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feed-subj{font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+button{padding:8px 16px;border-radius:6px;border:none;font-weight:600;cursor:pointer;transition:.15s;font-size:13px;display:inline-flex;align-items:center;gap:6px}
+.bp{background:#3b82f6;color:#fff}
+.bp:hover{background:#60a5fa}
+.bp:disabled{background:#1c2333;color:#64748b;cursor:not-allowed}
+.bs{background:#1c2333;color:#94a3b8;border:1px solid #2a3346}
+.bs:hover{background:#2a3346;color:#e2e8f0}
+.bd{background:#2d1418;color:#f87171;border:1px solid #5a1f24}
+.bd:hover{background:#3a1c20}
+.bw{background:transparent;color:#fbbf24;border:1px solid #fbbf24}
+.bw:hover{background:#2d2415}
+textarea,input[type=text],input[type=email],input[type=number],select{width:100%;padding:10px 12px;background:#0a0d14;border:1px solid #2a3346;border-radius:8px;outline:none;color:#e2e8f0}
+textarea{min-height:160px;font-family:JetBrains Mono,monospace;font-size:12px;resize:vertical}
+textarea:focus,input:focus,select:focus{border-color:#60a5fa}
+.result{display:none;border:1px solid #2a3346;border-radius:12px;padding:22px;margin-bottom:18px}
+.result.show{display:block}
+.result.phishing{background:#2d1418;border-color:#f87171}
+.result.suspicious{background:#2d2415;border-color:#fbbf24}
+.result.clean{background:#0f2419;border-color:#34d399}
+.result.error{background:#141925;border-color:#2a3346}
+.result-head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.result-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.25);font-size:24px}
+.result-title{font-size:18px;font-weight:800;letter-spacing:-.3px}
+.result.phishing .result-title{color:#f87171}
+.result.suspicious .result-title{color:#fbbf24}
+.result.clean .result-title{color:#34d399}
+.result-sub{font-size:12px;color:#94a3b8;margin-top:2px}
+.confidence{margin-left:auto;text-align:right}
+.confidence .num{font-size:24px;font-weight:800;letter-spacing:-.3px}
+.confidence .lbl{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
+.progress{background:rgba(0,0,0,.3);border-radius:6px;height:6px;overflow:hidden;margin:0 0 18px}
+.progress-fill{height:100%;border-radius:6px;transition:width .8s ease}
+.result.phishing .progress-fill{background:#f87171}
+.result.suspicious .progress-fill{background:#fbbf24}
+.result.clean .progress-fill{background:#34d399}
+.result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:14px}
+.result-tile{background:rgba(0,0,0,.3);border-radius:6px;padding:10px 14px}
+.result-tile .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:3px}
+.result-tile .val{font-size:13px;font-weight:600}
+.engines{margin-top:18px;padding-top:18px;border-top:1px solid rgba(255,255,255,.08)}
+.engines h3{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:10px}
+.engine-row{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.engine-name{width:140px;font-size:12px;color:#94a3b8}
+.engine-bar{flex:1;background:rgba(0,0,0,.3);border-radius:3px;height:5px;overflow:hidden}
+.engine-fill{height:100%;border-radius:3px;background:#60a5fa;transition:width .8s}
+.engine-val{width:50px;text-align:right;font-size:11px;color:#64748b;font-family:JetBrains Mono,monospace}
+table{width:100%;border-collapse:collapse;font-size:13px}
+table th{text-align:left;padding:10px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:#94a3b8;font-weight:600;border-bottom:1px solid #2a3346}
+table td{padding:10px 12px;border-bottom:1px solid #1c2333}
+table tr:hover td{background:#1c2333}
+.empty{text-align:center;color:#64748b;padding:40px;font-size:13px}
+code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;background:#0a0d14;padding:1px 5px;border-radius:3px}
+.toast-wrap{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:200}
+.toast{background:#141925;border:1px solid #2a3346;border-left:3px solid #60a5fa;border-radius:8px;padding:10px 14px;font-size:13px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,.4);animation:slideIn .25s ease}
+.toast.success{border-left-color:#34d399}
+.toast.warn{border-left-color:#fbbf24}
+.toast.error{border-left-color:#f87171}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #2a3346;border-top-color:#60a5fa;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.spacer{flex:1}
+.mono{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#64748b}
+.active-range{background:#3b82f6!important;color:#fff!important;border-color:#3b82f6!important}
+.dot.ok{background:#34d399}
+.dot.bad{background:#f87171}
+.dot.warn{background:#fbbf24}
+.kpi{font-size:22px;font-weight:800;letter-spacing:-.3px;color:#e2e8f0}
+.kpi-sub{font-size:11px;color:#94a3b8;margin-top:2px}
+.scan-feed-row{display:grid;grid-template-columns:80px auto 1fr 70px;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid #1c2333;font-size:12px}
+.scan-feed-row:last-child{border-bottom:none}
+.feature-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px}
+.feature-bar .name{width:160px;color:#94a3b8;font-family:JetBrains Mono,monospace;font-size:11px}
+.feature-bar .bar{flex:1;background:#0a0d14;border-radius:3px;height:6px;overflow:hidden}
+.feature-bar .fill{height:100%;background:linear-gradient(90deg,#60a5fa,#3b82f6);border-radius:3px}
+.feature-bar .v{width:50px;text-align:right;color:#64748b;font-family:JetBrains Mono,monospace;font-size:11px}
+</style>
+</head>
+<body>
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-card">
+    <div class="login-logo">Phish<span>Guard</span></div>
+    <div class="login-sub">SOC Console - sign in to continue</div>
+    <label>API Key</label>
+    <input type="text" id="loginKey" value="dev-key" autocomplete="off"/>
+    <label>Username</label>
+    <input type="text" id="loginUser" value="analyst@phishguard" autocomplete="off"/>
+    <label>Role</label>
+    <select id="loginRole">
+      <option value="admin">Admin (full access)</option>
+      <option value="analyst" selected>Analyst (scans, retrain, audit)</option>
+      <option value="readonly">Read-only (scans only)</option>
+    </select>
+    <button onclick="doLogin()">Sign in</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<header style="display:none" id="appHeader">
+  <div class="logo">Phish<span>Guard</span></div>
+  <nav>
+    <a id="nav-overview" class="active" onclick="showSection('overview')">Overview</a>
+    <a id="nav-scan" onclick="showSection('scan')">Scan</a>
+    <a id="nav-quarantine" onclick="showSection('quarantine')">Quarantine</a>
+    <a id="nav-reports" onclick="showSection('reports')">Reports</a>
+    <a id="nav-pending" data-perm="quarantine" onclick="showSection('pending')">Pending Review <span id="pendingBadge" style="display:none;background:#fbbf24;color:#1a1a2e;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
+    <a id="nav-ml" data-perm="ml_retrain" onclick="showSection('ml')">ML Ops</a>
+    <a id="nav-soar" data-perm="soar" onclick="showSection('soar')">SOAR</a>
+    <a id="nav-audit" data-perm="audit" onclick="showSection('audit')">Audit Log</a>
+    <a id="nav-gmail" data-perm="gmail_write" onclick="showSection('gmail')">Gmail</a>
+    <a id="nav-settings" onclick="showSection('settings')">Settings</a>
+  </nav>
+  <div class="user-pill" id="userPill">
+    <span class="role" id="userRole">analyst</span>
+    <span class="name" id="userName">user</span>
+  </div>
+  <button class="btn-logout" onclick="doLogout()">Logout</button>
+</header>
+<div class="container" id="appBody" style="display:none">
+<div class="stats-grid">
+  <div class="stat-card"><div class="stat-icon" style="background:#1c2333">SUM</div><div><div class="stat-num" id="st-total">0</div><div class="stat-lbl">Total Emails</div></div></div>
+  <div class="stat-card"><div class="stat-icon" style="background:#2d1418;color:#f87171">BAD</div><div><div class="stat-num" id="st-phish" style="color:#f87171">0</div><div class="stat-lbl">Phishing</div></div></div>
+  <div class="stat-card"><div class="stat-icon" style="background:#2d2415;color:#fbbf24">SUS</div><div><div class="stat-num" id="st-susp" style="color:#fbbf24">0</div><div class="stat-lbl">Suspicious</div></div></div>
+  <div class="stat-card"><div class="stat-icon" style="background:#0f2419;color:#34d399">OK</div><div><div class="stat-num" id="st-clean" style="color:#34d399">0</div><div class="stat-lbl">Clean</div></div></div>
+</div>
+
+<div class="section active" id="sec-overview">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+    <div><div class="section-title">Overview</div><div class="section-sub">Real-time threat posture across all 7 detection layers</div></div>
+    <div style="display:flex;gap:4px;align-items:center" id="timeRangeBar">
+      <span style="font-size:11px;color:#64748b;margin-right:4px">Range:</span>
+      <button class="bs time-range-btn active-range" data-hours="" onclick="setTimeRange(null,this)">All</button>
+      <button class="bs time-range-btn" data-hours="24" onclick="setTimeRange(24,this)">24h</button>
+      <button class="bs time-range-btn" data-hours="168" onclick="setTimeRange(168,this)">7d</button>
+      <button class="bs time-range-btn" data-hours="720" onclick="setTimeRange(720,this)">30d</button>
+    </div>
+  </div>
+  <div class="overview-grid">
+    <div class="card">
+      <h2>Verdict Distribution <span class="badge" id="overview-total">0 emails</span></h2>
+      <svg class="donut" id="donutChart" viewBox="0 0 42 42"></svg>
+      <div class="legend" id="donutLegend"></div>
+    </div>
+    <div class="card">
+      <h2>Recent Detections <span class="badge"><span class="dot ok"></span> live</span></h2>
+      <div class="feed" id="feedRecent"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>System Health</h2>
+    <div class="row" id="healthRow"><div class="empty">Probing layers...</div></div>
+  </div>
+</div>
+
+<div class="section" id="sec-scan">
+  <div class="section-title">Scan an Email</div>
+  <div class="section-sub">Paste raw RFC-822 email to run through all layers</div>
+  <div class="card">
+    <h2>Email Source</h2>
+    <textarea id="scanInput" placeholder="From: ...\nTo: ...\nSubject: ...\n\nBody..."></textarea>
+    <div class="row" style="margin-top:14px">
+      <button class="bp" id="scanBtn" onclick="runScan()">Run Full Scan</button>
+      <button class="bs" onclick="loadDemo()">Load Demo Phish</button>
+      <button class="bs" onclick="resetForm()">Clear</button>
+      <span class="spin" id="scanSpin" style="display:none"></span>
+      <span class="mono" id="scanMsg"></span>
+    </div>
+  </div>
+  <div class="result" id="scanResult">
+    <div class="result-head">
+      <div class="result-icon" id="resIcon">?</div>
+      <div><div class="result-title" id="resTitle"></div><div class="result-sub" id="resSub"></div></div>
+      <div class="confidence"><div class="num" id="resConf"></div><div class="lbl">Confidence</div></div>
+    </div>
+    <div class="progress"><div class="progress-fill" id="resBar" style="width:0%"></div></div>
+    <div class="result-grid">
+      <div class="result-tile"><div class="lbl">Blocked At</div><div class="val" id="resBlocked">-</div></div>
+      <div class="result-tile"><div class="lbl">Email ID</div><div class="val mono" id="resId">-</div></div>
+      <div class="result-tile"><div class="lbl">Scan Time</div><div class="val" id="resTime">-</div></div>
+    </div>
+    <div class="engines" id="resEngines" style="display:none">
+      <h3>AI Engine Scores</h3>
+      <div class="engine-row"><div class="engine-name">Structural</div><div class="engine-bar"><div class="engine-fill" id="eng-s" style="width:0%"></div></div><div class="engine-val" id="engv-s">0.00</div></div>
+      <div class="engine-row"><div class="engine-name">NLP (Gemini)</div><div class="engine-bar"><div class="engine-fill" id="eng-n" style="width:0%"></div></div><div class="engine-val" id="engv-n">0.00</div></div>
+      <div class="engine-row"><div class="engine-name">Behavioral</div><div class="engine-bar"><div class="engine-fill" id="eng-b" style="width:0%"></div></div><div class="engine-val" id="engv-b">0.00</div></div>
+      <div class="engine-row"><div class="engine-name">ML Classifier</div><div class="engine-bar"><div class="engine-fill" id="eng-m" style="width:0%"></div></div><div class="engine-val" id="engv-m">0.00</div></div>
+    </div>
+  </div>
+</div>
+<div class="section" id="sec-quarantine">
+  <div class="section-title">Quarantine</div>
+  <div class="section-sub">Emails held for review</div>
+  <div class="card"><div id="quarantineBody"><div class="empty">Loading...</div></div></div>
+</div>
+
+<div class="section" id="sec-reports">
+  <div class="section-title">Scan Reports</div>
+  <div class="section-sub">Full audit trail of every scanned email</div>
+  <div class="card" id="reports-list-card"><h2>All Scans</h2><div id="reportsBody"><div class="empty">Loading...</div></div></div>
+  <div class="card" id="report-detail-card" style="display:none">
+    <a onclick="closeReport()" style="cursor:pointer">Return to all scans</a>
+    <h2 style="margin-top:14px">Scan Detail</h2>
+    <div id="reportDetailBody"></div>
+  </div>
+</div>
+
+<div class="section" id="sec-pending">
+  <div class="section-title">Pending SOC Review</div>
+  <div class="section-sub">Suspicious emails held for analyst approval before delivery</div>
+  <div class="card">
+    <h2>Awaiting Decision <span class="badge" id="pendingCount">0 emails</span></h2>
+    <div id="pendingBody"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<div class="section" id="sec-ml">
+  <div class="section-title">ML Operations</div>
+  <div class="section-sub">Layer 5 GradientBoosting classifier</div>
+  <div class="overview-grid">
+    <div class="card">
+      <h2>Model Status <span class="badge" id="mlStatusBadge">unknown</span></h2>
+      <div id="mlStatusBody"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h2>Training Controls</h2>
+      <p style="font-size:12px;color:#94a3b8;margin-bottom:14px">Retrain runs cross-validation on the current corpus.</p>
+      <div class="row">
+        <button class="bp" onclick="mlRetrain()">Retrain on Current Data</button>
+        <button class="bw" onclick="mlBootstrap()">Bootstrap From Synthetic</button>
+        <span class="spin" id="mlSpin" style="display:none"></span>
+        <span class="mono" id="mlMsg"></span>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Last Training Run</h2>
+    <div id="mlMetrics"><div class="empty">No training run yet</div></div>
+  </div>
+</div>
+<div class="section" id="sec-soar">
+  <div class="section-title">SOAR Orchestration</div>
+  <div class="section-sub">Layer 4 automated response across security tools</div>
+  <div class="card"><h2>Integration Status</h2><div id="soarStatus"><div class="empty">Loading...</div></div></div>
+  <div class="card">
+    <h2>Sender Denylist</h2>
+    <div class="row" style="margin-bottom:14px">
+      <select id="dlKind" style="width:auto"><option value="sender">sender</option><option value="domain">domain</option><option value="ip">ip</option><option value="url">url</option></select>
+      <input id="dlValue" placeholder="value to deny" style="flex:1;min-width:220px"/>
+      <input id="dlReason" placeholder="reason (optional)" style="flex:1;min-width:180px"/>
+      <button class="bp" onclick="addDenylist()">Add Entry</button>
+    </div>
+    <div id="dlStats" class="mono" style="margin-bottom:10px"></div>
+    <div id="dlTable"><div class="empty">Loading...</div></div>
+  </div>
+  <div class="card"><h2>Recent SOAR Actions</h2><div id="soarAudit"><div class="empty">Loading...</div></div></div>
+</div>
+
+<div class="section" id="sec-audit">
+  <div class="section-title">Audit Log</div>
+  <div class="section-sub">Layer 6 every API call with request ID, IP, status, latency</div>
+  <div class="card">
+    <h2>Recent Activity <span class="badge" id="auditCount">0</span></h2>
+    <div id="auditBody"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<div class="section" id="sec-gmail">
+  <div class="section-title">Gmail Integration</div>
+  <div class="section-sub">Layer 7 Google Workspace ingestion via Gmail API and Pub/Sub</div>
+  <div class="card"><h2>Connection Status</h2><div id="gmailStatus"><div class="empty">Loading...</div></div></div>
+  <div class="card">
+    <h2>Watch Controls</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-bottom:14px">Configure Pub/Sub watches and trigger historical scans.</p>
+    <div class="row">
+      <button class="bp" onclick="gmailWatch()">Start Watch</button>
+      <button class="bs" onclick="gmailRenew()">Renew Watch</button>
+      <button class="bd" onclick="gmailStop()">Stop Watch</button>
+      <span class="spin" id="gmailSpin" style="display:none"></span>
+      <span class="mono" id="gmailMsg"></span>
+    </div>
+  </div>
+</div>
+
+<div class="section" id="sec-settings">
+  <div class="section-title">Settings</div>
+  <div class="section-sub">Provider configuration and detection thresholds</div>
+  <div class="card"><h2>Provider Configuration</h2><div id="settingsBody"><div class="empty">Loading...</div></div></div>
+  <div class="card"><h2>Detection Thresholds</h2><div id="thresholdsBody"></div></div>
+</div>
+
+</div>
+<div class="toast-wrap" id="toastWrap"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+const API = window.location.origin || "http://localhost:8000";
+const STORAGE_KEY = "pg_session_v2";
+let session = null;
+let currentSection = "overview";
+let pollHandle = null;
+let _currentHours = null;   // null = all-time; 24/168/720 = last N hours
+let _refreshTimer = null;
+
+const ROLE_PERMS = {
+  admin: new Set(["scan","quarantine","release","denylist_write","soar","ml_retrain","audit","settings","gmail_write"]),
+  analyst: new Set(["scan","quarantine","release","denylist_write","soar","ml_retrain","audit"]),
+  readonly: new Set(["scan"])
+};
+
+function loadSession(){
+  try{ const raw = localStorage.getItem(STORAGE_KEY); if(raw){ session = JSON.parse(raw); } }catch(e){ session = null; }
+}
+function saveSession(s){
+  session = s; localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+}
+function clearSession(){
+  session = null; localStorage.removeItem(STORAGE_KEY);
+  if(_refreshTimer){ clearTimeout(_refreshTimer); _refreshTimer = null; }
+}
+
+function _scheduleTokenRefresh(){
+  if(_refreshTimer){ clearTimeout(_refreshTimer); _refreshTimer = null; }
+  if(!session || !session.exp) return;
+  const msUntilExpiry = session.exp - Date.now();
+  const refreshAt = msUntilExpiry - 2*60*1000; // 2 min before expiry
+  if(refreshAt <= 0){
+    refreshToken().then(ok => { if(ok) _scheduleTokenRefresh(); else { clearSession(); showLogin(); } });
+    return;
+  }
+  _refreshTimer = setTimeout(async function(){
+    const ok = await refreshToken();
+    if(ok) _scheduleTokenRefresh();
+    else { clearSession(); showLogin(); }
+  }, refreshAt);
+}
+
+async function doLogin(){
+  const apiKey = document.getElementById("loginKey").value.trim();
+  const sub = document.getElementById("loginUser").value.trim() || "user";
+  const role = document.getElementById("loginRole").value;
+  const errEl = document.getElementById("loginErr");
+  errEl.textContent = "";
+  try{
+    const r = await fetch(API + "/token", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({api_key: apiKey, sub, role})});
+    if(!r.ok){ const e = await r.json().catch(()=>({})); errEl.textContent = e.detail || ("Login failed: " + r.status); return; }
+    const d = await r.json();
+    saveSession({access_token: d.access_token, refresh_token: d.refresh_token, sub, role, exp: Date.now() + (d.expires_in||3600)*1000});
+    showApp();
+  }catch(e){ errEl.textContent = "Cannot reach server. Is the API running?"; }
+}
+
+async function doLogout(){
+  if(session && session.access_token){
+    try{ await fetch(API + "/api/auth/revoke", {method:"DELETE", headers:{"Authorization":"Bearer " + session.access_token}}); }catch(e){}
+  }
+  clearSession();
+  showLogin();
+}
+
+async function refreshToken(){
+  if(!session || !session.refresh_token) return false;
+  try{
+    const r = await fetch(API + "/api/auth/refresh", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({refresh_token: session.refresh_token})});
+    if(!r.ok) return false;
+    const d = await r.json();
+    saveSession({...session, access_token: d.access_token, refresh_token: d.refresh_token, exp: Date.now() + (d.expires_in||3600)*1000});
+    return true;
+  }catch(e){ return false; }
+}
+
+async function api(path, opts){
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {});
+  if(session && session.access_token) headers["Authorization"] = "Bearer " + session.access_token;
+  if(opts.body && typeof opts.body !== "string"){ headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.body); }
+  let r = await fetch(API + path, {...opts, headers});
+  if(r.status === 401){
+    const ok = await refreshToken();
+    if(ok){ headers["Authorization"] = "Bearer " + session.access_token; r = await fetch(API + path, {...opts, headers}); }
+    else { clearSession(); showLogin(); throw new Error("session expired"); }
+  }
+  return r;
+}
+
+function hasPerm(perm){
+  if(!session) return false;
+  const perms = ROLE_PERMS[session.role] || ROLE_PERMS.readonly;
+  return perms.has(perm);
+}
+
+function applyRBAC(){
+  document.querySelectorAll("nav a[data-perm]").forEach(a => {
+    const p = a.getAttribute("data-perm");
+    if(hasPerm(p)) a.classList.remove("hidden");
+    else a.classList.add("hidden");
+  });
+}
+
+function showLogin(){
+  document.getElementById("loginOverlay").style.display = "flex";
+  document.getElementById("appHeader").style.display = "none";
+  document.getElementById("appBody").style.display = "none";
+  if(pollHandle){ clearInterval(pollHandle); pollHandle = null; }
+}
+function showApp(){
+  document.getElementById("loginOverlay").style.display = "none";
+  document.getElementById("appHeader").style.display = "flex";
+  document.getElementById("appBody").style.display = "block";
+  document.getElementById("userName").textContent = session.sub;
+  const roleEl = document.getElementById("userRole");
+  roleEl.textContent = session.role;
+  roleEl.className = "role " + session.role;
+  applyRBAC();
+  showSection("overview");
+  startPolling();
+  _scheduleTokenRefresh();
+}
+
+function showSection(name){
+  currentSection = name;
+  const all = ["overview","scan","quarantine","reports","pending","ml","soar","audit","gmail","settings"];
+  all.forEach(n => {
+    const sec = document.getElementById("sec-" + n);
+    const lnk = document.getElementById("nav-" + n);
+    if(sec) sec.classList.toggle("active", n === name);
+    if(lnk) lnk.classList.toggle("active", n === name);
+  });
+  if(name === "overview"){ loadOverview(); }
+  else if(name === "quarantine"){ loadQuarantine(); }
+  else if(name === "pending"){ loadPending(); }
+  else if(name === "reports"){ loadReports(); }
+  else if(name === "ml"){ loadML(); }
+  else if(name === "soar"){ loadSoar(); }
+  else if(name === "audit"){ loadAudit(); }
+  else if(name === "gmail"){ loadGmail(); }
+  else if(name === "settings"){ loadSettings(); }
+}
+
+function startPolling(){
+  if(pollHandle) clearInterval(pollHandle);
+  loadStats();
+  pollPendingBadge();
+  pollHandle = setInterval(() => {
+    loadStats();
+    pollPendingBadge();
+    if(currentSection === "overview") loadOverview();
+    if(currentSection === "pending") loadPending();
+  }, 5000);
+}
+
+function toast(msg, kind){
+  const wrap = document.getElementById("toastWrap");
+  const el = document.createElement("div");
+  el.className = "toast " + (kind || "");
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+function setTimeRange(hours, btn){
+  _currentHours = hours;
+  document.querySelectorAll(".time-range-btn").forEach(function(b){ b.classList.remove("active-range"); });
+  if(btn) btn.classList.add("active-range");
+  loadStats();
+  loadOverview();
+}
+
+async function loadStats(){
+  const qs = _currentHours ? "?hours=" + _currentHours : "";
+  try{
+    const r = await fetch(API + "/api/stats" + qs);
+    if(!r.ok) throw new Error("stats " + r.status);
+    const s = await r.json();
+    document.getElementById("st-total").textContent = s.total || 0;
+    document.getElementById("st-phish").textContent = s.phishing || 0;
+    document.getElementById("st-susp").textContent = s.suspicious || 0;
+    document.getElementById("st-clean").textContent = s.clean || 0;
+    setBackendStatus(true);
+    return s;
+  }catch(e){ setBackendStatus(false); return {}; }
+}
+
+let _backendOk = null;
+function setBackendStatus(ok){
+  if(_backendOk === ok) return;
+  _backendOk = ok;
+  let bar = document.getElementById("backendStatusBar");
+  if(!bar){
+    bar = document.createElement("div");
+    bar.id = "backendStatusBar";
+    bar.style.cssText = "position:fixed;top:58px;left:0;right:0;z-index:49;padding:8px 20px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;transition:.3s";
+    document.body.appendChild(bar);
+  }
+  if(ok){
+    bar.style.display = "none";
+  } else {
+    bar.style.cssText += ";background:#2d1418;color:#f87171;border-bottom:1px solid #5a1f24;";
+    bar.style.display = "flex";
+    bar.innerHTML = '<span>&#9888; Backend unreachable &mdash; API is down or starting up</span><button onclick="retryConnection()" style="margin-left:auto;padding:4px 12px;background:#5a1f24;border:1px solid #f87171;border-radius:5px;color:#f87171;cursor:pointer;font-size:12px">Retry</button>';
+  }
+}
+
+function retryConnection(){
+  loadStats();
+  if(currentSection === "overview") loadOverview();
+}
+
+function drawDonut(phishing, suspicious, clean){
+  const total = phishing + suspicious + clean;
+  const svg = document.getElementById("donutChart");
+  if(!total){
+    svg.innerHTML = `<circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#2a3346" stroke-width="3"/>`;
+    document.getElementById("donutLegend").innerHTML = `<div class="empty" style="padding:14px">No data</div>`;
+    return;
+  }
+  const segs = [["#f87171", phishing, "Phishing"], ["#fbbf24", suspicious, "Suspicious"], ["#34d399", clean, "Clean"]];
+  let offset = 25;
+  let html = `<circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#1c2333" stroke-width="3"/>`;
+  let legend = "";
+  for(const seg of segs){
+    const color = seg[0]; const val = seg[1]; const name = seg[2];
+    const pct = total > 0 ? (val * 100) / total : 0;
+    if(pct > 0){
+      const d1 = pct.toFixed(2); const d2 = (100 - pct).toFixed(2);
+      html += `<circle cx="21" cy="21" r="15.915" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${d1} ${d2}" stroke-dashoffset="${offset}" transform="rotate(-90 21 21)"/>`;
+    }
+    offset = offset - pct;
+    legend += `<div class="legend-row"><span class="legend-dot" style="background:${color}"></span><span>${name}</span><span class="pct">${val} &middot; ${pct.toFixed(1)}%</span></div>`;
+  }
+  html += `<text x="21" y="21" text-anchor="middle" dy="-2" fill="#e2e8f0" font-size="6" font-weight="800">${total}</text><text x="21" y="21" text-anchor="middle" dy="5" fill="#94a3b8" font-size="2.5">total</text>`;
+  svg.innerHTML = html;
+  document.getElementById("donutLegend").innerHTML = legend;
+  document.getElementById("overview-total").textContent = total + " emails";
+}
+
+async function loadOverview(){
+  const s = await loadStats();
+  drawDonut(s.phishing||0, s.suspicious||0, s.clean||0);
+  try{
+    const scansQs = "/api/scans?limit=10" + (_currentHours ? "&hours=" + _currentHours : "");
+    const r = await api(scansQs);
+    if(!r.ok) throw new Error("scans " + r.status);
+    const list = await r.json();
+    const items = list.items || list.scans || [];
+    const feed = document.getElementById("feedRecent");
+    if(!items.length){ feed.innerHTML = `<div class="empty">No scans yet. Try the Scan tab.</div>`; }
+    else {
+      feed.innerHTML = items.slice(0,8).map(function(it){
+        const v = (it.verdict || "unknown").toLowerCase();
+        const ts = it.ts ? new Date(it.ts*1000).toLocaleTimeString() : (it.timestamp ? new Date(it.timestamp).toLocaleTimeString() : "-");
+        const fr = it.sender || it.from || "(no sender)";
+        const sj = it.subject || "(no subject)";
+        const sid = it.id || it.scan_id || it.email_id || "";
+        return `<div class="feed-row" data-scan-id="${escapeHtml(sid)}"><span class="verdict-pill ${escapeHtml(v)}">${escapeHtml(v)}</span><div><div class="feed-from">${escapeHtml(fr)}</div><div class="feed-subj">${escapeHtml(sj)}</div></div><span class="feed-meta">${escapeHtml(ts)}</span></div>`;
+      }).join("");
+      feed.querySelectorAll(".feed-row").forEach(function(row){
+        row.addEventListener("click", function(){ openReport(row.getAttribute("data-scan-id")); });
+      });
+    }
+  }catch(e){
+    document.getElementById("feedRecent").innerHTML = `<div class="empty" style="padding:20px">
+      <div style="margin-bottom:10px;color:#f87171">Could not reach backend</div>
+      <button class="bs" onclick="loadOverview()" style="font-size:12px">&#8635; Retry</button>
+    </div>`;
+  }
+  loadHealth();
+}
+
+function escapeHtml(s){if(!s)return "";const map={};map["&"]="&amp;";map["<"]="&lt;";map[">"]="&gt;";map[String.fromCharCode(34)]="&quot;";map[String.fromCharCode(39)]="&#39;";map[String.fromCharCode(96)]="&#96;";return String(s).split("").map(function(c){return map[c]||c;}).join("");}
+
+async function loadHealth(){
+  try{
+    const r = await fetch(API + "/health");
+    if(!r.ok) throw new Error("health " + r.status);
+    const h = await r.json();
+    const layers = [
+      ["Layer 1 OSINT", h.layer1_osint_ok === true || h.virustotal_api === "ok" || h.abuseipdb_api === "ok"],
+      ["Layer 2 AI", h.layer2_ai_configured === true],
+      ["Layer 3 Sandbox", h.layer3_sandbox_ok !== false],
+      ["Layer 4 SOAR", h.layer4_soar_configured === true],
+      ["Layer 5 ML", h.layer5_ml_ok === true],
+      ["Layer 6 Security", h.layer6_security_ok !== false],
+      ["Layer 7 Gmail", h.gmail_configured === true]
+    ];
+    document.getElementById("healthRow").innerHTML = layers.map(function(l){return `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:#1c2333;border:1px solid #2a3346;border-radius:6px;font-size:12px"><span class="dot ${l[1] ? "ok" : "warn"}"></span>${l[0]}</div>`;}).join("");
+  }catch(e){
+    document.getElementById("healthRow").innerHTML = `<div style="display:flex;align-items:center;gap:10px;color:#f87171;font-size:13px;padding:6px">
+      <span>&#9888; Backend unreachable</span>
+      <button class="bs" onclick="loadHealth()" style="font-size:12px">&#8635; Retry</button>
+    </div>`;
+  }
+}
+
+async function runScan(){
+  const raw = document.getElementById("scanInput").value.trim();
+  if(!raw){ toast("Paste an email first.", "warn"); return; }
+  setScanBusy(true); hideScanResult();
+  try{
+    const t0 = Date.now();
+    const r = await api("/analyze", {method:"POST", body:{raw_email: raw}});
+    const ms = Date.now() - t0;
+    if(!r.ok){ const e = await r.json().catch(()=>({})); showScanError(e.detail || ("Error " + r.status)); return; }
+    const d = await r.json(); d._ms = ms;
+    showScanResult(d);
+    loadStats();
+  }catch(e){ showScanError("Cannot reach server."); }
+  finally{ setScanBusy(false); }
+}
+
+function showScanResult(d){
+  const card = document.getElementById("scanResult");
+  const v = (d.verdict || "unknown").toLowerCase();
+  const pct = Math.round((d.confidence || 0) * 100);
+  card.className = "result show " + v;
+  const ico = {phishing:"!", suspicious:"?", clean:"OK", unknown:"?"};
+  document.getElementById("resIcon").textContent = ico[v] || "?";
+  const lbl = {phishing:"PHISHING DETECTED", suspicious:"SUSPICIOUS EMAIL", clean:"CLEAN EMAIL", unknown:"UNKNOWN"};
+  document.getElementById("resTitle").textContent = lbl[v] || v.toUpperCase();
+  const sub = {phishing:"This email is a phishing attempt. Do not click any links.", suspicious:"Suspicious patterns detected. Be cautious.", clean:"No threats found. This email appears safe.", unknown:"Could not determine result."};
+  document.getElementById("resSub").textContent = sub[v] || "";
+  document.getElementById("resConf").textContent = pct + "%";
+  document.getElementById("resBar").style.width = pct + "%";
+  document.getElementById("resBlocked").textContent = d.blocked_at || "all layers passed";
+  document.getElementById("resId").textContent = d.email_id || "-";
+  document.getElementById("resTime").textContent = (d._ms || d.processing_time_ms || 0) + " ms";
+  const l2 = d.l2;
+  const ml = d.ml || (d.layer5 || {});
+  const eng = document.getElementById("resEngines");
+  if(l2 && l2.engine_scores){
+    const sc = l2.engine_scores;
+    eng.style.display = "block";
+    const setBar = function(k, val){
+      document.getElementById("eng-" + k).style.width = Math.round(val * 100) + "%";
+      document.getElementById("engv-" + k).textContent = Number(val).toFixed(2);
+    };
+    setBar("s", sc.structural || 0);
+    setBar("n", sc.nlp || 0);
+    setBar("b", sc.behavioral || 0);
+    setBar("m", (ml && ml.score) ? ml.score : 0);
+  } else { eng.style.display = "none"; }
+  card.scrollIntoView({behavior:"smooth", block:"nearest"});
+}
+
+function showScanError(msg){
+  const card = document.getElementById("scanResult");
+  card.className = "result show error";
+  document.getElementById("resIcon").textContent = "X";
+  document.getElementById("resTitle").textContent = "ERROR";
+  document.getElementById("resSub").textContent = msg;
+  document.getElementById("resConf").textContent = "";
+  document.getElementById("resBar").style.width = "0%";
+  document.getElementById("resEngines").style.display = "none";
+}
+function hideScanResult(){ document.getElementById("scanResult").classList.remove("show"); }
+function setScanBusy(on){
+  document.getElementById("scanBtn").disabled = on;
+  document.getElementById("scanSpin").style.display = on ? "inline-block" : "none";
+  document.getElementById("scanMsg").textContent = on ? "Running through all 7 layers..." : "";
+}
+function resetForm(){ document.getElementById("scanInput").value = ""; hideScanResult(); }
+function loadDemo(){
+  document.getElementById("scanInput").value = [
+    "From: alert@example-bank.example",
+    "To: user@company.com",
+    "Subject: URGENT: Verify your account",
+    "Date: Sun, 14 Jun 2026 07:30:00 +0000",
+    "",
+    "Dear Customer,",
+    "",
+    "Unusual activity detected. Click below to restore access:",
+    "ht" + "tp://bad-site.example/verify",
+    "",
+    "You have 24 hours.",
+    "",
+    "Security Team"
+  ].join(String.fromCharCode(10));
+}
+
+async function loadPending(){
+  const body = document.getElementById('pendingBody');
+  body.innerHTML = '<div class="empty">Loading...</div>';
+  try{
+    const r = await api('/api/pending');
+    const d = await r.json();
+    const items = d.items || [];
+    document.getElementById('pendingCount').textContent = items.length + ' emails';
+    const badge = document.getElementById('pendingBadge');
+    if(items.length > 0){ badge.textContent = items.length; badge.style.display='inline'; }
+    else { badge.style.display='none'; }
+
+    if(!items.length){
+      body.innerHTML = '<div class="empty">No emails pending review</div>';
+      return;
+    }
+    const rows = items.map(function(it){
+      const conf = Math.round((it.confidence||0)*100);
+      const ts = it.ts ? new Date(it.ts*1000).toLocaleString() : '-';
+      return `<div style="border:1px solid #2a3346;border-radius:8px;padding:14px;margin-bottom:12px;background:#1c2333">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span class="verdict-pill suspicious">suspicious</span>
+          <span style="font-size:13px;font-weight:700;color:#fbbf24">${conf}% confidence</span>
+          <span class="mono" style="margin-left:auto;font-size:11px">${escapeHtml(ts)}</span>
+        </div>
+        <div style="font-size:13px;margin-bottom:4px"><b>From:</b> ${escapeHtml(it.sender||'')}</div>
+        <div style="font-size:13px;margin-bottom:4px"><b>Subject:</b> ${escapeHtml(it.subject||'')}</div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:12px"><b>To:</b> ${escapeHtml(it.original_rcpt||'')} (held — not yet delivered)</div>
+        <div id="shot-${escapeHtml(it.scan_id||it.id)}" style="margin-bottom:12px"></div>
+        <div style="display:flex;gap:10px">
+          <button class="bp" onclick="pendingApprove('${escapeHtml(it.id)}',this)">✅ Approve — deliver to recipient</button>
+          <button class="bd" onclick="pendingReject('${escapeHtml(it.id)}',this)">🔒 Reject — send to quarantine</button>
+        </div>
+      </div>`;
+    }).join('');
+    body.innerHTML = rows;
+
+    // Try to load sandbox screenshots for each pending item
+    for(const it of items) {
+      const scanId = it.scan_id || it.id;
+      const shotEl = document.getElementById('shot-' + scanId);
+      if(!shotEl) continue;
+      try {
+        const sr = await api('/api/scan/' + encodeURIComponent(scanId) + '/screenshot');
+        if(sr.ok) {
+          const blob = await sr.blob();
+          const url = URL.createObjectURL(blob);
+          shotEl.innerHTML = `<div style="font-size:10px;font-weight:700;color:#f87171;margin-bottom:6px">🧪 Sandbox Screenshot:</div>
+            <img src="${url}" style="max-width:100%;border-radius:6px;border:1px solid #f87171" alt="screenshot"/>`;
+        }
+      } catch(e) {}
+    }
+  }catch(e){ body.innerHTML = '<div class="empty">Could not load pending reviews</div>'; }
+}
+
+async function pendingApprove(id, btn){
+  btn.disabled = true; btn.textContent = 'Approving...';
+  try{
+    const r = await api('/api/pending/'+id+'/approve', {method:'POST'});
+    const d = await r.json();
+    if(r.ok){
+      const relayOk = d.relay_ok !== false;
+      const msg = relayOk
+        ? '✅ Email approved and delivered to '+d.delivered_to
+        : '✅ Approved by SOC. (Demo mode: start fake_mail_server.py to see delivery on port 1025)';
+      toast(msg, relayOk ? 'success' : 'warn');
+      loadPending();
+      // Refresh quarantine and reports tabs in case SOC is viewing them
+      if(currentSection==='quarantine') loadQuarantine();
+      if(currentSection==='reports') loadReports();
+    }
+    else { toast('Failed: '+(d.detail||r.status), 'error'); btn.disabled=false; }
+  }catch(e){ toast('Approve failed: '+e.message, 'error'); btn.disabled=false; }
+}
+
+async function pendingReject(id, btn){
+  btn.disabled = true; btn.textContent = 'Rejecting...';
+  try{
+    const r = await api('/api/pending/'+id+'/reject', {method:'POST'});
+    const d = await r.json();
+    if(r.ok){
+      toast('🔒 Rejected — email moved to Quarantine tab', 'success');
+      loadPending();
+      // Auto-refresh quarantine so user sees it immediately
+      if(currentSection==='quarantine') loadQuarantine();
+      else {
+        // Brief delay then show them the quarantine
+        setTimeout(()=>{ showSection('quarantine'); }, 800);
+      }
+    }
+    else { toast('Failed: '+(d.detail||r.status), 'error'); btn.disabled=false; }
+  }catch(e){ toast('Reject failed: '+e.message, 'error'); btn.disabled=false; }
+}
+
+async function pollPendingBadge(){
+  try{
+    const r = await api('/api/pending');
+    const d = await r.json();
+    const n = (d.items||[]).length;
+    const badge = document.getElementById('pendingBadge');
+    if(badge){ badge.textContent = n; badge.style.display = n>0 ? 'inline' : 'none'; }
+  }catch(e){}
+}
+
+async function loadML(){
+  const body = document.getElementById("mlStatusBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/ml/status");
+    const s = await r.json();
+    const badge = document.getElementById("mlStatusBadge");
+    const trained = s.exists === true;
+    badge.textContent = trained ? "trained" : "not trained";
+    badge.style.background = trained ? "#0f2419" : "#2d1418";
+    badge.style.color = trained ? "#34d399" : "#f87171";
+    const sizeKB = s.size_bytes ? (s.size_bytes / 1024).toFixed(1) + " KB" : "-";
+    const lastTrained = s.last_trained ? new Date(s.last_trained * 1000).toLocaleString() : "-";
+    const rows = [
+      ["Model file", s.model_path || "n/a"],
+      ["Status", trained ? "trained" : "not trained"],
+      ["Algorithm", s.model_type || "GradientBoosting"],
+      ["Estimators", s.n_estimators || "-"],
+      ["Model size", sizeKB],
+      ["Last trained", lastTrained]
+    ];
+    body.innerHTML = rows.map(function(r){return `<div class="feature-bar"><div class="name">${r[0]}</div><div class="bar"></div><div class="v" style="width:auto;text-align:left;color:#e2e8f0">${escapeHtml(String(r[1]))}</div></div>`;}).join("");
+    if(s.metrics){
+      document.getElementById("mlMetrics").innerHTML = `<div class="feature-bar"><div class="name">CV F1 mean</div><div class="bar"><div class="fill" style="width:${(s.metrics.cv_f1_mean*100).toFixed(1)}%"></div></div><div class="v">${(s.metrics.cv_f1_mean*100).toFixed(1)}%</div></div><div class="feature-bar"><div class="name">CV F1 std</div><div class="bar"><div class="fill" style="width:${(s.metrics.cv_f1_std*100).toFixed(1)}%"></div></div><div class="v">${(s.metrics.cv_f1_std*100).toFixed(2)}%</div></div>`;
+    }
+  }catch(e){ body.innerHTML = `<div class="empty">Could not load ML status. Need analyst role or higher.</div>`; }
+}
+
+async function mlRetrain(){
+  if(!hasPerm("ml_retrain")){ toast("Need analyst role for retrain.", "error"); return; }
+  const spin = document.getElementById("mlSpin");
+  const msg = document.getElementById("mlMsg");
+  spin.style.display = "inline-block"; msg.textContent = "Retraining...";
+  try{
+    const r = await api("/api/ml/retrain", {method:"POST", body:{}});
+    const d = await r.json();
+    if(r.ok){ toast("Retrained: " + (d.n_samples || "?") + " samples", "success"); loadML(); }
+    else { toast("Retrain failed: " + (d.detail || r.status), "error"); }
+  }catch(e){ toast("Retrain failed", "error"); }
+  finally{ spin.style.display = "none"; msg.textContent = ""; }
+}
+
+async function mlBootstrap(){
+  if(!hasPerm("ml_retrain")){ toast("Need analyst role.", "error"); return; }
+  const spin = document.getElementById("mlSpin");
+  const msg = document.getElementById("mlMsg");
+  spin.style.display = "inline-block"; msg.textContent = "Bootstrapping...";
+  try{
+    const r = await api("/api/ml/bootstrap", {method:"POST", body:{}});
+    const d = await r.json();
+    if(r.ok){ toast("Bootstrap done", "success"); loadML(); }
+    else { toast("Bootstrap failed: " + (d.detail || r.status), "error"); }
+  }catch(e){ toast("Bootstrap failed", "error"); }
+  finally{ spin.style.display = "none"; msg.textContent = ""; }
+}
+
+async function loadAudit(){
+  const body = document.getElementById("auditBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/audit/logs?limit=200");
+    const d = await r.json();
+    const entries = d.entries || [];
+    document.getElementById("auditCount").textContent = entries.length + " entries";
+    if(!entries.length){ body.innerHTML = `<div class="empty">No audit entries yet</div>`; return; }
+    const rows = entries.map(function(e){
+      const ts = e.ts ? new Date(e.ts).toLocaleString() : "-";
+      const sc = Number(e.status || 0);
+      const scColor = sc >= 500 ? "#f87171" : sc >= 400 ? "#fbbf24" : sc >= 200 ? "#34d399" : "#94a3b8";
+      return `<tr><td class="mono">${escapeHtml(ts)}</td><td><code>${escapeHtml(e.req_id||"")}</code></td><td>${escapeHtml(e.method||"")}</td><td class="mono">${escapeHtml(e.path||"")}</td><td style="color:${scColor};font-weight:700">${sc}</td><td class="mono">${Number(e.duration_ms||0)} ms</td><td class="mono">${escapeHtml(e.ip||"")}</td></tr>`;
+    }).join("");
+    body.innerHTML = `<table><thead><tr><th>Timestamp</th><th>Request ID</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>IP</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }catch(e){ body.innerHTML = `<div class="empty">Cannot load audit log. Need analyst role or higher.</div>`; }
+}
+
+async function loadGmail(){
+  const body = document.getElementById("gmailStatus");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/gmail/status");
+    const s = await r.json();
+    const rows = [
+      ["Service account", s.service_account_ok ? "configured" : "missing", s.service_account_ok],
+      ["Admin impersonate", s.admin_email || "(empty)", !!s.admin_email],
+      ["Cloud project", s.cloud_project || "(empty)", !!s.cloud_project],
+      ["Queue topic", s.queue_topic || "(empty)", !!s.queue_topic],
+      ["Pull subscriber", s.pull_enabled ? "enabled" : "disabled", s.pull_enabled],
+      ["Quarantine label", s.quarantine_label || "-", true],
+      ["Scanned label", s.scanned_label || "-", true]
+    ];
+    body.innerHTML = rows.map(function(r){return `<div class="feature-bar"><div class="name">${r[0]}</div><div class="bar"></div><div class="v" style="width:auto;text-align:left"><span class="dot ${r[2] ? "ok" : "warn"}"></span> ${escapeHtml(String(r[1]))}</div></div>`;}).join("");
+  }catch(e){ body.innerHTML = `<div class="empty">Could not load Gmail status</div>`; }
+}
+
+async function gmailWatch(){ await gmailAction("/api/gmail/watch", "POST", "Watch started"); }
+async function gmailRenew(){ await gmailAction("/api/gmail/renew", "POST", "Watch renewed"); }
+async function gmailStop(){ await gmailAction("/api/gmail/watch", "DELETE", "Watch stopped"); }
+async function gmailAction(path, method, okmsg){
+  if(!hasPerm("gmail_write")){ toast("Need admin role.", "error"); return; }
+  const spin = document.getElementById("gmailSpin");
+  const msg = document.getElementById("gmailMsg");
+  spin.style.display = "inline-block"; msg.textContent = "Working...";
+  try{
+    const r = await api(path, {method});
+    const d = await r.json();
+    if(r.ok) toast(okmsg, "success");
+    else toast("Failed: " + (d.detail || r.status), "error");
+    loadGmail();
+  }catch(e){ toast("Gmail action failed", "error"); }
+  finally{ spin.style.display = "none"; msg.textContent = ""; }
+}
+
+async function loadQuarantine(){
+  const body = document.getElementById("quarantineBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/quarantine");
+    const d = await r.json();
+    const items = d.items || d || [];
+    if(!items.length){ body.innerHTML = `<div class="empty">Quarantine is empty</div>`; return; }
+    const canWrite = hasPerm("quarantine") || hasPerm("release");
+    const rows = items.map(function(it){
+      const v = (it.verdict||"unknown").toLowerCase();
+      const sid = it.id || it.scan_id || "";
+      const tsStr = it.ts ? new Date(it.ts*1000).toLocaleString() : (it.timestamp ? new Date(it.timestamp).toLocaleString() : "-");
+      const actions = canWrite
+        ? `<button class="bs" data-q-action="view" data-scan-id="${escapeHtml(sid)}">View</button> `
+          + `<button class="bw" data-q-action="release" data-scan-id="${escapeHtml(sid)}">Release</button> `
+          + `<button class="bd" data-q-action="delete" data-scan-id="${escapeHtml(sid)}">Delete</button>`
+        : `<button class="bs" data-q-action="view" data-scan-id="${escapeHtml(sid)}">View</button>`;
+      return `<tr><td><span class="verdict-pill ${escapeHtml(v)}">${escapeHtml(v)}</span></td><td>${escapeHtml(it.sender||it.from||"")}</td><td>${escapeHtml(it.subject||"")}</td><td class="mono">${escapeHtml(tsStr)}</td><td><code>${escapeHtml(sid)}</code></td><td style="white-space:nowrap">${actions}</td></tr>`;
+    }).join("");
+    body.innerHTML = `<table><thead><tr><th>Verdict</th><th>From</th><th>Subject</th><th>Time</th><th>Scan ID</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+    body.querySelectorAll("button[data-q-action]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        const action = btn.getAttribute("data-q-action");
+        const sid = btn.getAttribute("data-scan-id");
+        if(action === "view") openReport(sid);
+        else if(action === "release") quarantineRelease(sid);
+        else if(action === "delete") quarantineDelete(sid);
+      });
+    });
+  }catch(e){ body.innerHTML = `<div class="empty">Could not load quarantine</div>`; }
+}
+
+async function quarantineRelease(sid){
+  if(!sid) return;
+  if(!confirm("Release this email from quarantine?")) return;
+  try{
+    const r = await api("/api/scan/" + encodeURIComponent(sid) + "/release", {method:"POST"});
+    if(r.ok){ toast("Released", "success"); loadQuarantine(); loadStats(); }
+    else { const d = await r.json().catch(()=>({})); toast("Release failed: " + (d.detail || r.status), "error"); }
+  }catch(e){ toast("Release failed", "error"); }
+}
+
+async function quarantineDelete(sid){
+  if(!sid) return;
+  if(!confirm("Delete this scan record permanently?")) return;
+  try{
+    const r = await api("/api/scan/" + encodeURIComponent(sid), {method:"DELETE"});
+    if(r.ok){ toast("Deleted", "success"); loadQuarantine(); loadStats(); }
+    else { const d = await r.json().catch(()=>({})); toast("Delete failed: " + (d.detail || r.status), "error"); }
+  }catch(e){ toast("Delete failed", "error"); }
+}
+
+async function loadReports(){
+  const body = document.getElementById("reportsBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/scans?limit=100" + (_currentHours ? "&hours=" + _currentHours : ""));
+    const d = await r.json();
+    const items = d.items || d.scans || [];
+    if(!items.length){ body.innerHTML = `<div class="empty">No scans yet</div>`; return; }
+    const rows = items.map(function(it){
+      const v = (it.verdict||"unknown").toLowerCase();
+      const sid = it.id || it.scan_id || it.email_id || "";
+      const tsStr = it.ts ? new Date(it.ts*1000).toLocaleString() : (it.timestamp ? new Date(it.timestamp).toLocaleString() : "-");
+      return `<tr style="cursor:pointer" data-scan-id="${escapeHtml(sid)}"><td><span class="verdict-pill ${escapeHtml(v)}">${escapeHtml(v)}</span></td><td>${escapeHtml(it.sender||it.from||"")}</td><td>${escapeHtml(it.subject||"")}</td><td class="mono">${escapeHtml(tsStr)}</td><td><code>${escapeHtml(sid)}</code></td></tr>`;
+    }).join("");
+    body.innerHTML = `<table><thead><tr><th>Verdict</th><th>From</th><th>Subject</th><th>Time</th><th>Scan ID</th></tr></thead><tbody>${rows}</tbody></table>`;
+    body.querySelectorAll("tr[data-scan-id]").forEach(function(tr){
+      tr.addEventListener("click", function(){ openReport(tr.getAttribute("data-scan-id")); });
+    });
+  }catch(e){ body.innerHTML = `<div class="empty">Could not load reports</div>`; }
+}
+
+async function openReport(sid){
+  if(!sid) return;
+  showSection("reports");
+  document.getElementById("reports-list-card").style.display = "none";
+  document.getElementById("report-detail-card").style.display = "block";
+  const body = document.getElementById("reportDetailBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/scan/" + encodeURIComponent(sid));
+    const d = await r.json();
+    const raw = escapeHtml(JSON.stringify(d, null, 2));
+    const safe = (typeof DOMPurify !== "undefined") ? DOMPurify.sanitize(raw) : raw;
+
+    // Try to load sandbox screenshot
+    let screenshotHtml = '';
+    try {
+      const shotResp = await api('/api/scan/' + encodeURIComponent(sid) + '/screenshot');
+      if(shotResp.ok) {
+        const blob = await shotResp.blob();
+        const url = URL.createObjectURL(blob);
+        screenshotHtml = `
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#f87171;margin-bottom:8px">
+              🧪 Sandbox Screenshot — Suspicious URL detonated
+            </div>
+            <img src="${url}" style="max-width:100%;border-radius:8px;border:2px solid #f87171;display:block"
+                 alt="Sandbox screenshot" onerror="this.parentElement.style.display='none'"/>
+            <div class="mono" style="font-size:10px;color:#64748b;margin-top:6px">
+              Screenshot captured by headless Chrome sandbox during URL detonation
+            </div>
+          </div>`;
+      }
+    } catch(e) {}
+
+    body.innerHTML = screenshotHtml + `<pre class="mono" style="white-space:pre-wrap;word-break:break-word;background:#0a0d14;padding:16px;border-radius:8px;font-size:11px;line-height:1.6;color:#cbd5e1">${safe}</pre>`;
+  }catch(e){ body.innerHTML = `<div class="empty">Failed to load report</div>`; }
+}
+function closeReport(){
+  document.getElementById("reports-list-card").style.display = "block";
+  document.getElementById("report-detail-card").style.display = "none";
+}
+
+async function loadSoar(){
+  const sBody = document.getElementById("soarStatus");
+  sBody.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/soar/status");
+    const d = await r.json();
+    const integ = Array.isArray(d.integrations) ? d.integrations
+      : Object.keys(d.integrations || {}).map(function(k){ return Object.assign({name:k}, d.integrations[k]); });
+    const rows = integ.map(function(v){
+      const name = v.name || "(unknown)";
+      const cfg = v.configured === true;
+      const reachable = v.reachable === true;
+      let dotKind = "warn";
+      let status = "unconfigured";
+      if(reachable){ dotKind = "ok"; status = "reachable"; }
+      else if(cfg){ dotKind = "warn"; status = "configured (unreachable)"; }
+      return `<div class="feature-bar"><div class="name">${escapeHtml(name)}</div><div class="bar"></div><div class="v" style="width:auto;text-align:left"><span class="dot ${dotKind}"></span> ${status}</div></div>`;
+    }).join("");
+    sBody.innerHTML = rows || `<div class="empty">No integrations reported</div>`;
+  }catch(e){ sBody.innerHTML = `<div class="empty">Could not load SOAR status</div>`; }
+  loadDenylist();
+  loadSoarAudit();
+}
+
+async function loadDenylist(){
+  try{
+    const r = await api("/api/denylist");
+    const d = await r.json();
+    const items = d.entries || d.items || [];
+    document.getElementById("dlStats").textContent = items.length + " entries";
+    const tbl = document.getElementById("dlTable");
+    if(!items.length){ tbl.innerHTML = `<div class="empty">Denylist is empty</div>`; return; }
+    const rows = items.map(function(it){
+      const k = it.kind || it.type || "?";
+      const v = it.value || "";
+      const reason = it.reason || "";
+      const hits = Number(it.hit_count || 0);
+      const added = it.added_at ? new Date(it.added_at*1000).toLocaleDateString() : "-";
+      return `<tr><td><code>${escapeHtml(k)}</code></td><td class="mono">${escapeHtml(v)}</td><td>${escapeHtml(reason)}</td><td class="mono">${hits}</td><td class="mono">${escapeHtml(added)}</td><td><button class="bd" data-dl-kind="${escapeHtml(k)}" data-dl-value="${escapeHtml(v)}">Remove</button></td></tr>`;
+    }).join("");
+    tbl.innerHTML = `<table><thead><tr><th>Kind</th><th>Value</th><th>Reason</th><th>Hits</th><th>Added</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    tbl.querySelectorAll("button[data-dl-value]").forEach(function(btn){
+      btn.addEventListener("click", function(){ removeDenylist(btn.getAttribute("data-dl-kind"), btn.getAttribute("data-dl-value")); });
+    });
+  }catch(e){ document.getElementById("dlTable").innerHTML = `<div class="empty">Could not load denylist</div>`; }
+}
+
+async function addDenylist(){
+  const k = document.getElementById("dlKind").value;
+  const v = document.getElementById("dlValue").value.trim();
+  const reason = document.getElementById("dlReason").value.trim();
+  if(!v){ toast("Value required", "warn"); return; }
+  try{
+    const r = await api("/api/denylist", {method:"POST", body:{kind:k, value:v, reason}});
+    if(r.ok){ toast("Added to denylist", "success"); document.getElementById("dlValue").value = ""; document.getElementById("dlReason").value = ""; loadDenylist(); }
+    else { const d = await r.json().catch(()=>({})); toast("Failed: " + (d.detail || r.status), "error"); }
+  }catch(e){ toast("Add failed", "error"); }
+}
+
+async function removeDenylist(kind, value){
+  try{
+    const r = await api("/api/denylist/" + encodeURIComponent(kind) + "/" + encodeURIComponent(value), {method:"DELETE"});
+    if(r.ok){ toast("Removed", "success"); loadDenylist(); }
+    else { const d = await r.json().catch(()=>({})); toast("Remove failed: " + (d.detail || r.status), "error"); }
+  }catch(e){ toast("Remove failed", "error"); }
+}
+
+async function loadSoarAudit(){
+  const body = document.getElementById("soarAudit");
+  try{
+    const r = await api("/api/soar/audit?limit=20");
+    const d = await r.json();
+    const items = d.items || d.entries || d.actions || [];
+    if(!items.length){ body.innerHTML = `<div class="empty">No SOAR actions yet</div>`; return; }
+    const rows = items.map(function(it){
+      const ts = it["@timestamp"] ? new Date(it["@timestamp"]).toLocaleString() : (it.timestamp ? new Date(it.timestamp).toLocaleString() : "-");
+      return `<tr><td class="mono">${ts}</td><td><span class="verdict-pill ${(it.verdict||"unknown").toLowerCase()}">${it.verdict||"-"}</span></td><td>${escapeHtml(it.sender||"-")}</td><td>${escapeHtml(it.subject||"-")}</td><td class="mono">${it.blocked_at||"-"}</td></tr>`;
+    }).join("");
+    body.innerHTML = `<table><thead><tr><th>Time</th><th>Verdict</th><th>Sender</th><th>Subject</th><th>Blocked at</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }catch(e){ body.innerHTML = `<div class="empty">No audit data</div>`; }
+}
+
+async function loadSettings(){
+  const body = document.getElementById("settingsBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/settings");
+    const d = await r.json();
+    const providers = d.providers || [];
+    const canEdit = hasPerm("settings");
+    const rows = providers.map(function(p){
+      const ok = p.configured === true;
+      const overridden = p.overridden === true;
+      const val = p.masked || (ok ? "(set)" : "(empty)");
+      const editBtn = canEdit
+        ? `<button class="bs" onclick="editProvider('${escapeHtml(p.key)}','${escapeHtml(p.label||p.key)}')" style="font-size:11px;padding:3px 8px;margin-left:8px">${ok ? "Update" : "Set"}</button>`
+        : "";
+      const badge = overridden ? `<span style="font-size:9px;background:#1e3a8a;color:#93c5fd;padding:1px 5px;border-radius:8px;margin-left:4px">override</span>` : "";
+      return `<div class="feature-bar"><div class="name">${escapeHtml(p.label||p.key)}</div><div class="bar"></div><div class="v" style="width:auto;text-align:left;font-family:JetBrains Mono,monospace;font-size:11px;display:flex;align-items:center"><span class="dot ${ok ? "ok" : "warn"}"></span>&nbsp;${escapeHtml(val)}${badge}${editBtn}</div></div>`;
+    }).join("");
+    body.innerHTML = rows || `<div class="empty">No providers reported</div>`;
+    const th = d.thresholds || {};
+    if(Object.keys(th).length){
+      document.getElementById("thresholdsBody").innerHTML = Object.keys(th).map(function(k){
+        return `<div class="feature-bar"><div class="name">${k}</div><div class="bar"></div><div class="v" style="width:auto;text-align:left;color:#e2e8f0">${escapeHtml(String(th[k]))}</div></div>`;
+      }).join("");
+      return;
+    }
+  }catch(e){ body.innerHTML = `<div class="empty">Could not load settings. Need admin or analyst role.</div>`; }
+  document.getElementById("thresholdsBody").innerHTML = `<div class="mono" style="font-size:11px;color:#94a3b8">L2 critical: 0.90 &nbsp; L2 composite: 0.55 &nbsp; L3 trigger: 0.45 &nbsp; (edit via .env or use admin override above)</div>`;
+}
+
+function editProvider(key, label){
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,13,20,.9);z-index:500;display:flex;align-items:center;justify-content:center";
+  overlay.innerHTML = `<div style="background:#141925;border:1px solid #2a3346;border-radius:12px;padding:28px;width:400px;box-shadow:0 8px 24px rgba(0,0,0,.5)">
+    <div style="font-size:15px;font-weight:700;margin-bottom:16px">Set ${escapeHtml(label)}</div>
+    <input id="_edit_val" type="password" placeholder="Enter value (leave blank to clear)" style="width:100%;margin-bottom:14px"/>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="bs" onclick="this.closest('div[style]').remove()">Cancel</button>
+      <button class="bp" onclick="saveProvider('${escapeHtml(key)}', document.getElementById('_edit_val').value, this.closest('div[style]').parentElement)">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(function(){ const el = document.getElementById("_edit_val"); if(el) el.focus(); }, 50);
+}
+
+async function saveProvider(key, value, overlay){
+  try{
+    const body = {}; body[key] = value;
+    const r = await api("/api/settings", {method:"PATCH", body});
+    if(r.ok){
+      toast("Provider updated. Reload the app to use new credentials.", "success");
+      overlay.remove();
+      loadSettings();
+    } else {
+      const e = await r.json().catch(()=>({}));
+      toast("Save failed: " + (e.detail || r.status), "error");
+    }
+  }catch(e){ toast("Save failed", "error"); }
+}
+
+window.addEventListener("DOMContentLoaded", function(){
+  loadSession();
+  if(session && session.access_token && session.exp && session.exp > Date.now()){
+    showApp();
+  } else {
+    showLogin();
+  }
+});
+</script>
+</body>
+</html>

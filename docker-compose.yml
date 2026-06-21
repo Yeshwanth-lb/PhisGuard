@@ -1,60 +1,351 @@
-version: "3.8"
+# PhishGuard 7-layer phishing detection stack
+# Run: make build && make up
 
 services:
+
+  sandbox:
+    build: { context: ./docker/sandbox }
+    image: phishguard-sandbox:latest
+    container_name: phishguard-sandbox-builder
+    profiles: ["build-only"]
+
+  app:
+    build: { context: ., dockerfile: Dockerfile }
+    image: phishguard-app:latest
+    container_name: phishguard-app
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - REDIS_URL=redis://:redispassword@redis:6379/0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - SANDBOX_DOCKER_IMAGE=phishguard-sandbox:latest
+      - AUDIT_LOG_FILE=/app/data/audit.jsonl
+      - MISP_URL=https://misp
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+    ports:
+      - "8000:8000"
+      - "8025:8025"
+    volumes:
+      - app_data:/app/data
+      - ./credentials:/app/credentials:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    healthcheck:
+      test: ["CMD","curl","-fs","http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2.0
+    networks: [phishguard]
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.2
     container_name: phishguard-es
+    restart: unless-stopped
     environment:
       - discovery.type=single-node
       - ELASTIC_PASSWORD=changeme
       - xpack.security.enabled=true
-    ports:
-      - "9200:9200"
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports: ["9200:9200"]
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD","curl","-f","http://localhost:9200"]
+      test: ["CMD-SHELL","curl -fs -u elastic:changeme http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 60s
+    mem_limit: 1g
+    networks: [phishguard]
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.13.2
     container_name: phishguard-kibana
+    restart: unless-stopped
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - ELASTICSEARCH_USERNAME=elastic
-      - ELASTICSEARCH_PASSWORD=changeme
-    ports:
-      - "5601:5601"
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=kibana-changeme
+    ports: ["5601:5601"]
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL","curl -fs http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks: [phishguard]
 
   redis:
     image: redis:7.2-alpine
     container_name: phishguard-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --requirepass redispassword
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD","redis-cli","-a","redispassword","ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 256m
+    networks: [phishguard]
 
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.13.2
     container_name: phishguard-mlflow
-    command: mlflow server --host 0.0.0.0 --port 5000
-    ports:
-      - "5000:5000"
+    restart: unless-stopped
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri /mlflow/mlruns
+    ports: ["5000:5000"]
+    volumes: ["mlflow_data:/mlflow"]
+    healthcheck:
+      test: ["CMD-SHELL","curl -fs http://localhost:5000/health || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    mem_limit: 512m
+    networks: [phishguard]
+
+  # ── MISP — threat intelligence sharing platform ──────────────────────────
+  misp-db:
+    image: mysql:8.0
+    container_name: phishguard-misp-db
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=misp_root_pass
+      - MYSQL_DATABASE=misp
+      - MYSQL_USER=misp
+      - MYSQL_PASSWORD=misp_db_pass
     volumes:
-      - mlflow_data:/mlflow
+      - misp_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD","mysqladmin","ping","-h","localhost","-umisp","-pmisp_db_pass"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    mem_limit: 512m
+    networks: [phishguard]
+
+  misp:
+    image: ghcr.io/misp/misp-docker/misp-core:latest
+    container_name: phishguard-misp
+    restart: unless-stopped
+    environment:
+      - MISP_ADMIN_EMAIL=admin@phishguard.local
+      - MISP_ADMIN_PASSPHRASE=changeme123
+      - MYSQL_HOST=misp-db
+      - MYSQL_DATABASE=misp
+      - MYSQL_USER=misp
+      - MYSQL_PASSWORD=misp_db_pass
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MISP_BASEURL=http://localhost:8888
+      - MISP_ORG=PhishGuard
+    ports:
+      - "8888:80"    # MISP web UI
+    volumes:
+      - misp_data:/var/www/MISP
+      - ./docker/misp-cert.pem:/etc/nginx/certs/cert.pem:ro
+      - ./docker/misp-key.pem:/etc/nginx/certs/key.pem:ro
+      - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
+    depends_on:
+      misp-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD","curl","-fs","http://localhost:80"]
+      interval: 60s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    mem_limit: 2g
+    networks: [phishguard]
+
+  # ── OpenCTI — strategic threat intelligence platform ─────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: phishguard-rabbitmq
+    restart: unless-stopped
+    environment:
+      - RABBITMQ_DEFAULT_USER=opencti
+      - RABBITMQ_DEFAULT_PASS=changeme123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD","rabbitmq-diagnostics","ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    mem_limit: 512m
+    networks: [phishguard]
+
+  opencti:
+    image: opencti/platform:6.2.18
+    container_name: phishguard-opencti
+    restart: unless-stopped
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=8096
+      - APP__PORT=8080
+      - APP__BASE_URL=http://localhost:8080
+      - APP__ADMIN__EMAIL=admin@phishguard.local
+      - APP__ADMIN__PASSWORD=changeme123
+      - APP__ADMIN__TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - APP__APP_LOGS__LOGS_LEVEL=error
+      - REDIS__HOSTNAME=redis
+      - REDIS__PORT=6379
+      - REDIS__USE_SSL=false
+      - REDIS__PASSWORD=redispassword
+      - ELASTICSEARCH__URL=http://elasticsearch:9200
+      - ELASTICSEARCH__USERNAME=elastic
+      - ELASTICSEARCH__PASSWORD=changeme
+      - MINIO__ENDPOINT=minio
+      - MINIO__PORT=9000
+      - MINIO__USE_SSL=false
+      - MINIO__ACCESS_KEY=phishguard
+      - MINIO__SECRET_KEY=changeme123
+      - RABBITMQ__HOSTNAME=rabbitmq
+      - RABBITMQ__PORT=5672
+      - RABBITMQ__USERNAME=opencti
+      - RABBITMQ__PASSWORD=changeme123
+      - SMTP__HOSTNAME=localhost
+      - PROVIDERS__LOCAL__STRATEGY=LocalStrategy
+    ports:
+      - "8080:8080"   # OpenCTI web UI
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD","sh","-c","wget -qO- http://localhost:8080 2>&1 | grep -q OpenCTI"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    mem_limit: 4g
+    networks: [phishguard]
+
+  # OpenCTI MISP connector — syncs MISP events into OpenCTI automatically
+  connector-misp:
+    image: opencti/connector-misp:6.2.18
+    container_name: phishguard-connector-misp
+    restart: unless-stopped
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - CONNECTOR_ID=misp-connector-phishguard
+      - CONNECTOR_NAME=MISP PhishGuard
+      - CONNECTOR_SCOPE=misp-galaxy,misp-attack-pattern,misp-course-of-action,misp-intrusion-set,misp-malware,misp-tool,misp-vulnerability
+      - CONNECTOR_LOG_LEVEL=error
+      - MISP_URL=https://misp
+      - MISP_REFERENCE_URL=http://localhost:8888
+      - MISP_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
+      - MISP_SSL=false
+      - MISP_VERIFYCERT=false
+      - REQUESTS_CA_BUNDLE=/etc/ssl/misp-ca.pem
+      - CURL_CA_BUNDLE=/etc/ssl/misp-ca.pem
+      - PYTHONHTTPSVERIFY=0
+      - MISP_DATETIME_ATTRIBUTE=timestamp
+      - MISP_IMPORT_FROM_DATE=2020-01-01
+      - MISP_INTERVAL=60
+    volumes:
+      - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
+    depends_on:
+      - opencti
+      - misp
+    mem_limit: 512m
+    networks: [phishguard]
+
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    container_name: phishguard-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=phishguard
+      - MINIO_ROOT_PASSWORD=changeme123
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web UI — SOC team access
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD","mc","ready","local"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
+    networks: [phishguard]
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: phishguard-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    ports: ["9090:9090"]
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      app:
+        condition: service_healthy
+    mem_limit: 512m
+    networks: [phishguard]
+
+  grafana:
+    image: grafana/grafana:10.4.4
+    container_name: phishguard-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=changeme
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/phishguard.json
+    ports: ["3000:3000"]
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    mem_limit: 256m
+    networks: [phishguard]
 
 networks:
-  phishguard-sandbox:
-    driver: bridge
-    internal: false
-  default:
-    driver: bridge
+  phishguard: { driver: bridge }
 
 volumes:
-  es_data:
-  redis_data:
-  mlflow_data:
+  app_data: {}
+  es_data: {}
+  redis_data: {}
+  mlflow_data: {}
+  prometheus_data: {}
+  grafana_data: {}
+  minio_data: {}
+  misp_data: {}
+  misp_db_data: {}
+  rabbitmq_data: {}

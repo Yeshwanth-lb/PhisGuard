@@ -1,0 +1,18 @@
+{
+  "phish": {
+    "from_header": "Apple Support",
+    "from_email": "support@app1e-id.com",
+    "subject": "URGENT: Apple ID action needed in 24h",
+    "body_b64": "VGFwIGh0dHA6Ly9hcHAxZS1pZC5jb20veCB0byBrZWVwIHlvdXIgaUNsb3VkIGRhdGEu",
+    "spf_result": "fail",
+    "dkim_result": "fail"
+  },
+  "legit": {
+    "from_header": "GitHub",
+    "from_email": "noreply@github.com",
+    "subject": "[octocat/hello-world] PR 42 merged",
+    "body_b64": "UFIgNDIgbWVyZ2VkIGludG8gbWFpbi4gVmlldzogaHR0cHM6Ly9naXRodWIuY29tL29jdG9jYXQvaGVsbG8td29ybGQvcHVsbC80Mg==",
+    "spf_result": "pass",
+    "dkim_result": "pass"
+  }
+}

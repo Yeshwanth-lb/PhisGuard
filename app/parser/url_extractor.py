@@ -1,8 +1,8 @@
 import re
+
 import httpx
-from bs4 import BeautifulSoup
-from typing import List
 import structlog
+from bs4 import BeautifulSoup
 
 logger = structlog.get_logger()
 
@@ -16,7 +16,7 @@ URL_REGEX  = re.compile(r'https?://[A-Za-z0-9._%+~:/?#@!&()=;,\[\]-]+', re.IGNOR
 HREF_REGEX = re.compile(r'href=[\x22\x27]?(https?://[^\x22\x27>\s]+)', re.IGNORECASE)
 
 
-def extract_urls(body_text: str = "", body_html: str = "") -> List[str]:
+def extract_urls(body_text: str = "", body_html: str = "") -> list[str]:
     found: set = set()
     if body_text:
         for url in URL_REGEX.findall(body_text):
@@ -50,7 +50,7 @@ async def resolve_url(url: str, timeout: int = 10) -> str:
         return url
 
 
-async def resolve_shortened_urls(urls: List[str]) -> List[str]:
+async def resolve_shortened_urls(urls: list[str]) -> list[str]:
     resolved = []
     for url in urls:
         try:

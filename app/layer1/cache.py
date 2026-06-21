@@ -1,8 +1,8 @@
 """Redis-backed async cache for Layer 1 OSINT results."""
-import json
 import hashlib
+import json
+
 import structlog
-from typing import Optional
 
 logger = structlog.get_logger()
 
@@ -33,7 +33,7 @@ class L1Cache:
         h = hashlib.md5(ioc.encode()).hexdigest()
         return f"pg:l1:{source}:{h}"
 
-    async def get(self, source: str, ioc: str) -> Optional[dict]:
+    async def get(self, source: str, ioc: str) -> dict | None:
         if not self._client:
             return None
         try:

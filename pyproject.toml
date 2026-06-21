@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phishguard"
+version = "0.1.0"
+description = "Multi-layer phishing detection and response platform"
+requires-python = ">=3.12"
+readme = "BRINGUP.md"
+
+[tool.setuptools.packages.find]
+include = ["app*", "scripts*"]
+exclude = ["tests*", "venv*", "data*", "docker*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["venv", "data", "docker", "ml", "models", "sandbox", "app/templates"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = [
+  "E501",
+  "E701",
+  "E702",
+  "E731",
+  "E402",
+  "F841",
+  "B005",
+  "B008",
+  "B904",
+  "B905",
+  "S101",
+  "S104",
+  "S105",
+  "S106",
+  "S107",
+  "S108",
+  "S110",
+  "S301",
+  "S311",
+  "S324",
+  "S501",
+  "S603",
+  "S607",
+  "UP042",
+  "I001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B", "E402", "E712", "F811", "UP"]
+"scripts/**" = ["S", "E402", "I001", "UP"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::PendingDeprecationWarning",
+]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+  "slow: long-running tests excluded from default fast suite",
+  "live: integration tests that hit external services and require credentials",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = ["app/templates/*", "*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 1

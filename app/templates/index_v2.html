@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>PhishGuard Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
+header{background:linear-gradient(135deg,#1a1f2e,#0f1117);border-bottom:1px solid #2d3748;padding:14px 32px;display:flex;align-items:center;gap:24px}
+.logo{font-size:20px;font-weight:700;color:#63b3ed;letter-spacing:-.5px}
+.logo span{color:#fc8181}
+nav{display:flex;gap:4px}
+nav a{padding:8px 16px;border-radius:6px;color:#a0aec0;cursor:pointer;font-size:14px;font-weight:500;text-decoration:none;transition:all .15s}
+nav a:hover{background:#2d3748;color:#e2e8f0}
+nav a.active{background:#3182ce;color:white}
+.container{max-width:1100px;margin:32px auto;padding:0 20px}
+.section{display:none}
+.section.active{display:block}
+.card{background:#1a1f2e;border:1px solid #2d3748;border-radius:12px;padding:24px;margin-bottom:20px}
+.card h2{font-size:14px;font-weight:600;color:#a0aec0;text-transform:uppercase;letter-spacing:.8px;margin-bottom:14px}
+textarea{width:100%;min-height:160px;background:#0f1117;border:1px solid #2d3748;border-radius:8px;padding:12px;color:#e2e8f0;font-family:monospace;font-size:13px;resize:vertical;outline:none}
+textarea:focus{border-color:#63b3ed}
+.btn-row{display:flex;gap:10px;margin-top:14px;align-items:center}
+button{padding:9px 20px;border-radius:6px;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.bp{background:#3182ce;color:white}.bp:hover{background:#2b6cb0}.bp:disabled{background:#2d3748;color:#4a5568;cursor:not-allowed}
+.bs{background:#2d3748;color:#a0aec0}.bs:hover{background:#4a5568}
+.bd{background:#742a2a;color:#feb2b2}.bd:hover{background:#9b2c2c}
+.spin{display:none;width:16px;height:16px;border:2px solid #2d3748;border-top-color:#63b3ed;border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.rc{display:none;border-radius:12px;padding:24px;margin-bottom:20px;border:1px solid}
+.rc.phishing{background:#2d1515;border-color:#c53030}
+.rc.suspicious{background:#2d2415;border-color:#c05621}
+.rc.clean{background:#142d1f;border-color:#276749}
+.rc.error{background:#1a1f2e;border-color:#4a5568}
+.vh{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.vi{font-size:32px}
+.vt{font-size:22px;font-weight:800;letter-spacing:-.5px}
+.phishing .vt{color:#fc8181}.suspicious .vt{color:#f6ad55}.clean .vt{color:#68d391}
+.vs{font-size:13px;color:#a0aec0;margin-top:2px}
+.cb{background:#0f1117;border-radius:6px;height:6px;margin:10px 0 16px;overflow:hidden}
+.cf{height:100%;border-radius:6px;transition:width .8s ease}
+.phishing .cf{background:#fc8181}.suspicious .cf{background:#f6ad55}.clean .cf{background:#68d391}
+.dg{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:14px}
+.db{background:rgba(0,0,0,.3);border-radius:6px;padding:10px 14px}
+.db .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#718096;margin-bottom:3px}
+.db .val{font-size:14px;font-weight:600;color:#e2e8f0}
+.es{margin-top:18px}
+.es h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#718096;margin-bottom:10px}
+.er{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.en{width:140px;font-size:12px;color:#a0aec0}
+.ebw{flex:1;background:#0f1117;border-radius:3px;height:5px;overflow:hidden}
+.eb{height:100%;border-radius:3px;background:#63b3ed;transition:width .8s ease}
+.ev{width:40px;text-align:right;font-size:11px;color:#718096;font-family:monospace}
+.sr{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.sb{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:16px;text-align:center}
+.sb .num{font-size:26px;font-weight:800;color:#63b3ed}
+.sb .lb{font-size:11px;color:#718096;margin-top:3px}
+.ht{width:100%;border-collapse:collapse;font-size:13px}
+.ht th{text-align:left;padding:8px 10px;color:#718096;font-size:10px;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #2d3748}
+.ht td{padding:9px 10px;border-bottom:1px solid #1a1f2e;color:#a0aec0}
+.ht tr.clickable{cursor:pointer;transition:background .15s}
+.ht tr.clickable:hover{background:#0f1117}
+.bv{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase}
+.bv.phishing{background:#c53030;color:#fff5f5}.bv.suspicious{background:#c05621;color:#fffaf0}.bv.clean{background:#276749;color:#f0fff4}
+.empty{text-align:center;padding:30px;color:#4a5568;font-size:14px}
+.row-actions{display:flex;gap:6px;justify-content:flex-end}
+.row-actions button{padding:4px 10px;font-size:11px}
+.kv{display:grid;grid-template-columns:200px 1fr;gap:8px 16px;padding:8px 0;border-bottom:1px solid #2d3748;font-size:13px}
+.kv .k{color:#718096}
+.kv .v{color:#e2e8f0;font-family:monospace;word-break:break-all}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px}
+.dot.on{background:#68d391}.dot.off{background:#4a5568}
+.back-link{color:#63b3ed;cursor:pointer;font-size:13px;margin-bottom:12px;display:inline-block}
+.back-link:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Phish<span>Guard</span></div>
+  <nav>
+    <a id="nav-submit" class="active" onclick="showSection('submit')">Submit</a>
+    <a id="nav-quarantine" onclick="showSection('quarantine')">Quarantine</a>
+    <a id="nav-reports" onclick="showSection('reports')">Reports</a>
+    <a id="nav-settings" onclick="showSection('settings')">Settings</a>
+    <a id="nav-soar" onclick="showSection('soar')">SOAR</a>
+  </nav>
+  <div style="flex:1"></div>
+  <div style="font-size:12px;color:#4a5568">AI-Powered Email Security</div>
+</header>
+<div class="container">
+<div class="sr">
+  <div class="sb"><div class="num" id="st">0</div><div class="lb">Total Emails</div></div>
+  <div class="sb"><div class="num" style="color:#fc8181" id="sp">0</div><div class="lb">Phishing</div></div>
+  <div class="sb"><div class="num" style="color:#f6ad55" id="ss">0</div><div class="lb">Suspicious</div></div>
+  <div class="sb"><div class="num" style="color:#68d391" id="sc">0</div><div class="lb">Clean</div></div>
+</div>
+<div class="section active" id="sec-submit">
+  <div class="card">
+    <h2>Submit an Email</h2>
+    <textarea id="ei" placeholder="Paste raw email here including headers..."></textarea>
+    <div class="btn-row">
+      <button class="bp" id="sb2" onclick="runScan()">Check Email</button>
+      <button class="bs" onclick="loadDemo()">Load Demo</button>
+      <button class="bs" onclick="resetForm()">Clear</button>
+      <div class="spin" id="spn"></div>
+      <span id="msg" style="font-size:13px;color:#718096"></span>
+    </div>
+  </div>
+  <div class="rc" id="rc">
+    <div class="vh">
+      <div class="vi" id="ri"></div>
+      <div><div class="vt" id="rv"></div><div class="vs" id="rs"></div></div>
+      <div style="flex:1"></div>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:800" id="rconf"></div>
+        <div style="font-size:11px;color:#718096">Confidence</div>
+      </div>
+    </div>
+    <div class="cb"><div class="cf" id="rb" style="width:0%"></div></div>
+    <div class="dg">
+      <div class="db"><div class="lbl">Blocked At</div><div class="val" id="rl">-</div></div>
+      <div class="db"><div class="lbl">Email ID</div><div class="val" id="rid" style="font-size:11px;font-family:monospace">-</div></div>
+      <div class="db"><div class="lbl">Scan Time</div><div class="val" id="rt">-</div></div>
+    </div>
+    <div class="es" id="ens" style="display:none">
+      <h3>AI Engine Scores</h3>
+      <div class="er"><div class="en">Structural</div><div class="ebw"><div class="eb" id="b-s" style="width:0%"></div></div><div class="ev" id="v-s">0.00</div></div>
+      <div class="er"><div class="en">NLP (Claude)</div><div class="ebw"><div class="eb" id="b-n" style="width:0%"></div></div><div class="ev" id="v-n">0.00</div></div>
+      <div class="er"><div class="en">Behavioral</div><div class="ebw"><div class="eb" id="b-b" style="width:0%"></div></div><div class="ev" id="v-b">0.00</div></div>
+    </div>
+  </div>
+</div>
+<div class="section" id="sec-quarantine">
+  <div class="card">
+    <h2>Quarantine</h2>
+    <div id="qbody"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<div class="section" id="sec-reports">
+  <div class="card" id="reports-list-card">
+    <h2>All Scans</h2>
+    <div id="rbody"><div class="empty">Loading...</div></div>
+  </div>
+  <div class="card" id="report-detail-card" style="display:none">
+    <a class="back-link" onclick="closeReport()">&larr; Back to all scans</a>
+    <h2>Scan Detail</h2>
+    <div id="report-detail-body"></div>
+  </div>
+</div>
+
+<div class="section" id="sec-settings">
+  <div class="card">
+    <h2>Provider Configuration</h2>
+    <div id="settings-body"><div class="empty">Loading...</div></div>
+  </div>
+  <div class="card">
+    <h2>Detection Thresholds</h2>
+    <div id="thresholds-body"></div>
+  </div>
+</div>
+<div class="section" id="sec-soar">
+  <div class="card">
+    <h2>SOAR Integrations</h2>
+    <div id="soar-status"><div class="empty">Loading...</div></div>
+  </div>
+  <div class="card">
+    <h2>Sender Denylist</h2>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      <select id="dl-kind" style="padding:8px 10px;background:#0f1117;color:#e2e8f0;border:1px solid #2d3748;border-radius:6px">
+        <option value="sender">sender</option>
+        <option value="domain">domain</option>
+        <option value="ip">ip</option>
+        <option value="url">url</option>
+      </select>
+      <input id="dl-value" placeholder="value (e.g. evil@bad.com)" style="flex:1;min-width:220px;padding:8px 10px;background:#0f1117;color:#e2e8f0;border:1px solid #2d3748;border-radius:6px"/>
+      <input id="dl-reason" placeholder="reason (optional)" style="flex:1;min-width:180px;padding:8px 10px;background:#0f1117;color:#e2e8f0;border:1px solid #2d3748;border-radius:6px"/>
+      <button class="bp" onclick="addDenylist()">Add to Denylist</button>
+    </div>
+    <div id="dl-stats" style="font-size:12px;color:#718096;margin-bottom:10px"></div>
+    <div id="dl-table"><div class="empty">Loading...</div></div>
+  </div>
+  <div class="card">
+    <h2>Recent SOAR Actions</h2>
+    <div id="soar-audit"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+</div>
+<script>
+const API="http://localhost:8000";
+let token=null;
+let currentSection="submit";
+
+async function getToken(){
+  if(token)return token;
+  try{
+    const r=await fetch(API+"/token",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({api_key:"dev-key"})});
+    const d=await r.json();
+    token=d.access_token;
+  }catch(e){console.warn("auth failed",e);}
+  return token;
+}
+
+function showSection(name){
+  currentSection=name;
+  ["submit","quarantine","reports","settings","soar"].forEach(n=>{
+    const sec=document.getElementById("sec-"+n);
+    const lnk=document.getElementById("nav-"+n);
+    if(n===name){
+      sec.classList.add("active");
+      lnk.classList.add("active");
+    }else{
+      sec.classList.remove("active");
+      lnk.classList.remove("active");
+    }
+  });
+  if(name==="quarantine")loadQuarantine();
+  else if(name==="reports")loadReports();
+  else if(name==="settings")loadSettings();
+  else if(name==="soar")loadSoar();
+}
+
+async function loadStats(){
+  try{
+    const r=await fetch(API+"/api/stats");
+    const s=await r.json();
+    document.getElementById("st").textContent=s.total||0;
+    document.getElementById("sp").textContent=s.phishing||0;
+    document.getElementById("ss").textContent=s.suspicious||0;
+    document.getElementById("sc").textContent=s.clean||0;
+  }catch(e){}
+}
+
+async function runScan(){
+  const raw=document.getElementById("ei").value.trim();
+  if(!raw){alert("Paste an email first.");return;}
+  setBusy(true);hideResult();
+  try{
+    const tok=await getToken();
+    const t0=Date.now();
+    const hdrs={"Content-Type":"application/json"};
+    if(tok)hdrs["Authorization"]="Bearer "+tok;
+    const r=await fetch(API+"/analyze",{method:"POST",headers:hdrs,body:JSON.stringify({raw_email:raw})});
+    const ms=Date.now()-t0;
+    if(!r.ok){const e=await r.json();showErr(e.detail||"Error "+r.status);return;}
+    const d=await r.json();d._ms=ms;
+    showOK(d);
+    loadStats();
+  }catch(e){showErr("Cannot reach server.");}
+  finally{setBusy(false);}
+}
+
+function showOK(d){
+  const card=document.getElementById("rc");
+  const v=(d.verdict||"unknown").toLowerCase();
+  const pct=Math.round((d.confidence||0)*100);
+  card.className="rc "+v;card.style.display="block";
+  const ico={phishing:"🚨",suspicious:"⚠️",clean:"✅",unknown:"❓"};
+  document.getElementById("ri").textContent=ico[v]||"❓";
+  const lbl={phishing:"PHISHING DETECTED",suspicious:"SUSPICIOUS EMAIL",clean:"CLEAN EMAIL",unknown:"UNKNOWN"};
+  document.getElementById("rv").textContent=lbl[v]||v.toUpperCase();
+  const sub={phishing:"This email is a phishing attempt. Do not click any links.",suspicious:"Suspicious patterns detected. Be cautious.",clean:"No threats found. This email appears safe.",unknown:"Could not determine result."};
+  document.getElementById("rs").textContent=sub[v]||"";
+  document.getElementById("rconf").textContent=pct+"%";
+  document.getElementById("rb").style.width=pct+"%";
+  document.getElementById("rl").textContent=d.blocked_at||"all layers passed";
+  document.getElementById("rid").textContent=d.email_id||"-";
+  document.getElementById("rt").textContent=(d._ms||d.processing_time_ms||0)+" ms";
+  const l2=d.l2;
+  if(l2&&l2.engine_scores){
+    const sc=l2.engine_scores;
+    document.getElementById("ens").style.display="block";
+    [["s","structural"],["n","nlp"],["b","behavioral"]].forEach(([k,name])=>{
+      const val=sc[name]||0;
+      document.getElementById("b-"+k).style.width=Math.round(val*100)+"%";
+      document.getElementById("v-"+k).textContent=val.toFixed(2);
+    });
+  }else{document.getElementById("ens").style.display="none";}
+  card.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+
+function showErr(msg){
+  const card=document.getElementById("rc");
+  card.className="rc error";card.style.display="block";
+  document.getElementById("ri").textContent="❌";
+  document.getElementById("rv").textContent="ERROR";
+  document.getElementById("rs").textContent=msg;
+  document.getElementById("rconf").textContent="";
+  document.getElementById("rb").style.width="0%";
+  document.getElementById("ens").style.display="none";
+}
+function hideResult(){document.getElementById("rc").style.display="none";}
+function setBusy(on){
+  document.getElementById("sb2").disabled=on;
+  document.getElementById("spn").style.display=on?"block":"none";
+  document.getElementById("msg").textContent=on?"Checking...":"";
+}
+function resetForm(){document.getElementById("ei").value="";hideResult();}
+function loadDemo(){
+  document.getElementById("ei").value=[
+    "From: alert@example-bank.example",
+    "To: user@company.com",
+    "Subject: URGENT: Verify your account",
+    "Date: Sun, 14 Jun 2026 07:30:00 +0000",
+    "","Dear Customer,","",
+    "Unusual activity detected. Click below to restore access:",
+    "h"+"ttp://bad-site.example/verify",
+    "","You have 24 hours.","","Security Team"
+  ].join("\n");
+}
+
+async function loadQuarantine(){
+  const body=document.getElementById("qbody");
+  body.innerHTML=`<div class="empty">Loading...</div>`;
+  try{
+    const r=await fetch(API+"/api/quarantine");
+    const d=await r.json();
+    renderQuarantine(d.items||[]);
+  }catch(e){body.innerHTML=`<div class="empty">Error loading.</div>`;}
+}
+
+function renderQuarantine(items){
+  const body=document.getElementById("qbody");
+  if(!items.length){body.innerHTML=`<div class="empty">No quarantined emails. Nice and clean!</div>`;return;}
+  const rows=items.map(x=>{
+    const sender=(x.sender||"-").substring(0,40);
+    const subj=(x.subject||"(no subject)").substring(0,50);
+    const conf=Math.round((x.confidence||0)*100);
+    const dt=new Date((x.ts||0)*1000).toLocaleString();
+    return `<tr><td><span class="bv ${x.verdict}">${x.verdict}</span></td><td>${conf}%</td><td>${sender}</td><td>${subj}</td><td style="font-size:11px">${dt}</td><td><div class="row-actions"><button class="bs" onclick="openReport('${x.id}')">View</button><button class="bs" onclick="releaseScan('${x.id}')">Release</button><button class="bd" onclick="deleteScan('${x.id}')">Delete</button></div></td></tr>`;
+  }).join("");
+  body.innerHTML=`<table class="ht"><thead><tr><th>Verdict</th><th>Conf</th><th>Sender</th><th>Subject</th><th>Time</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function releaseScan(id){
+  if(!confirm("Release this email back to inbox?"))return;
+  await fetch(API+"/api/scan/"+id+"/release",{method:"POST"});
+  loadQuarantine();loadStats();
+}
+async function deleteScan(id){
+  if(!confirm("Delete this scan? Cannot be undone."))return;
+  await fetch(API+"/api/scan/"+id,{method:"DELETE"});
+  loadQuarantine();loadReports();loadStats();
+}
+
+async function loadReports(){
+  const body=document.getElementById("rbody");
+  body.innerHTML=`<div class="empty">Loading...</div>`;
+  try{
+    const r=await fetch(API+"/api/scans?limit=100");
+    const d=await r.json();
+    renderReports(d.items||[]);
+  }catch(e){body.innerHTML=`<div class="empty">Error loading.</div>`;}
+}
+
+function renderReports(items){
+  const body=document.getElementById("rbody");
+  document.getElementById("reports-list-card").style.display="block";
+  document.getElementById("report-detail-card").style.display="none";
+  if(!items.length){body.innerHTML=`<div class="empty">No scans yet. Submit an email above.</div>`;return;}
+  const rows=items.map(x=>{
+    const sender=(x.sender||"-").substring(0,40);
+    const subj=(x.subject||"(no subject)").substring(0,50);
+    const conf=Math.round((x.confidence||0)*100);
+    const dt=new Date((x.ts||0)*1000).toLocaleString();
+    return `<tr class="clickable" onclick="openReport('${x.id}')"><td><span class="bv ${x.verdict}">${x.verdict}</span></td><td>${conf}%</td><td>${sender}</td><td>${subj}</td><td>${x.blocked_at||"-"}</td><td style="font-size:11px">${dt}</td></tr>`;
+  }).join("");
+  body.innerHTML=`<table class="ht"><thead><tr><th>Verdict</th><th>Conf</th><th>Sender</th><th>Subject</th><th>Blocked At</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function openReport(id){
+  showSection("reports");
+  document.getElementById("reports-list-card").style.display="none";
+  const card=document.getElementById("report-detail-card");
+  card.style.display="block";
+  const body=document.getElementById("report-detail-body");
+  body.innerHTML=`<div class="empty">Loading...</div>`;
+  try{
+    const r=await fetch(API+"/api/scan/"+id);
+    if(!r.ok){body.innerHTML=`<div class="empty">Not found.</div>`;return;}
+    const s=await r.json();
+    renderReportDetail(s);
+  }catch(e){body.innerHTML=`<div class="empty">Error: ${e}</div>`;}
+}
+
+function closeReport(){
+  document.getElementById("reports-list-card").style.display="block";
+  document.getElementById("report-detail-card").style.display="none";
+}
+
+function renderReportDetail(s){
+  const body=document.getElementById("report-detail-body");
+  const v=s.verdict||"unknown";
+  const conf=Math.round((s.confidence||0)*100);
+  const data=s.data||{};
+  const l1=data.l1||{};
+  const l2=data.l2||{};
+  const sources=l1.detail_list||[];
+  let html=`<div class="kv"><div class="k">Verdict</div><div class="v"><span class="bv ${v}">${v}</span> at ${conf}% confidence</div></div>`;
+  html+=`<div class="kv"><div class="k">Email ID</div><div class="v">${s.id}</div></div>`;
+  html+=`<div class="kv"><div class="k">Sender</div><div class="v">${s.sender||"-"}</div></div>`;
+  html+=`<div class="kv"><div class="k">Subject</div><div class="v">${s.subject||"(no subject)"}</div></div>`;
+  html+=`<div class="kv"><div class="k">Time</div><div class="v">${new Date((s.ts||0)*1000).toLocaleString()}</div></div>`;
+  html+=`<div class="kv"><div class="k">Blocked At</div><div class="v">${data.blocked_at||"all layers passed"}</div></div>`;
+  if(s.body_preview){html+=`<div class="kv"><div class="k">Body Preview</div><div class="v" style="white-space:pre-wrap;font-family:monospace;font-size:12px">${escapeHtml(s.body_preview)}</div></div>`;}
+  if(sources.length){
+    html+=`<h3 style="margin-top:18px;font-size:13px;color:#a0aec0;text-transform:uppercase;letter-spacing:.6px">Layer 1 OSINT Sources (${sources.length})</h3>`;
+    html+=`<table class="ht" style="margin-top:8px"><thead><tr><th>Source</th><th>Result</th><th>Score</th><th>Indicator</th></tr></thead><tbody>`;
+    sources.forEach(x=>{
+      const ic=x.malicious?"⚠️":"✓";
+      html+=`<tr><td>${x.source}</td><td>${ic} ${x.malicious?"flagged":"clean"}</td><td>${x.score||0}</td><td style="font-family:monospace;font-size:11px">${(x.ioc||"").substring(0,60)}</td></tr>`;
+    });
+    html+="</tbody></table>";
+  }
+  if(l2.engine_scores){
+    html+=`<h3 style="margin-top:18px;font-size:13px;color:#a0aec0;text-transform:uppercase;letter-spacing:.6px">Layer 2 AI Engines</h3>`;
+    Object.entries(l2.engine_scores).forEach(([n,sc])=>{
+      const pct=Math.round(sc*100);
+      html+=`<div class="er" style="margin-top:8px"><div class="en">${n}</div><div class="ebw"><div class="eb" style="width:${pct}%"></div></div><div class="ev">${sc.toFixed(2)}</div></div>`;
+    });
+  }
+  const l3=data.l3||null;
+  if(l3 && !l3.error){
+    html+=`<h3 style="margin-top:18px;font-size:13px;color:#a0aec0;text-transform:uppercase;letter-spacing:.6px">Layer 3 Sandbox Detonation</h3>`;
+    const v3=l3.verdict||"unknown";
+    const sc3=(l3.score||0).toFixed(2);
+    html+=`<div class="kv"><div class="k">L3 Verdict</div><div class="v"><span class="bv ${v3}">${v3}</span> score ${sc3}</div></div>`;
+    if(l3.detonated_url){html+=`<div class="kv"><div class="k">Detonated URL</div><div class="v">${escapeHtml(l3.detonated_url||"")}</div></div>`;}
+    if(l3.final_url && l3.final_url!==l3.detonated_url){html+=`<div class="kv"><div class="k">Final URL</div><div class="v">${escapeHtml(l3.final_url||"")}</div></div>`;}
+    if(l3.title){html+=`<div class="kv"><div class="k">Page Title</div><div class="v">${escapeHtml(l3.title||"")}</div></div>`;}
+    if(l3.page_findings && l3.page_findings.length){html+=`<div class="kv"><div class="k">DOM Findings</div><div class="v">${l3.page_findings.map(escapeHtml).join(", ")}</div></div>`;}
+    if(l3.ocr_findings && l3.ocr_findings.length){html+=`<div class="kv"><div class="k">OCR Findings</div><div class="v">${l3.ocr_findings.map(escapeHtml).join(", ")}</div></div>`;}
+    const errText="Screenshot not available (sandbox may not have run).";
+    html+=`<div style="margin-top:14px"><img src="${API}/api/scan/${s.id}/screenshot" style="max-width:100%;border:1px solid #2d3748;border-radius:6px;display:block" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"/><div style="display:none;color:#4a5568;font-size:12px;margin-top:6px">${errText}</div></div>`;
+  } else if(l3 && l3.error){
+    html+=`<div class="kv"><div class="k">L3 Sandbox</div><div class="v" style="color:#fc8181">Error: ${escapeHtml(l3.error||l3.reason||"unknown")}</div></div>`;
+  }
+  body.innerHTML=html;
+}
+
+function escapeHtml(s){
+  s = String(s);
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "&") out += "&amp;";
+    else if (c === "<") out += "&lt;";
+    else if (c === ">") out += "&gt;";
+    else if (c === String.fromCharCode(34)) out += "&quot;";
+    else if (c === "\\'") out += "&#39;";
+    else out += c;
+  }
+  return out;
+}
+
+async function loadSettings(){
+  try{
+    const r=await fetch(API+"/api/settings");
+    const d=await r.json();
+    renderSettings(d);
+  }catch(e){document.getElementById("settings-body").innerHTML=`<div class="empty">Error loading.</div>`;}
+}
+
+function renderSettings(d){
+  const sb=document.getElementById("settings-body");
+  const tb=document.getElementById("thresholds-body");
+  let html="";
+  (d.providers||[]).forEach(p=>{
+    const cls=p.configured?"on":"off";
+    const label=p.configured?"Configured":"Not configured";
+    const val=p.configured?p.masked:`<span style="color:#4a5568">Set ${p.key} in your .env file to enable</span>`;
+    html+=`<div class="kv"><div class="k"><span class="dot ${cls}"></span>${p.label}</div><div class="v">${val}</div></div>`;
+  });
+  sb.innerHTML=html||`<div class="empty">No providers.</div>`;
+  let thtml="";
+  Object.entries(d.thresholds||{}).forEach(([k,v])=>{
+    thtml+=`<div class="kv"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  });
+  tb.innerHTML=thtml;
+}
+
+loadStats();
+setInterval(loadStats, 10000);
+
+async function loadSoar(){
+  try{
+    const r1 = await fetch(API+"/api/soar/status").then(r=>r.json());
+    const igs = r1.integrations || [];
+    const html = igs.map(i=>`<div class="kv"><div class="k"><span class="dot ${i.reachable?'on':'off'}"></span>${i.name}</div><div class="v">${i.configured?(i.reachable?'configured · reachable':'configured · unreachable'):'not configured'}${i.url?' · '+i.url:''}</div></div>`).join("");
+    document.getElementById("soar-status").innerHTML = html || '<div class="empty">No integrations</div>';
+  }catch(e){document.getElementById("soar-status").innerHTML='<div class="empty">Error: '+e+'</div>';}
+  await refreshDenylist();
+  try{
+    const r3 = await fetch(API+"/api/soar/audit?limit=20").then(r=>r.json());
+    const items = r3.items || [];
+    if(!items.length){ document.getElementById("soar-audit").innerHTML = '<div class="empty">No audit entries yet</div>'; }
+    else {
+      const rows = items.map(it=>`<tr><td>${(it["@timestamp"]||"").substring(0,19).replace("T"," ")}</td><td><span class="bv ${it.verdict||''}">${it.verdict||'-'}</span></td><td>${(it.subject||'-').substring(0,60)}</td><td>${it.sender||'-'}</td><td>${it.blocked_at||'-'}</td></tr>`).join("");
+      document.getElementById("soar-audit").innerHTML = `<table class="ht"><thead><tr><th>Time</th><th>Verdict</th><th>Subject</th><th>Sender</th><th>Blocked At</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+  }catch(e){document.getElementById("soar-audit").innerHTML='<div class="empty">Error: '+e+'</div>';}
+}
+
+async function refreshDenylist(){
+  try{
+    const r = await fetch(API+"/api/denylist").then(r=>r.json());
+    const items = r.items || [];
+    const stats = r.stats || {};
+    const byKind = stats.by_kind || {};
+    const summary = `${stats.total||0} active entries · ${stats.total_hits||0} total hits · ` +
+      Object.keys(byKind).map(k=>`${k}: ${byKind[k].count} (${byKind[k].hits} hits)`).join(" · ");
+    document.getElementById("dl-stats").textContent = summary;
+    if(!items.length){ document.getElementById("dl-table").innerHTML = '<div class="empty">No entries yet. Add one above, or detect a phishing email to auto-populate.</div>'; return; }
+    const rows = items.map(it=>`<tr><td>${it.kind}</td><td><code style="font-family:monospace;font-size:11px">${it.value}</code></td><td style="font-size:11px;color:#a0aec0">${it.reason||'-'}</td><td>${it.added_by||'-'}</td><td style="text-align:right">${it.hit_count||0}</td><td>${new Date((it.added_at||0)*1000).toLocaleString()}</td><td class="row-actions"><button class="bs" onclick="removeDenylist('${it.kind}','${encodeURIComponent(it.value)}')">Remove</button></td></tr>`).join("");
+    document.getElementById("dl-table").innerHTML = `<table class="ht"><thead><tr><th>Kind</th><th>Value</th><th>Reason</th><th>Added by</th><th style="text-align:right">Hits</th><th>Added</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  }catch(e){document.getElementById("dl-table").innerHTML='<div class="empty">Error: '+e+'</div>';}
+}
+
+async function addDenylist(){
+  const kind = document.getElementById("dl-kind").value;
+  const value = document.getElementById("dl-value").value.trim();
+  const reason = document.getElementById("dl-reason").value.trim();
+  if(!value){ alert("Value required"); return; }
+  try{
+    const r = await fetch(API+"/api/denylist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind, value, reason})});
+    if(!r.ok){ alert("Error: "+r.status); return; }
+    document.getElementById("dl-value").value = "";
+    document.getElementById("dl-reason").value = "";
+    await refreshDenylist();
+  }catch(e){alert("Error: "+e);}
+}
+
+async function removeDenylist(kind, value){
+  if(!confirm("Remove "+kind+":"+decodeURIComponent(value)+" from denylist?")) return;
+  try{
+    await fetch(API+"/api/denylist/"+encodeURIComponent(kind)+"/"+value,{method:"DELETE"});
+    await refreshDenylist();
+  }catch(e){alert("Error: "+e);}
+}
+</script>
+</body>
+</html>

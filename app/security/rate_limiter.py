@@ -1,8 +1,9 @@
 """Phase 6 - In-memory per-IP rate limiter using sliding window."""
-import time
 import threading
-import structlog
+import time
 from collections import deque
+
+import structlog
 from fastapi import HTTPException, Request
 
 logger = structlog.get_logger()

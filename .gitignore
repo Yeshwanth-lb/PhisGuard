@@ -9,3 +9,17 @@ build/
 .coverage
 models/*.pkl
 *.pcap
+
+# CI / coverage artifacts
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+coverage.xml
+*.cover
+.tox/
+.nox/
+*.egg
+test.bin
+credentials/
+data/settings_overrides.json
+ml/baselines/

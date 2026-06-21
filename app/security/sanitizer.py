@@ -1,5 +1,6 @@
 """Phase 6 - Input sanitization and validation for email payloads."""
 import re
+
 import structlog
 from fastapi import HTTPException
 

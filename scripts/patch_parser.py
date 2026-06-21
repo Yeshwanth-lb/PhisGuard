@@ -1,4 +1,6 @@
-import os, ast
+import ast
+import os
+
 p = os.path.join("app", "parser", "email_parser.py")
 with open(p) as f:
     src = f.read()

@@ -1,9 +1,10 @@
 """Async OSINT lookups: VirusTotal, AbuseIPDB, URLhaus, Spamhaus, MISP."""
 import asyncio
 import socket
-import structlog
+
 import httpx
-from typing import Optional
+import structlog
+
 from app.layer1.cache import L1Cache
 
 logger = structlog.get_logger()

@@ -1,5 +1,6 @@
 """Layer 4 - Slack notifier: post real-time alerts to a Slack channel."""
 import structlog
+
 logger = structlog.get_logger()
 
 

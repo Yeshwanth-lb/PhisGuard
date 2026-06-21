@@ -1,0 +1,61 @@
+# Local dev clutter
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual envs
+venv
+.venv
+env
+
+# IDE / OS junk
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Git / docs / build artifacts
+.git
+.gitignore
+*.md
+LICENSE
+
+# Test / dev outputs
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+.tox
+
+# Compose / Docker (avoid recursive context)
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile
+.dockerignore
+docker/
+
+# Local data not safe to bake into image
+data/
+models/
+mlruns/
+credentials/
+*.pkl
+*.joblib
+audit.jsonl
+.env
+.env.*
+
+# Node modules and sandbox puppeteer cache
+node_modules
+docker/sandbox/.puppeteer-cache
+
+# CI artifacts and dev configs
+.ruff_cache
+.github
+coverage.xml
+*.cover
+.pre-commit-config.yaml
+pyproject.toml
+tests/

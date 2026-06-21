@@ -1,5 +1,6 @@
 """Layer 4 - OpenCTI exporter."""
 import structlog
+
 logger = structlog.get_logger()
 
 
