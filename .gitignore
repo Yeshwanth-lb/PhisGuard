@@ -23,3 +23,22 @@ test.bin
 credentials/
 data/settings_overrides.json
 ml/baselines/
+
+# MISP private key (sensitive)
+docker/misp-key.pem
+
+# Runtime data directories
+data/
+
+# Sandbox build cache
+docker/sandbox/.puppeteer-cache/
+docker/sandbox/.dockerignore
+docker/sandbox/node_modules/
+
+# Misc session files
+*.zip
+*.md.bak
+uvicorn.log
+ma.md
+mail.md
+phishguard_handoff*
