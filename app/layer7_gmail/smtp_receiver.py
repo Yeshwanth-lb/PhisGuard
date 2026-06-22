@@ -80,10 +80,18 @@ class PhishGuardSMTPHandler:
     async def handle_DATA(self, server, session, envelope) -> str:
         import uuid as _uuid
         from app import storage
+        from app.security.smtp_rate_limiter import check as _rl_check
 
         raw_bytes: bytes = envelope.content
         mail_from: str = envelope.mail_from or ""
         original_rcpts: list[str] = list(envelope.rcpt_tos)
+
+        # ── Rate limiting — protects against email bombing ───────────────────
+        peer_ip = session.peer[0] if session.peer else "unknown"
+        allowed, reason = _rl_check(peer_ip, mail_from)
+        if not allowed:
+            logger.warning("smtp_rate_limited", peer=peer_ip, sender=mail_from, reason=reason)
+            return reason  # 421 = temporary failure, MTA will retry
 
         logger.info("smtp_received", peer=str(session.peer),
                     size=len(raw_bytes), rcpt=original_rcpts)

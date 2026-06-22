@@ -187,8 +187,10 @@ async def health():
     soar_ok = bool(getattr(settings, 'elasticsearch_url', '') or getattr(settings, 'slack_webhook_url', '') or getattr(settings, 'jira_base_url', ''))
     ml_path = getattr(settings, 'ml_model_path', 'data/model.pkl')
     ml_ok = _os.path.exists(ml_path)
+    from app.security.smtp_rate_limiter import stats as _smtp_rl_stats
     return {
         'status': 'ok',
+        'smtp_rate_limiter': _smtp_rl_stats(),
         'virustotal_api': 'ok' if settings.virustotal_api_key else 'unconfigured',
         'abuseipdb_api': 'ok' if settings.abuseipdb_api_key else 'unconfigured',
         'urlhaus_api': 'ok',
