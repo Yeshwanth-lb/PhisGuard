@@ -49,6 +49,12 @@ async def _lifespan(app):
             _sps(_aeb, settings)
         except Exception as _e:
             logger.warning("pull_autostart_failed", error=str(_e))
+    # Start weekly digest scheduler
+    try:
+        from app.layer4_soar.digest import start_digest_scheduler
+        start_digest_scheduler(settings)
+    except Exception as _e:
+        logger.warning("digest_scheduler_start_failed", error=str(_e))
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:
@@ -324,6 +330,29 @@ async def add_denylist(body: dict):
 async def remove_denylist(kind: str, value: str):
     ok = _deny.remove_entry(kind, value)
     return {'ok': ok}
+
+
+@app.get('/api/campaigns')
+async def list_campaigns(days: int = 7, current_user: dict = Depends(require_auth)):
+    """Detect and return active attack campaigns from recent scans."""
+    from app.layer4_soar.campaign_detector import detect_campaigns
+    db_path = getattr(settings, 'phishguard_db_path', 'data/phishguard.db') or 'data/phishguard.db'
+    campaigns = detect_campaigns(db_path=db_path, window_days=days)
+    active = sum(1 for c in campaigns if c.get('active'))
+    return {'campaigns': campaigns, 'total': len(campaigns), 'active': active, 'window_days': days}
+
+
+@app.post('/api/digest/send')
+async def send_digest_now(current_user: dict = Depends(require_permission('soar'))):
+    """Manually trigger the weekly threat digest to Slack."""
+    from app.layer4_soar.digest import send_digest
+    db_path   = getattr(settings, 'phishguard_db_path', 'data/phishguard.db') or 'data/phishguard.db'
+    slack_url = getattr(settings, 'slack_webhook_url', '') or ''
+    dash_url  = getattr(settings, 'dashboard_url', 'http://localhost:8000') or 'http://localhost:8000'
+    result    = await send_digest(db_path=db_path, slack_webhook_url=slack_url, dashboard_url=dash_url)
+    if not result.get('ok'):
+        raise HTTPException(status_code=500, detail=result.get('error', 'failed'))
+    return result
 
 
 @app.get('/api/soar/status')

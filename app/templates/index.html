@@ -178,6 +178,7 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     <a id="nav-reports" onclick="showSection('reports')">Reports</a>
     <a id="nav-pending" data-perm="quarantine" onclick="showSection('pending')">Pending Review <span id="pendingBadge" style="display:none;background:#fbbf24;color:#1a1a2e;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
     <a id="nav-ml" data-perm="ml_retrain" onclick="showSection('ml')">ML Ops</a>
+    <a id="nav-campaigns" onclick="showSection('campaigns')">Campaigns <span id="campaignBadge" style="display:none;background:#f87171;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
     <a id="nav-soar" data-perm="soar" onclick="showSection('soar')">SOAR</a>
     <a id="nav-audit" data-perm="audit" onclick="showSection('audit')">Audit Log</a>
     <a id="nav-gmail" data-perm="gmail_write" onclick="showSection('gmail')">Gmail</a>
@@ -323,9 +324,33 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     <div id="mlMetrics"><div class="empty">No training run yet</div></div>
   </div>
 </div>
+<div class="section" id="sec-campaigns">
+  <div class="section-title">Campaign Detection</div>
+  <div class="section-sub">Coordinated attack patterns detected across multiple emails</div>
+  <div class="card">
+    <h2>Active Campaigns <span class="badge" id="campaignCount">0</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <select id="campaignDays" onchange="loadCampaigns()" style="padding:4px 8px;font-size:11px;background:#0a0d14;border:1px solid #2a3346;border-radius:6px;color:#e2e8f0">
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+        <button class="bs" style="padding:5px 12px;font-size:12px" onclick="loadCampaigns()">↺ Refresh</button>
+      </span>
+    </h2>
+    <div id="campaignsBody"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
 <div class="section" id="sec-soar">
   <div class="section-title">SOAR Orchestration</div>
   <div class="section-sub">Layer 4 automated response across security tools</div>
+  <div class="card">
+    <h2>Weekly Threat Digest</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-bottom:14px">Post a summary of this week's threat activity to Slack — scan counts, top attackers, active campaigns. Auto-sends every Monday at 09:00 if Slack is configured.</p>
+    <button class="bp" id="digestBtn" onclick="sendDigest(this)">📨 Send Digest to Slack Now</button>
+    <div id="digestResult" style="margin-top:10px;font-size:12px"></div>
+  </div>
   <div class="card"><h2>Integration Status</h2><div id="soarStatus"><div class="empty">Loading...</div></div></div>
   <div class="card">
     <h2>Sender Denylist</h2>
@@ -513,7 +538,7 @@ function showApp(){
 
 function showSection(name){
   currentSection = name;
-  const all = ["overview","scan","quarantine","reports","pending","ml","soar","audit","gmail","settings"];
+  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","soar","audit","gmail","settings"];
   all.forEach(n => {
     const sec = document.getElementById("sec-" + n);
     const lnk = document.getElementById("nav-" + n);
@@ -525,6 +550,7 @@ function showSection(name){
   else if(name === "pending"){ loadPending(); }
   else if(name === "reports"){ loadReports(); }
   else if(name === "ml"){ loadML(); }
+  else if(name === "campaigns"){ loadCampaigns(); }
   else if(name === "soar"){ loadSoar(); }
   else if(name === "audit"){ loadAudit(); }
   else if(name === "gmail"){ loadGmail(); }
@@ -982,6 +1008,108 @@ async function removeTrustedDomain(domain, btn){
   const r = await api('/api/trusted-domains/'+encodeURIComponent(domain), {method:'DELETE'});
   if(r.ok){ toast(`${domain} removed`, 'success'); loadTrustedDomains(); }
   else { toast('Failed to remove', 'error'); btn.disabled = false; }
+}
+
+async function loadCampaigns(){
+  const body = document.getElementById('campaignsBody');
+  body.innerHTML = '<div class="empty">Detecting campaigns...</div>';
+  const days = (document.getElementById('campaignDays')||{value:'7'}).value || 7;
+  try{
+    const r = await api('/api/campaigns?days='+days);
+    const d = await r.json();
+    const campaigns = d.campaigns || [];
+    const active = d.active || 0;
+    document.getElementById('campaignCount').textContent = campaigns.length + ' detected';
+    const badge = document.getElementById('campaignBadge');
+    if(badge){ badge.textContent = active; badge.style.display = active > 0 ? 'inline' : 'none'; }
+    if(!campaigns.length){
+      body.innerHTML = '<div class="empty">No coordinated campaigns detected in the last '+days+' days — good news!</div>';
+      return;
+    }
+    const sevColor = {critical:'#f87171', high:'#f97316', medium:'#fbbf24'};
+    const sevBg    = {critical:'#2d0f0f', high:'#2d1500', medium:'#2d1f00'};
+    const typeIcon = {domain_pattern:'🌐', intent:'🎯'};
+    body.innerHTML = campaigns.map(function(c){
+      const sc   = sevColor[c.severity]||'#94a3b8';
+      const sbg  = sevBg[c.severity]||'#1c2333';
+      const icon = typeIcon[c.type]||'📌';
+      const firstDt = c.first_seen ? new Date(c.first_seen*1000).toLocaleDateString() : '?';
+      const lastDt  = c.last_seen  ? new Date(c.last_seen*1000).toLocaleDateString()  : '?';
+      const activePill = c.active
+        ? '<span style="padding:2px 8px;border-radius:10px;background:#14532d;color:#34d399;font-size:10px;font-weight:700">ACTIVE</span>'
+        : '<span style="padding:2px 8px;border-radius:10px;background:#1c2333;color:#64748b;font-size:10px">inactive</span>';
+      const domains = (c.unique_domains||[]).slice(0,3).map(d=>`<code style="font-size:11px;color:#94a3b8">${escapeHtml(d)}</code>`).join(' ');
+      const extra   = (c.unique_domains||[]).length > 3 ? `<span style="color:#4b5563;font-size:11px"> +${c.unique_domains.length-3} more</span>` : '';
+      return `<div style="background:${sbg};border:1px solid ${sc}44;border-radius:10px;padding:16px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <span style="padding:3px 10px;border-radius:5px;background:${sc}22;color:${sc};font-size:11px;font-weight:700;text-transform:uppercase">${c.severity}</span>
+          ${activePill}
+          <span style="font-size:14px;font-weight:700;color:#e2e8f0">${icon} ${escapeHtml(c.name)}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px">
+          <div style="background:#0a0d14;border-radius:7px;padding:10px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:${sc}">${c.email_count}</div>
+            <div style="font-size:10px;color:#64748b">emails</div>
+          </div>
+          <div style="background:#0a0d14;border-radius:7px;padding:10px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#f87171">${c.phishing_count||0}</div>
+            <div style="font-size:10px;color:#64748b">phishing</div>
+          </div>
+          <div style="background:#0a0d14;border-radius:7px;padding:10px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#fbbf24">${c.suspicious_count||0}</div>
+            <div style="font-size:10px;color:#64748b">suspicious</div>
+          </div>
+          <div style="background:#0a0d14;border-radius:7px;padding:10px;text-align:center">
+            <div style="font-size:14px;font-weight:700;color:#94a3b8">${firstDt}</div>
+            <div style="font-size:10px;color:#64748b">first seen</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:4px">
+          <b style="color:#64748b">Pattern:</b> <code style="color:#60a5fa">${escapeHtml(c.pattern||'')}</code>
+          ${c.top_intent ? `&nbsp;·&nbsp; <b style="color:#64748b">Intent:</b> <span style="color:#fbbf24">${escapeHtml(c.top_intent)}</span>` : ''}
+        </div>
+        ${domains ? `<div style="margin-top:6px">${domains}${extra}</div>` : ''}
+        <div style="margin-top:10px">
+          <button class="bs" style="padding:5px 12px;font-size:11px" onclick="viewCampaignScans(${JSON.stringify(c.scan_ids)})">View ${c.email_count} Scans in Reports →</button>
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){ body.innerHTML = '<div class="empty">Could not load campaigns: '+e.message+'</div>'; }
+}
+
+function viewCampaignScans(scanIds){
+  if(!scanIds||!scanIds.length) return;
+  showSection('reports');
+  // Filter reports to only show campaign scans
+  setTimeout(async function(){
+    const body = document.getElementById('reportsBody');
+    body.innerHTML = '<div class="empty">Loading campaign scans...</div>';
+    try{
+      // Load all scans then filter to those in the campaign
+      const r = await api('/api/scans?limit=500');
+      const d = await r.json();
+      const idSet = new Set(scanIds);
+      _allReportItems = (d.items||[]).filter(it => idSet.has(it.id||it.scan_id||it.email_id||''));
+      filterReports();
+    }catch(e){ body.innerHTML = '<div class="empty">Could not load scans</div>'; }
+  }, 100);
+}
+
+async function sendDigest(btn){
+  btn.disabled = true; btn.textContent = 'Sending...';
+  const result = document.getElementById('digestResult');
+  result.textContent = '';
+  try{
+    const r = await api('/api/digest/send', {method:'POST'});
+    const d = await r.json();
+    if(r.ok){
+      result.innerHTML = `<span style="color:#34d399">✓ Digest sent to Slack — period: ${escapeHtml(d.period||'')}, ${d.stats?.total||0} emails, ${d.campaigns||0} campaign(s)</span>`;
+      toast('📨 Weekly digest sent to Slack', 'success');
+    } else {
+      result.innerHTML = `<span style="color:#f87171">✗ ${escapeHtml(d.detail||'failed')}</span>`;
+    }
+  }catch(e){ result.innerHTML = `<span style="color:#f87171">✗ ${e.message}</span>`; }
+  btn.disabled = false; btn.textContent = '📨 Send Digest to Slack Now';
 }
 
 let _prevPhishingCount = -1;
