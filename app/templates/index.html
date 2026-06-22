@@ -285,7 +285,10 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     <div id="reportsBody"><div class="empty">Loading...</div></div>
   </div>
   <div class="card" id="report-detail-card" style="display:none">
-    <a onclick="closeReport()" style="cursor:pointer">Return to all scans</a>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <a onclick="closeReport()" style="cursor:pointer">← Return to all scans</a>
+      <button class="bs" id="exportPdfBtn" onclick="exportReportPDF()" style="padding:6px 14px;font-size:12px">📄 Export PDF</button>
+    </div>
     <h2 style="margin-top:14px">Scan Detail</h2>
     <div id="reportDetailBody"></div>
   </div>
@@ -419,6 +422,7 @@ let session = null;
 let currentSection = "overview";
 let pollHandle = null;
 let _currentHours = null;   // null = all-time; 24/168/720 = last N hours
+let _currentReportScan = null;  // scan object currently open in report detail view
 let _refreshTimer = null;
 
 const ROLE_PERMS = {
@@ -1571,6 +1575,7 @@ async function openReport(sid){
       delete d.data.parsed.body_plain;
     }
     if(d.body_preview) delete d.body_preview;
+    _currentReportScan = d;
 
     let screenshotUrl = null;
     try{
@@ -1853,9 +1858,218 @@ function renderScanReport(scan, screenshotUrl){
 
   return banner + twoCol + l0html + l1html + l2html + nlphtml + structhtml + behhtml + l3html + l5html + soarhtml;
 }
+function exportReportPDF(){
+  if(!_currentReportScan){ toast('No report loaded — open a scan first', 'error'); return; }
+  const btn = document.getElementById('exportPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Building…'; }
+  try{
+    const html = buildPrintHTML(_currentReportScan);
+    const w = window.open('', '_blank', 'width=960,height=800');
+    w.document.write(html);
+    w.document.close();
+    setTimeout(function(){ w.print(); }, 600);
+  }catch(e){ toast('Export failed: '+e.message, 'error'); }
+  if(btn){ btn.disabled = false; btn.textContent = '📄 Export PDF'; }
+}
+
+function buildPrintHTML(scan){
+  const data    = scan.data  || {};
+  const verdict = (scan.verdict || data.verdict || 'unknown').toLowerCase();
+  const conf    = typeof scan.confidence === 'number' ? scan.confidence : (data.confidence || 0);
+  const pars    = data.parsed || {};
+  const l1      = data.l1  || {};
+  const l2      = data.l2  || {};
+  const l5      = data.l5  || {};
+  const engines = l2.engines || {};
+  const nlp     = engines.nlp        || {};
+  const struct  = engines.structural || {};
+  const beh     = engines.behavioral || {};
+  const scores  = l2.engine_scores   || {};
+  const ts      = scan.ts ? new Date(scan.ts*1000).toLocaleString() : '—';
+  const pct     = Math.round(conf * 100);
+  const composite = typeof l2.confidence === 'number' ? l2.confidence : conf;
+
+  const VC  = {phishing:'#dc2626', suspicious:'#d97706', clean:'#059669', unknown:'#6b7280'};
+  const VBG = {phishing:'#fef2f2', suspicious:'#fffbeb', clean:'#f0fdf4', unknown:'#f8fafc'};
+  const VBD = {phishing:'#fecaca', suspicious:'#fde68a', clean:'#bbf7d0', unknown:'#e2e8f0'};
+  const vc  = VC[verdict]||'#6b7280';
+  const vbg = VBG[verdict]||'#f8fafc';
+  const vbd = VBD[verdict]||'#e2e8f0';
+
+  function authBadge(val){
+    const c  = val==='pass'?'#059669':val==='fail'?'#dc2626':'#9ca3af';
+    const bg = val==='pass'?'#dcfce7':val==='fail'?'#fee2e2':'#f3f4f6';
+    return `<span style="padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:${bg};color:${c};text-transform:uppercase">${val||'unknown'}</span>`;
+  }
+
+  function scoreRow(label, score, weight){
+    const pct2 = Math.round((score||0)*100);
+    const c = score>=0.9?'#dc2626':score>=0.70?'#d97706':score>=0.42?'#f59e0b':'#059669';
+    return `<tr>
+      <td style="padding:6px 8px;color:#374151;font-size:12px">${label}${weight?` <span style="color:#9ca3af;font-size:10px">(${weight})</span>`:''}</td>
+      <td style="padding:6px 8px;width:180px">
+        <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden">
+          <div style="height:100%;width:${pct2}%;background:${c};border-radius:4px"></div>
+        </div>
+      </td>
+      <td style="padding:6px 8px;font-weight:700;color:${c};text-align:right;font-size:12px">${(score||0).toFixed(2)}</td>
+    </tr>`;
+  }
+
+  const redFlags = (struct.red_flags||[]).map(f=>{
+    const c = f.severity==='critical'?'#dc2626':f.severity==='high'?'#d97706':'#f59e0b';
+    return `<div style="margin-bottom:4px;font-size:12px"><span style="color:${c};font-weight:700">[${f.severity}]</span> ${f.flag||''}</div>`;
+  }).join('') || '<span style="color:#9ca3af;font-size:12px">No structural red flags</span>';
+
+  const tactics = (nlp.tactics||[]).map(t=>
+    `<span style="padding:2px 8px;border-radius:10px;background:#dbeafe;color:#1d4ed8;font-size:10px;margin-right:4px">${t}</span>`
+  ).join('');
+
+  const tierExplain = {
+    tier1:`Single engine ≥ 0.90 → phishing (${l2.triggered_by||''})`,
+    tier2:`Composite ${composite.toFixed(2)} ≥ 0.70 → phishing`,
+    tier3:`Composite ${composite.toFixed(2)} ≥ 0.42 → suspicious`,
+    fallback:`Composite ${composite.toFixed(2)} < 0.42 → clean`,
+  };
+  const trigTier = l2.triggered_tier||'fallback';
+
+  const ICONS = {phishing:'🚨', suspicious:'⚠️', clean:'✅'};
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<title>PhishGuard Report — ${verdict.toUpperCase()} ${pct}%</title>
+<style>
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif; font-size:13px; color:#1f2937; background:white; padding:32px; line-height:1.5; }
+  h3{ font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid #e5e7eb; }
+  table{ width:100%; border-collapse:collapse; }
+  .section{ margin-bottom:22px; }
+  @media print{ body{padding:0} @page{margin:1.5cm} }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:18px;margin-bottom:24px;border-bottom:3px solid #1d4ed8">
+  <div>
+    <div style="font-size:22px;font-weight:900;color:#1d4ed8;letter-spacing:-.5px">Phish<span style="color:#dc2626">Guard</span></div>
+    <div style="font-size:11px;color:#6b7280;margin-top:2px">Email Security Gateway — Forensic Scan Report</div>
+  </div>
+  <div style="text-align:right;font-size:11px;color:#6b7280">
+    Generated: ${new Date().toLocaleString()}<br/>
+    Scan ID: <code style="font-size:10px">${scan.id||'—'}</code>
+  </div>
+</div>
+
+<!-- Verdict Banner -->
+<div style="background:${vbg};border:2px solid ${vbd};border-radius:10px;padding:20px 24px;margin-bottom:22px;display:flex;align-items:center;gap:20px">
+  <div style="font-size:36px">${ICONS[verdict]||'❓'}</div>
+  <div>
+    <div style="font-size:26px;font-weight:900;color:${vc};letter-spacing:-.3px">${verdict.toUpperCase()}</div>
+    <div style="font-size:36px;font-weight:900;color:${vc};line-height:1">${pct}% confidence</div>
+  </div>
+  <div style="margin-left:auto;font-size:12px;color:#6b7280">
+    ${data.blocked_at?`<div style="color:#dc2626;font-weight:700">Blocked at: ${data.blocked_at}</div>`:''}
+    ${data.fast_path?`<div style="color:#059669;font-weight:700">⚡ Fast-path: ${data.fast_path}</div>`:''}
+    <div>Scanned: ${ts}</div>
+    ${scan.processing_time_ms?`<div>Processing: ${scan.processing_time_ms}ms</div>`:''}
+  </div>
+</div>
+
+<!-- Two col: metadata + auth -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:22px">
+  <div class="section" style="margin:0">
+    <h3>📧 Email Metadata</h3>
+    <table><tbody>
+      <tr><td style="padding:4px 0;color:#6b7280;width:70px;font-size:12px">From</td><td style="padding:4px 0;font-size:12px;word-break:break-all">${scan.sender||pars.from_header||'—'}</td></tr>
+      <tr><td style="padding:4px 0;color:#6b7280;font-size:12px">Subject</td><td style="padding:4px 0;font-size:12px">${scan.subject||pars.subject||'—'}</td></tr>
+    </tbody></table>
+  </div>
+  <div class="section" style="margin:0">
+    <h3>🔐 Authentication</h3>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div><div style="font-size:10px;color:#9ca3af;margin-bottom:3px">SPF</div>${authBadge(pars.spf_result)}</div>
+      <div><div style="font-size:10px;color:#9ca3af;margin-bottom:3px">DKIM</div>${authBadge(pars.dkim_result)}</div>
+      <div><div style="font-size:10px;color:#9ca3af;margin-bottom:3px">DMARC</div>${authBadge(pars.dmarc_result)}</div>
+    </div>
+  </div>
+</div>
+
+<!-- L1 OSINT -->
+<div class="section">
+  <h3>🔍 Layer 1 — OSINT (${(l1.detail_list||[]).length} checks)</h3>
+  ${(l1.hits||[]).length ? (l1.hits||[]).map(h=>`<div style="color:#dc2626;font-size:12px;margin-bottom:3px">🚨 <b>${h.source||''}</b>: ${h.ioc||h.reason||''}</div>`).join('') : '<span style="color:#059669;font-size:12px">✓ No hard OSINT hits</span>'}
+  ${(l1.weak_hits||[]).map(h=>`<div style="color:#d97706;font-size:12px;margin-bottom:3px">⚠ <b>${h.source||''}</b>: ${h.reason||h.ioc||''}</div>`).join('')}
+</div>
+
+<!-- L2 AI Scores -->
+<div class="section">
+  <h3>🤖 Layer 2 — AI Consensus</h3>
+  <table style="margin-bottom:10px">
+    <tbody>
+      ${scoreRow('NLP Intent Analyst', scores.nlp||0, '50%')}
+      ${scoreRow('Structural Forensics', scores.structural||0, '30%')}
+      ${scoreRow('Behavioral Anomaly', scores.behavioral||0, '20%')}
+      <tr><td colspan="3" style="padding:3px 0"><hr style="border:none;border-top:1px solid #e5e7eb"/></td></tr>
+      ${scoreRow('Composite Score', composite, '')}
+    </tbody>
+  </table>
+  <div style="padding:8px 12px;background:#eff6ff;border-radius:6px;border-left:3px solid #1d4ed8;font-size:12px;color:#374151">
+    <b>Result:</b> ${tierExplain[trigTier]||trigTier}
+    ${l2.llm_provider?` · NLP via ${l2.llm_provider}`:''}
+  </div>
+</div>
+
+<!-- Two col: NLP + Structural -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:22px">
+  ${nlp.score!==undefined?`<div>
+    <h3>🧠 NLP Analysis</h3>
+    <div style="margin-bottom:6px;font-size:12px"><b style="color:#6b7280">Intent:</b> <b style="color:#d97706">${nlp.intent||'unknown'}</b></div>
+    <div style="margin-bottom:8px">${tactics||'<span style="color:#9ca3af;font-size:11px">No tactics</span>'}</div>
+    ${nlp.reasoning?`<div style="font-size:11px;color:#6b7280;font-style:italic;border-left:2px solid #e5e7eb;padding-left:8px;line-height:1.6">"${(nlp.reasoning||'').substring(0,300)}${(nlp.reasoning||'').length>300?'…':''}"</div>`:''}
+  </div>`:'<div></div>'}
+  <div>
+    <h3>🏗 Structural Red Flags</h3>
+    ${redFlags}
+    ${struct.domain_age_days!=null?`<div style="font-size:12px;color:#6b7280;margin-top:6px">Domain age: <b>${struct.domain_age_days} days</b></div>`:''}
+    ${struct.auth_alignment?`<div style="font-size:12px;color:#6b7280">Auth alignment: <b>${struct.auth_alignment}</b></div>`:''}
+  </div>
+</div>
+
+<!-- Behavioral + ML -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:22px">
+  <div>
+    <h3>📊 Behavioral Anomaly</h3>
+    ${['Cold start (new sender)','Learning (1–5 emails)','Developing (6–19)','Established (20+)'].map((t,i)=>`<div style="font-size:12px;color:#374151">Tier ${i}: ${t}</div>`)[beh.cold_start_tier||0]}
+    <div style="font-size:12px;color:#6b7280;margin-top:4px">Emails from sender: <b>${beh.emails_in_baseline||0}</b></div>
+    ${beh.dominant_deviation?`<div style="font-size:12px;color:#6b7280">Dominant deviation: <b style="color:#d97706">${beh.dominant_deviation}</b></div>`:''}
+  </div>
+  <div>
+    <h3>🤖 ML Classifier (Layer 5)</h3>
+    ${l5.ml_available?`
+      <div style="font-size:12px;color:#6b7280">ML score: <b style="color:#374151">${(l5.ml_score||0).toFixed(3)}</b></div>
+      <div style="font-size:12px;color:#6b7280">Blended (60% L2 + 40% ML): <b style="color:#374151">${conf.toFixed(3)}</b></div>
+      ${conf !== l2.confidence?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">Floor protection applied</div>':''}
+    `:'<div style="font-size:12px;color:#9ca3af">ML not available</div>'}
+  </div>
+</div>
+
+<!-- Footer -->
+<div style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:8px;display:flex;justify-content:space-between;font-size:10px;color:#9ca3af">
+  <span>PhishGuard v1.5.0 — Confidential Security Report</span>
+  <span>Scan ID: ${scan.id||'—'}</span>
+</div>
+
+</body>
+</html>`;
+}
+
 function closeReport(){
   document.getElementById("reports-list-card").style.display = "block";
   document.getElementById("report-detail-card").style.display = "none";
+  _currentReportScan = null;
 }
 
 async function loadSoar(){
