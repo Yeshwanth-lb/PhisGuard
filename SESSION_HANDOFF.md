@@ -1,5 +1,5 @@
 # PhishGuard — Session Handoff Document
-**Last updated:** 2026-06-22 (session 3)  
+**Last updated:** 2026-06-22 (session 4)  
 **Project root:** `/Users/intern4/Desktop/phishguard`  
 **Developer:** Yeshwanth (yeshwanthlb0@gmail.com)  
 **Purpose:** End-to-end email security gateway with 7-layer AI detection
@@ -9,19 +9,19 @@
 ## 1. Current System State
 
 ### Tests
-- **147 passing, 3 skipped, 0 failing**
+- **167 passing, 3 skipped, 0 failing**
 - Run with: `python3 -m pytest tests/ -q --ignore=tests/locustfile.py --ignore=tests/test_layer4_smtp_live.py --ignore=tests/test_layer2_claude_live.py`
 - 3 skipped: live Slack tests (no webhook in env)
-- Test files: `test_layer0.py` (12), `test_campaigns.py` (13), `test_layer1/2/3/4/5/6/7.py`
+- Test files: `test_layer0.py` (12), `test_campaigns.py` (13), `test_smtp_rate_limiter.py` (17), `test_layer1/2/3/4/5/6/7.py`
 
 ### Git Status
 - Branch: `master` — all changes committed, working tree clean
 - Latest commits:
+  - `0bf825d` feat: per-recipient rate limit and tarpit for distributed email bombing
+  - `94e657c` feat: SMTP rate limiter — email bombing protection
+  - `a7cd281` fix: restore _make_mock_proc helper removed during SDK mock rewrite
+  - `d29a84f` docs: add PROJECT_CONTEXT.md — complete project explanation
   - `535ae7e` feat: PDF export for scan reports
-  - `1f540af` feat: procedural email generator — unique emails every run
-  - `c7f8fe0` test+fix+docs: tests for new modules, privacy fix, handoff update
-  - `de2fea3` fix: campaign view-scans navigation, badge polling, dead stub removal
-  - `40b21c9` feat: campaign detection and weekly Slack threat digest
 
 ### Database State (as of 2026-06-22)
 - **Total scans stored:** ~1,400+
@@ -85,6 +85,22 @@ Blends: `final = 0.60 × L2_composite + 0.40 × ML_score`. Floor: suspicious ≥
 ### Layer 6 — Security
 JWT (HS256), RBAC (admin/analyst/readonly), rate limiter (120 req/min), audit log, input sanitiser.  
 **Privacy:** `GET /api/scan/{id}` strips body_text/body_html server-side. `body_preview` removed from `/api/scans` list. Email content never surfaces via API.
+
+### SMTP Rate Limiter — Email Bombing Protection
+**File:** `app/security/smtp_rate_limiter.py`  
+Four sliding-window counters checked before every email enters the pipeline:
+
+| Counter | Limit | Stops |
+|---|---|---|
+| Per-IP | 10/min | Single-source flooding |
+| Per-sender-domain | 20/hour | Domain-based campaigns |
+| **Per-recipient** | **30/min** | **Distributed bombing (rotating IPs/domains)** |
+| Global | 60/min | Total throughput cap |
+
+**Tarpit:** 2s sleep before 421 — slows automated tools from 500/min to ~30/min.  
+**Burst alert:** 5+ emails from same source in 10s → Slack alert (suppressed 5 min per source).  
+**421 = temporary** — sending MTA retries, no legitimate email permanently lost.  
+Stats visible in `GET /health` → `smtp_rate_limiter`.
 
 ### Layer 7 — Email Ingestion
 3 paths: SMTP gateway (port 8025), Gmail OAuth historical scanner, REST `/analyze`.  
@@ -248,6 +264,11 @@ After each demo run press **F5** before clicking buttons — IDs are fresh per r
 ### Feedback Loop
 `feedback` table accumulates SOC corrections (Mark Wrong button). At next retrain, corrections override original labels. Multiple corrections for same scan → latest wins.
 
+### Email Bombing — Rate Limiter Tuning
+Default limits (in `app/security/smtp_rate_limiter.py`): per-IP=10/min, per-domain=20/hr, per-recipient=30/min, global=60/min, tarpit=2s, burst=5/10s. Adjust constants at the top of the file — no rebuild needed if running locally (Python reimports). In Docker, rebuild after changing.
+
+The per-recipient limit is the most important for real-world attacks — online bombing tools use rotating IPs/domains so only the recipient counter catches them.
+
 ### Privacy — Email Body Never Exposed
 `GET /api/scan/{id}` strips body fields server-side. `body_preview` removed from list endpoint. No email body content accessible via any API.
 
@@ -269,6 +290,7 @@ Cert is for hostname `misp` not `localhost`. Do not restart MISP without cert fi
 3. **Retrain ML** — 1,400+ real scan records in DB, retrain from ML Ops tab to improve accuracy
 4. **PhishTank key** — registration may be re-enabled at phishtank.org/api_register.php
 5. **Jira** — add `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` to .env
+6. **SMTP rate limiter tuning** — current defaults are conservative for demo; production may need per-recipient limit raised if legitimate bulk senders (newsletters etc.) hit it
 
 ---
 
@@ -311,6 +333,7 @@ phishguard/
 │   ├── layer4_soar/digest.py           # Weekly Slack digest + scheduler
 │   ├── layer5_ml/training_pipeline.py  # ExtraTrees + feedback loop
 │   ├── layer5_ml/feature_extractor.py  # 24 ML features
+│   ├── security/smtp_rate_limiter.py   # Email bombing protection (4 counters + tarpit)
 │   ├── layer7_gmail/smtp_receiver.py   # SMTP gateway routing
 │   └── templates/index.html            # SOC Console SPA (~1,800 lines)
 ├── scripts/
@@ -320,6 +343,7 @@ phishguard/
 ├── tests/
 │   ├── test_layer0.py                  # 12 pre-filter tests
 │   ├── test_campaigns.py               # 13 campaign detection tests
+│   ├── test_smtp_rate_limiter.py       # 17 rate limiter + tarpit tests
 │   └── test_layer1/2/3/4/5/6/7.py     # Layer-specific tests
 ├── data/
 │   ├── phishguard.db                   # SQLite (4 tables)
