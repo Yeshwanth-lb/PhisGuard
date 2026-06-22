@@ -101,7 +101,7 @@ def _safe(obj):
 def list_scans(limit=50, offset=0, verdict_filter=None, only_quarantined=False, since_ts: float | None = None):
     with _lock:
         c = _conn()
-        sql = 'SELECT id, ts, verdict, confidence, blocked_at, sender, subject, body_preview, released, deleted FROM scans WHERE deleted = 0'
+        sql = 'SELECT id, ts, verdict, confidence, blocked_at, sender, subject, released, deleted FROM scans WHERE deleted = 0'
         params = []
         if only_quarantined:
             sql += " AND verdict IN ('phishing', 'suspicious') AND released = 0"
@@ -116,7 +116,8 @@ def list_scans(limit=50, offset=0, verdict_filter=None, only_quarantined=False, 
         params.append(offset)
         rows = c.execute(sql, params).fetchall()
         c.close()
-        return [dict(r) for r in rows]
+        cols = ['id','ts','verdict','confidence','blocked_at','sender','subject','released','deleted']
+        return [dict(zip(cols, r)) for r in rows]
 
 
 def get_scan(scan_id):

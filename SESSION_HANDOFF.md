@@ -1,5 +1,5 @@
 # PhishGuard — Session Handoff Document
-**Last updated:** 2026-06-22  
+**Last updated:** 2026-06-22 (session 2)  
 **Project root:** `/Users/intern4/Desktop/phishguard`  
 **Developer:** Yeshwanth (yeshwanthlb0@gmail.com)  
 **Purpose:** End-to-end email security gateway with 7-layer AI detection
@@ -9,9 +9,10 @@
 ## 1. Current System State
 
 ### Tests
-- **109 passing, 3 skipped, 0 failing**
+- **147 passing, 3 skipped, 0 failing**
 - Run with: `python3 -m pytest tests/ -q --ignore=tests/locustfile.py --ignore=tests/test_layer4_smtp_live.py --ignore=tests/test_layer2_claude_live.py`
 - 3 skipped: live Slack tests (no webhook in env)
+- New test files: `tests/test_layer0.py` (12 tests), `tests/test_campaigns.py` (13 tests)
 
 ### Git Status
 - Branch: `master` — all changes committed, working tree clean
@@ -290,6 +291,21 @@ python3 scripts/send_eml.py ~/Downloads/email.eml
 - **Search/filter bar** — filter by sender, verdict (all/phishing/suspicious/clean)
 - **Mark Wrong** button per row — saves SOC correction to `feedback` table for next retrain
 
+### Campaigns Tab (NEW)
+- Detects coordinated attack campaigns by clustering emails on:
+  1. **Normalised sender domain** — strips year/number suffixes so `payment-hub-2026.com` and `payment-hub-2027.com` cluster together
+  2. **NLP intent** — groups emails with same attack type (bec_fraud, credential_harvesting, etc.)
+- Clusters with ≥ 3 emails = campaign. Severity: critical (10+ or BEC), high (5-9), medium (3-4)
+- Active badge in nav bar updates every 5 seconds
+- **"View N Scans in Reports →"** deep-links to Reports tab pre-filtered to that campaign's emails
+- Backend: `app/layer4_soar/campaign_detector.py` | API: `GET /api/campaigns?days=N`
+
+### SOAR Tab — Weekly Digest
+- **"Send Digest to Slack Now"** button — manual trigger
+- Auto-sends every Monday at 09:00 via background daemon thread
+- Slack Block Kit format: scan volume, top attackers, top attack types, active campaigns
+- Backend: `app/layer4_soar/digest.py` | API: `POST /api/digest/send`
+
 ### Settings Tab
 - **Trusted Sender Domains** card — lists all 70 built-in domains (collapsed) + user-added domains with Remove button. Add any domain without touching code or rebuilding.
 
@@ -338,10 +354,9 @@ MISP cert is for hostname `misp` (not `localhost`). Do not restart MISP without 
 
 1. **Change default passwords** for production: ES, Kibana, MinIO, OpenCTI, Grafana, MISP all use `changeme`/`changeme123`
 2. **Lock CORS** — `allow_origins=['*']` in `app/main.py` line ~77, change to specific origin for production
-3. **Remove empty stub** — `app/smtp_server/` still has an empty `__init__.py`, should be deleted
-4. **PhishTank key** — phishtank.org/api_register.php (was disabled, worth re-checking)
-5. **Jira** — Add `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` to .env
-6. **Retrain ML** with accumulated feedback once SOC has flagged a batch of wrong verdicts
+3. **PhishTank key** — phishtank.org/api_register.php (was disabled, worth re-checking)
+4. **Jira** — Add `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` to .env
+5. **Retrain ML** with accumulated feedback once SOC has flagged a batch of wrong verdicts
 
 ---
 
@@ -382,6 +397,8 @@ phishguard/
 │   ├── layer2_ai/nlp_engine.py         # Multi-provider NLP + heuristic fallback
 │   ├── layer3_sandbox/sandbox_runner.py # Docker SDK sandbox (not CLI)
 │   ├── layer4_soar/soar_orchestrator.py # 7 SOAR integrations concurrent
+│   ├── layer4_soar/campaign_detector.py # NEW: domain+intent clustering → campaign detection
+│   ├── layer4_soar/digest.py           # NEW: weekly Slack threat digest + auto-scheduler
 │   ├── layer5_ml/training_pipeline.py  # ExtraTrees + CalibratedCV + feedback loop
 │   ├── layer5_ml/feature_extractor.py  # 24 ML features
 │   ├── layer7_gmail/smtp_receiver.py   # SMTP gateway routing
