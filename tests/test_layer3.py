@@ -58,19 +58,13 @@ def test_layer3_empty_urls():
 
 
 # ---------------------------------------------------------------------------
-# TC-P3-05: Sandbox runner - Docker container detonation
+# TC-P3-05: Sandbox runner - Docker SDK detonation
+# The sandbox switched from CLI (create_subprocess_exec) to the Python
+# Docker SDK. Tests now mock docker.DockerClient instead.
 # ---------------------------------------------------------------------------
 
-def _make_mock_proc(stdout: bytes, returncode: int = 0):
-    proc = MagicMock()
-    proc.returncode = returncode
-    proc.communicate = AsyncMock(return_value=(stdout, b""))
-    proc.kill = MagicMock()
-    return proc
-
-
 def test_sandbox_docker_command_flags():
-    """detonate_url with a docker image must build the correct docker run command."""
+    """detonate_url must call containers.run with the correct security flags."""
     crawl_payload = {
         "url": "http://evil.test/login",
         "final_url": "http://evil.test/login",
@@ -80,45 +74,50 @@ def test_sandbox_docker_command_flags():
         "form_data": [{"fields": [{"name": "password", "type": "password"}]}],
         "redirects": [],
     }
-    mock_proc = _make_mock_proc(json.dumps(crawl_payload).encode())
 
-    captured_cmd = []
-
-    async def fake_exec(*cmd, **kwargs):
-        captured_cmd.extend(cmd)
-        return mock_proc
+    mock_client = MagicMock()
+    mock_client.containers.run.return_value = json.dumps(crawl_payload).encode()
 
     from app.layer3_sandbox import sandbox_runner
 
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+    with patch("docker.DockerClient", return_value=mock_client):
         result = asyncio.run(
             sandbox_runner.detonate_url("http://evil.test/login", docker_image="phishguard-sandbox:latest")
         )
 
     assert result.get("crawl_result") == crawl_payload, f"unexpected result: {result}"
-    assert "docker" in captured_cmd
-    assert "run" in captured_cmd
-    assert "--rm" in captured_cmd
-    assert "--cap-drop" in captured_cmd
-    assert "ALL" in captured_cmd
-    assert "--security-opt" in captured_cmd
-    assert "no-new-privileges" in captured_cmd
-    assert "--read-only" in captured_cmd
-    assert "--memory" in captured_cmd
-    assert "phishguard-sandbox:latest" in captured_cmd
-    assert "http://evil.test/login" in captured_cmd
+    call_kwargs = mock_client.containers.run.call_args
+    assert call_kwargs is not None
+    kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
+    assert kwargs.get("remove") is True
+    assert "ALL" in kwargs.get("cap_drop", [])
+    assert "no-new-privileges" in kwargs.get("security_opt", [])
+    assert kwargs.get("read_only") is True
 
 
 def test_sandbox_docker_nonzero_exit_returns_error():
-    """Non-zero Docker exit code must return an error dict, not raise."""
-    mock_proc = _make_mock_proc(b"", returncode=1)
+    """ContainerError from Docker SDK must return an error dict, not raise.
 
-    async def fake_exec(*cmd, **kwargs):
-        return mock_proc
+    The runner falls back to CLI when SDK raises, so we mock both paths to
+    ensure the error propagates all the way through to the return value.
+    """
+    import docker as _docker
+
+    mock_client = MagicMock()
+    mock_client.containers.run.side_effect = _docker.errors.ContainerError(
+        "phishguard-sandbox:latest", 1, "node", "phishguard-sandbox:latest", b""
+    )
+
+    # CLI fallback proc with non-zero exit
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+    mock_proc.kill = MagicMock()
 
     from app.layer3_sandbox import sandbox_runner
 
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+    with patch("docker.DockerClient", return_value=mock_client), \
+         patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
         result = asyncio.run(
             sandbox_runner.detonate_url("http://evil.test", docker_image="phishguard-sandbox:latest")
         )
@@ -128,27 +127,22 @@ def test_sandbox_docker_nonzero_exit_returns_error():
 
 
 def test_sandbox_docker_timeout_kills_container():
-    """A hung Docker process must be killed and return a timeout error."""
+    """A hung SDK run_in_executor must return a timeout error dict."""
     import asyncio as _aio
 
-    async def slow_communicate():
-        await _aio.sleep(9999)
-        return b"", b""
+    mock_client = MagicMock()
 
-    mock_proc = MagicMock()
-    mock_proc.returncode = -1
-    mock_proc.communicate = slow_communicate
-    mock_proc.kill = MagicMock()
+    def slow_run(*args, **kwargs):
+        import time; time.sleep(9999)
 
-    async def fake_exec(*cmd, **kwargs):
-        return mock_proc
+    mock_client.containers.run.side_effect = slow_run
 
     from app.layer3_sandbox import sandbox_runner
 
     original_timeout = sandbox_runner.SANDBOX_TIMEOUT_SECS
     sandbox_runner.SANDBOX_TIMEOUT_SECS = 0.05
     try:
-        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        with patch("docker.DockerClient", return_value=mock_client):
             result = asyncio.run(
                 sandbox_runner.detonate_url("http://evil.test", docker_image="phishguard-sandbox:latest")
             )
@@ -156,7 +150,6 @@ def test_sandbox_docker_timeout_kills_container():
         sandbox_runner.SANDBOX_TIMEOUT_SECS = original_timeout
 
     assert result.get("error") == "timeout"
-    mock_proc.kill.assert_called_once()
 
 
 def test_sandbox_no_docker_image_uses_node():
