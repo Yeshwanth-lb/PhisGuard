@@ -19,6 +19,21 @@ def _conn():
 def init_db():
     with _lock:
         c = _conn()
+        c.execute('''CREATE TABLE IF NOT EXISTS trusted_domains (
+            domain TEXT PRIMARY KEY,
+            added_at REAL NOT NULL,
+            added_by TEXT DEFAULT 'user',
+            note TEXT DEFAULT ''
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+            id TEXT PRIMARY KEY,
+            scan_id TEXT NOT NULL,
+            original_verdict TEXT,
+            corrected_verdict TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            submitted_at REAL NOT NULL,
+            submitted_by TEXT DEFAULT 'soc'
+        )''')
         # Pending SOC review queue — suspicious emails held for analyst approval
         c.execute('''CREATE TABLE IF NOT EXISTS pending_review (
             id TEXT PRIMARY KEY,
@@ -205,6 +220,56 @@ def update_pending_status(pending_id: str, status: str, reviewed_by: str = "") -
         c.commit()
         c.close()
         return True
+
+
+def list_trusted_domains() -> list[dict]:
+    with _lock:
+        c = _conn()
+        rows = c.execute('SELECT domain, added_at, note FROM trusted_domains ORDER BY added_at DESC').fetchall()
+        c.close()
+        return [{'domain': r[0], 'added_at': r[1], 'note': r[2]} for r in rows]
+
+
+def add_trusted_domain(domain: str, note: str = '', added_by: str = 'user') -> bool:
+    with _lock:
+        c = _conn()
+        try:
+            c.execute('INSERT OR REPLACE INTO trusted_domains (domain, added_at, added_by, note) VALUES (?, ?, ?, ?)',
+                      (domain.lower().strip(), time.time(), added_by, note))
+            c.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            c.close()
+
+
+def remove_trusted_domain(domain: str) -> bool:
+    with _lock:
+        c = _conn()
+        c.execute('DELETE FROM trusted_domains WHERE domain = ?', (domain.lower().strip(),))
+        c.commit()
+        c.close()
+        return True
+
+
+def save_feedback(scan_id: str, original_verdict: str, corrected_verdict: str,
+                  notes: str = '', submitted_by: str = 'soc') -> bool:
+    import uuid as _uuid
+    with _lock:
+        c = _conn()
+        try:
+            c.execute('''INSERT INTO feedback
+                (id, scan_id, original_verdict, corrected_verdict, notes, submitted_at, submitted_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (_uuid.uuid4().hex, scan_id, original_verdict, corrected_verdict, notes,
+                 time.time(), submitted_by))
+            c.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            c.close()
 
 
 init_db()

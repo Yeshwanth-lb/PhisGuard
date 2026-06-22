@@ -2,6 +2,7 @@
 
 import structlog
 
+from app.layer0.pre_filter import run_layer0
 from app.layer1.cache import L1Cache
 from app.layer1.verdicts import run_layer1
 from app.layer2_ai.orchestrator import run_layer2
@@ -77,6 +78,17 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
     raw_urls = extract_urls(body_text=body_text, body_html=body_html)
     urls = await resolve_shortened_urls(raw_urls)
 
+    spf_result  = parsed.get("spf_result",  "unknown")
+    dkim_result = parsed.get("dkim_result", "unknown")
+    dmarc_result = parsed.get("dmarc_result", "unknown")
+
+    l0 = run_layer0(parsed, urls, spf_result, dkim_result)
+    if l0:
+        logger.info("l0_trivial_clean_fast_exit",
+                    body_len=l0["l0"]["body_len"],
+                    sender=parsed.get("from_header", "")[:60])
+        return await _post_actions(l0, settings, raw_eml)
+
     cache = await get_cache(settings.redis_url)
     l1 = await run_layer1(
         sender_ip=sender_ip,
@@ -86,9 +98,9 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
         cache=cache,
         sender_email=parsed.get("from_header", ""),
         raw_eml=raw_eml,
-        spf_result=parsed.get("spf_result", "unknown"),
-        dkim_result=parsed.get("dkim_result", "unknown"),
-        dmarc_result=parsed.get("dmarc_result", "unknown"),
+        spf_result=spf_result,
+        dkim_result=dkim_result,
+        dmarc_result=dmarc_result,
     )
 
     if l1["verdict"] == "quarantine":

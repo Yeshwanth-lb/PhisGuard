@@ -267,6 +267,13 @@ async def get_scan_detail(scan_id: str):
     s = storage.get_scan(scan_id)
     if not s:
         raise HTTPException(status_code=404, detail='Scan not found')
+    # Never surface raw email body content via API
+    if isinstance(s.get('data'), dict):
+        parsed = s['data'].get('parsed') or {}
+        parsed.pop('body_text', None)
+        parsed.pop('body_html', None)
+        parsed.pop('body_plain', None)
+    s.pop('body_preview', None)
     return s
 
 
@@ -726,6 +733,51 @@ async def reject_pending(
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("error", "failed"))
     return result
+
+
+
+@app.get("/api/trusted-domains")
+async def list_trusted_domains_api(current_user: dict = Depends(require_auth)):
+    from app.layer1.verdicts import TRUSTED_SENDER_DOMAINS
+    builtin = [{"domain": d, "source": "builtin"} for d in sorted(TRUSTED_SENDER_DOMAINS)]
+    dynamic = [{"domain": r["domain"], "source": "user", "note": r.get("note", ""),
+                "added_at": r.get("added_at")} for r in storage.list_trusted_domains()]
+    return {"builtin": builtin, "user_added": dynamic,
+            "total": len(builtin) + len(dynamic)}
+
+
+@app.post("/api/trusted-domains")
+async def add_trusted_domain_api(body: dict, current_user: dict = Depends(require_permission("settings"))):
+    domain = (body.get("domain") or "").strip().lower()
+    if not domain or "." not in domain:
+        raise HTTPException(status_code=400, detail="Invalid domain")
+    note = body.get("note", "")
+    ok = storage.add_trusted_domain(domain, note=note, added_by=current_user.get("sub", "soc"))
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to add domain")
+    return {"ok": True, "domain": domain}
+
+
+@app.delete("/api/trusted-domains/{domain}")
+async def remove_trusted_domain_api(domain: str, current_user: dict = Depends(require_permission("settings"))):
+    storage.remove_trusted_domain(domain)
+    return {"ok": True, "domain": domain}
+
+
+@app.post("/api/scan/{scan_id}/feedback")
+async def submit_feedback(scan_id: str, body: dict,
+                          current_user: dict = Depends(require_permission("scan"))):
+    corrected = body.get("corrected_verdict", "")
+    if corrected not in ("phishing", "suspicious", "clean"):
+        raise HTTPException(status_code=400, detail="corrected_verdict must be phishing/suspicious/clean")
+    scan = storage.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    original = scan.get("verdict", "unknown")
+    storage.save_feedback(scan_id, original, corrected,
+                          notes=body.get("notes", ""),
+                          submitted_by=current_user.get("sub", "soc"))
+    return {"ok": True, "scan_id": scan_id, "original": original, "corrected": corrected}
 
 
 @app.get("/api/gmail/status")

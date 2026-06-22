@@ -24,7 +24,7 @@ WEIGHTS = {
 }
 
 SINGLE_ENGINE_THRESHOLD = 0.90   # Tier 1: one engine is overwhelming → phishing
-HIGH_CONF_THRESHOLD     = 0.62   # Tier 2: composite score → phishing (raised from 0.55 to reduce false positives on marketing emails)
+HIGH_CONF_THRESHOLD     = 0.70   # Tier 2: composite score → phishing (raised from 0.62 — borderline domain-age signals were escalating suspicious → phishing)
 MED_CONF_THRESHOLD      = 0.42   # Tier 3: composite score → suspicious
 
 

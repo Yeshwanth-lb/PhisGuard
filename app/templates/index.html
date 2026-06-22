@@ -269,7 +269,20 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
 <div class="section" id="sec-reports">
   <div class="section-title">Scan Reports</div>
   <div class="section-sub">Full audit trail of every scanned email</div>
-  <div class="card" id="reports-list-card"><h2>All Scans</h2><div id="reportsBody"><div class="empty">Loading...</div></div></div>
+  <div class="card" id="reports-list-card">
+    <h2>All Scans</h2>
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="reportFilterSender" placeholder="Filter by sender…" style="width:220px;padding:7px 10px;font-size:12px" oninput="filterReports()"/>
+      <select id="reportFilterVerdict" style="width:140px;padding:7px 10px;font-size:12px;background:#0a0d14;border:1px solid #2a3346;border-radius:8px;color:#e2e8f0" onchange="filterReports()">
+        <option value="">All verdicts</option>
+        <option value="phishing">Phishing</option>
+        <option value="suspicious">Suspicious</option>
+        <option value="clean">Clean</option>
+      </select>
+      <button class="bs" style="padding:7px 12px;font-size:12px" onclick="loadReports()">↺ Refresh</button>
+    </div>
+    <div id="reportsBody"><div class="empty">Loading...</div></div>
+  </div>
   <div class="card" id="report-detail-card" style="display:none">
     <a onclick="closeReport()" style="cursor:pointer">Return to all scans</a>
     <h2 style="margin-top:14px">Scan Detail</h2>
@@ -359,6 +372,16 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
   <div class="section-sub">Provider configuration and detection thresholds</div>
   <div class="card"><h2>Provider Configuration</h2><div id="settingsBody"><div class="empty">Loading...</div></div></div>
   <div class="card"><h2>Detection Thresholds</h2><div id="thresholdsBody"></div></div>
+  <div class="card">
+    <h2>Trusted Sender Domains <span class="badge" id="trustedCount">0</span></h2>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:14px">Emails from these domains bypass OSINT + AI analysis when SPF+DKIM pass. Builtins are read-only; you can add custom domains below.</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <input type="text" id="trustedDomainInput" placeholder="e.g. mycompany.com" style="width:220px;padding:7px 10px;font-size:12px"/>
+      <input type="text" id="trustedDomainNote" placeholder="Note (optional)" style="width:180px;padding:7px 10px;font-size:12px"/>
+      <button class="bp" style="padding:7px 14px;font-size:12px" onclick="addTrustedDomain()">+ Add</button>
+    </div>
+    <div id="trustedDomainsBody"><div class="empty">Loading…</div></div>
+  </div>
 </div>
 
 </div>
@@ -505,7 +528,7 @@ function showSection(name){
   else if(name === "soar"){ loadSoar(); }
   else if(name === "audit"){ loadAudit(); }
   else if(name === "gmail"){ loadGmail(); }
-  else if(name === "settings"){ loadSettings(); }
+  else if(name === "settings"){ loadSettings(); loadTrustedDomains(); }
 }
 
 function startPolling(){
@@ -750,6 +773,13 @@ function loadDemo(){
 
 async function loadPending(){
   const body = document.getElementById('pendingBody');
+  // Save which analysis + body panels are open so we can restore them after re-render
+  const openAnalyses = {};
+  body.querySelectorAll('[id^="analysis-"]').forEach(function(el){
+    if(el.style.display !== 'none' && el.innerHTML){
+      openAnalyses[el.id.replace('analysis-', '')] = el.innerHTML;
+    }
+  });
   body.innerHTML = '<div class="empty">Loading...</div>';
   try{
     const r = await api('/api/pending');
@@ -767,6 +797,7 @@ async function loadPending(){
     const rows = items.map(function(it){
       const conf = Math.round((it.confidence||0)*100);
       const ts = it.ts ? new Date(it.ts*1000).toLocaleString() : '-';
+      const scanId = it.scan_id || it.id;
       return `<div style="border:1px solid #2a3346;border-radius:8px;padding:14px;margin-bottom:12px;background:#1c2333">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
           <span class="verdict-pill suspicious">suspicious</span>
@@ -777,13 +808,27 @@ async function loadPending(){
         <div style="font-size:13px;margin-bottom:4px"><b>Subject:</b> ${escapeHtml(it.subject||'')}</div>
         <div style="font-size:12px;color:#94a3b8;margin-bottom:12px"><b>To:</b> ${escapeHtml(it.original_rcpt||'')} (held — not yet delivered)</div>
         <div id="shot-${escapeHtml(it.scan_id||it.id)}" style="margin-bottom:12px"></div>
-        <div style="display:flex;gap:10px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="bp" onclick="pendingApprove('${escapeHtml(it.id)}',this)">✅ Approve — deliver to recipient</button>
           <button class="bd" onclick="pendingReject('${escapeHtml(it.id)}',this)">🔒 Reject — send to quarantine</button>
+          <button class="bs" id="abtn-${escapeHtml(scanId)}" onclick="toggleAnalysis('${escapeHtml(scanId)}',this)">📊 View Analysis</button>
         </div>
+        <div id="analysis-${escapeHtml(scanId)}" style="display:none"></div>
       </div>`;
     }).join('');
     body.innerHTML = rows;
+
+    // Restore analysis panels
+    Object.keys(openAnalyses).forEach(function(scanId){
+      const panel = document.getElementById('analysis-' + scanId);
+      const btn   = document.getElementById('abtn-'     + scanId);
+      if(panel){
+        panel.innerHTML     = openAnalyses[scanId];
+        panel.dataset.loaded = '1';
+        panel.style.display = 'block';
+        if(btn) btn.textContent = '📊 Hide Analysis';
+      }
+    });
 
     // Try to load sandbox screenshots for each pending item
     for(const it of items) {
@@ -842,14 +887,316 @@ async function pendingReject(id, btn){
   }catch(e){ toast('Reject failed: '+e.message, 'error'); btn.disabled=false; }
 }
 
+let _allReportItems = [];
+async function loadReports(){
+  const body = document.getElementById("reportsBody");
+  body.innerHTML = `<div class="empty">Loading...</div>`;
+  try{
+    const r = await api("/api/scans?limit=200" + (_currentHours ? "&hours=" + _currentHours : ""));
+    const d = await r.json();
+    _allReportItems = d.items || d.scans || [];
+    filterReports();
+  }catch(e){ body.innerHTML = `<div class="empty">Could not load reports</div>`; }
+}
+
+function filterReports(){
+  const body = document.getElementById("reportsBody");
+  const senderQ = (document.getElementById('reportFilterSender')||{value:''}).value.toLowerCase().trim();
+  const verdictQ = (document.getElementById('reportFilterVerdict')||{value:''}).value;
+  const items = _allReportItems.filter(function(it){
+    if(verdictQ && it.verdict !== verdictQ) return false;
+    if(senderQ && !(it.sender||'').toLowerCase().includes(senderQ)) return false;
+    return true;
+  });
+  if(!items.length){ body.innerHTML = `<div class="empty">No scans match filter</div>`; return; }
+  const rows = items.map(function(it){
+    const v = (it.verdict||"unknown").toLowerCase();
+    const sid = it.id || it.scan_id || it.email_id || "";
+    const tsStr = it.ts ? new Date(it.ts*1000).toLocaleString() : "-";
+    return `<tr style="cursor:pointer" data-scan-id="${escapeHtml(sid)}">
+      <td><span class="verdict-pill ${escapeHtml(v)}">${escapeHtml(v)}</span></td>
+      <td>${escapeHtml(it.sender||"")}</td><td>${escapeHtml(it.subject||"")}</td>
+      <td class="mono" style="font-size:11px">${escapeHtml(tsStr)}</td>
+      <td><button class="bs" style="padding:3px 8px;font-size:11px" onclick="event.stopPropagation();submitFeedback('${escapeHtml(sid)}','${escapeHtml(v)}',this)">Mark Wrong</button></td>
+    </tr>`;
+  }).join("");
+  body.innerHTML = `<table><thead><tr><th>Verdict</th><th>From</th><th>Subject</th><th>Time</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  body.querySelectorAll("tr[data-scan-id]").forEach(function(tr){
+    tr.addEventListener("click", function(){ openReport(tr.getAttribute("data-scan-id")); });
+  });
+}
+
+async function submitFeedback(scanId, currentVerdict, btn){
+  const options = ['phishing','suspicious','clean'].filter(v=>v!==currentVerdict);
+  const choice = window.prompt(`Mark "${escapeHtml(scanId.substring(0,8))}…" as:\n\n${options.map((o,i)=>(i+1)+'. '+o).join('\n')}\n\nEnter 1, 2 (or cancel):`);
+  if(!choice) return;
+  const idx = parseInt(choice) - 1;
+  if(idx < 0 || idx >= options.length){ toast('Invalid choice', 'error'); return; }
+  const corrected = options[idx];
+  btn.disabled = true; btn.textContent = '…';
+  try{
+    const r = await api('/api/scan/'+encodeURIComponent(scanId)+'/feedback', {method:'POST', body:JSON.stringify({corrected_verdict:corrected})});
+    if(r.ok){ toast(`Feedback saved — marked as ${corrected}`, 'success'); btn.textContent = '✓ Saved'; }
+    else { toast('Failed to save feedback', 'error'); btn.disabled = false; btn.textContent = 'Mark Wrong'; }
+  }catch(e){ toast('Error: '+e.message, 'error'); btn.disabled = false; btn.textContent = 'Mark Wrong'; }
+}
+
+async function loadTrustedDomains(){
+  const body = document.getElementById('trustedDomainsBody');
+  if(!body) return;
+  try{
+    const r = await api('/api/trusted-domains');
+    const d = await r.json();
+    document.getElementById('trustedCount').textContent = d.total || 0;
+    const userRows = (d.user_added||[]).map(function(it){
+      return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #1c2333">
+        <span style="font-size:13px;color:#e2e8f0;min-width:200px">${escapeHtml(it.domain)}</span>
+        <span style="font-size:11px;color:#64748b;flex:1">${escapeHtml(it.note||'')}</span>
+        <span style="font-size:10px;padding:1px 7px;border-radius:10px;background:#1e3a5f;color:#93c5fd">user-added</span>
+        <button class="bd" style="padding:3px 10px;font-size:11px" onclick="removeTrustedDomain('${escapeHtml(it.domain)}',this)">Remove</button>
+      </div>`;
+    }).join('');
+    const builtinRows = (d.builtin||[]).map(function(it){
+      return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #141925">
+        <span style="font-size:12px;color:#64748b;min-width:200px">${escapeHtml(it.domain)}</span>
+        <span style="font-size:10px;padding:1px 7px;border-radius:10px;background:#1c2333;color:#4b5563">built-in</span>
+      </div>`;
+    }).join('');
+    body.innerHTML = (userRows ? `<div style="margin-bottom:12px">${userRows}</div>` : '')
+      + `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:#64748b;margin-bottom:6px">${(d.builtin||[]).length} built-in domains (read-only)</summary>${builtinRows}</details>`;
+  }catch(e){ body.innerHTML = '<div class="empty">Could not load trusted domains</div>'; }
+}
+
+async function addTrustedDomain(){
+  const domain = (document.getElementById('trustedDomainInput').value||'').trim().toLowerCase();
+  const note   = (document.getElementById('trustedDomainNote').value||'').trim();
+  if(!domain){ toast('Enter a domain first', 'error'); return; }
+  const r = await api('/api/trusted-domains', {method:'POST', body:JSON.stringify({domain, note})});
+  if(r.ok){ document.getElementById('trustedDomainInput').value=''; document.getElementById('trustedDomainNote').value=''; toast(`✓ ${domain} added to trusted senders`, 'success'); loadTrustedDomains(); }
+  else { const d=await r.json(); toast('Failed: '+(d.detail||r.status), 'error'); }
+}
+
+async function removeTrustedDomain(domain, btn){
+  if(!confirm(`Remove "${domain}" from trusted senders?`)) return;
+  btn.disabled = true;
+  const r = await api('/api/trusted-domains/'+encodeURIComponent(domain), {method:'DELETE'});
+  if(r.ok){ toast(`${domain} removed`, 'success'); loadTrustedDomains(); }
+  else { toast('Failed to remove', 'error'); btn.disabled = false; }
+}
+
+let _prevPhishingCount = -1;
+let _prevPendingCount  = -1;
+
 async function pollPendingBadge(){
   try{
-    const r = await api('/api/pending');
-    const d = await r.json();
-    const n = (d.items||[]).length;
+    const [pr, sr] = await Promise.all([api('/api/pending'), api('/api/stats')]);
+    const pd = await pr.json(); const sd = await sr.json();
+    const n = (pd.items||[]).length;
     const badge = document.getElementById('pendingBadge');
     if(badge){ badge.textContent = n; badge.style.display = n>0 ? 'inline' : 'none'; }
+
+    // Browser notifications for new threats
+    const newPhish = Number(sd.phishing||0);
+    const newPend  = n;
+    if(_prevPhishingCount >= 0 && newPhish > _prevPhishingCount){
+      _notify('🚨 PhishGuard Alert', `${newPhish - _prevPhishingCount} new phishing email(s) blocked`);
+    }
+    if(_prevPendingCount >= 0 && newPend > _prevPendingCount){
+      _notify('⚠️ PhishGuard', `${newPend - _prevPendingCount} new email(s) held for SOC review`);
+    }
+    _prevPhishingCount = newPhish; _prevPendingCount = newPend;
   }catch(e){}
+}
+
+function _notify(title, body){
+  if(typeof Notification === 'undefined') return;
+  if(Notification.permission === 'granted'){
+    new Notification(title, {body, icon:'/favicon.ico'});
+  } else if(Notification.permission === 'default'){
+    Notification.requestPermission();
+  }
+}
+
+// Request notification permission on load
+if(typeof Notification !== 'undefined' && Notification.permission === 'default'){
+  setTimeout(function(){ Notification.requestPermission(); }, 3000);
+}
+
+async function toggleAnalysis(scanId, btn){
+  const panel = document.getElementById('analysis-' + scanId);
+  if(!panel) return;
+  if(panel.style.display !== 'none'){
+    panel.style.display = 'none';
+    btn.textContent = '📊 View Analysis';
+    return;
+  }
+  if(!panel.dataset.loaded){
+    const prev = btn.textContent;
+    btn.textContent = 'Loading...'; btn.disabled = true;
+    try{
+      const r = await api('/api/scan/' + encodeURIComponent(scanId));
+      if(r.ok){
+        const d = await r.json();
+        panel.innerHTML = renderAnalysis(d);
+      } else {
+        panel.innerHTML = '<div style="color:#f87171;font-size:12px;padding:10px 0">Could not load analysis data</div>';
+      }
+    }catch(e){
+      panel.innerHTML = '<div style="color:#f87171;font-size:12px;padding:10px 0">Error: '+e.message+'</div>';
+    }
+    panel.dataset.loaded = '1';
+    btn.disabled = false;
+  }
+  panel.style.display = 'block';
+  btn.textContent = '📊 Hide Analysis';
+}
+
+function renderAnalysis(scan){
+  const data = scan.data || {};
+  const l1   = data.l1  || {};
+  const l2   = data.l2  || {};
+  const l5   = data.l5  || {};
+  const pars = data.parsed || {};
+  const engines = l2.engines || {};
+  const structural = engines.structural || {};
+  const nlp        = engines.nlp        || {};
+  const behavioral = engines.behavioral || {};
+  const scores     = l2.engine_scores   || {};
+  const composite  = typeof l2.confidence === 'number' ? l2.confidence : 0;
+
+  function authBadge(val){
+    const c = val==='pass'?'#22c55e':val==='fail'?'#f87171':'#64748b';
+    const bg= val==='pass'?'#14532d':val==='fail'?'#7f1d1d':'#1c2333';
+    return `<span style="padding:2px 9px;border-radius:4px;font-size:10px;font-weight:700;background:${bg};color:${c};text-transform:uppercase;letter-spacing:.4px">${val||'unknown'}</span>`;
+  }
+
+  function scoreBar(score, label){
+    const pct = Math.round((score||0)*100);
+    const c = score>=0.9?'#f87171':score>=0.62?'#f97316':score>=0.42?'#fbbf24':'#22c55e';
+    return `<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+        <span style="font-size:11px;color:#94a3b8">${label}</span>
+        <span style="font-size:12px;font-weight:700;color:${c}">${(score||0).toFixed(2)}</span>
+      </div>
+      <div style="position:relative;height:7px;background:#0a0d14;border-radius:4px">
+        <div style="height:100%;width:${pct}%;background:${c};border-radius:4px"></div>
+        <div style="position:absolute;top:-3px;left:42%;width:1px;height:13px;background:#fbbf2488"></div>
+        <div style="position:absolute;top:-3px;left:62%;width:1px;height:13px;background:#f9731688"></div>
+        <div style="position:absolute;top:-3px;left:90%;width:1px;height:13px;background:#f8717188"></div>
+      </div>
+    </div>`;
+  }
+
+  const weakHitsHtml = (l1.weak_hits||[]).map(h=>
+    `<div style="font-size:11px;color:#fbbf24;margin-bottom:2px">⚠ <b>${escapeHtml(h.source||'')}</b>: ${escapeHtml(h.reason||h.ioc||String(h.score||''))}</div>`
+  ).join('');
+
+  const hardHitsHtml = (l1.hits||[]).map(h=>
+    `<div style="font-size:11px;color:#f87171;margin-bottom:2px">🚨 <b>${escapeHtml(h.source||'')}</b>: ${escapeHtml(h.ioc||h.reason||'')}</div>`
+  ).join('');
+
+  const redFlagsHtml = (structural.red_flags||[]).map(f=>{
+    const c = f.severity==='critical'?'#f87171':f.severity==='high'?'#f97316':'#fbbf24';
+    return `<div style="font-size:11px;margin-bottom:4px"><span style="color:${c};font-weight:700">[${f.severity}]</span> <span style="color:#cbd5e1">${escapeHtml(f.flag||'')}</span></div>`;
+  }).join('') || '<div style="font-size:11px;color:#374151">No structural red flags</div>';
+
+  const tacticsHtml = (nlp.tactics||[]).map(t=>
+    `<span style="padding:1px 8px;border-radius:10px;background:#1e3a5f;color:#93c5fd;font-size:10px;margin-right:4px;display:inline-block;margin-bottom:3px">${escapeHtml(t)}</span>`
+  ).join('');
+
+  const tierNames = {0:'Cold start (new sender)',1:'Learning (1–5 emails)',2:'Developing (6–19 emails)',3:'Established (20+ emails)'};
+  const bTier = behavioral.cold_start_tier || 0;
+
+  const trigTier = l2.triggered_tier || 'fallback';
+  const tierExplain = {
+    tier1:`Single engine ≥ 0.90 → phishing (${escapeHtml(l2.triggered_by||'')})`,
+    tier2:`Composite ${composite.toFixed(2)} ≥ 0.62 → phishing`,
+    tier3:`Composite ${composite.toFixed(2)} ≥ 0.42 → suspicious`,
+    fallback:`Composite ${composite.toFixed(2)} < 0.42 → clean`,
+  };
+
+  const checksRun = (l1.detail_list||[]).length;
+  const mlAvail = l5.ml_available === true;
+
+  return `<div style="margin-top:14px;padding:14px;background:#0a0d14;border-radius:8px;border:1px solid #2a3346">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#60a5fa;margin-bottom:14px">📋 Forensic Analysis Breakdown</div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Email Authentication</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:11px;color:#64748b">SPF</span>${authBadge(pars.spf_result)}
+        <span style="font-size:11px;color:#64748b;margin-left:6px">DKIM</span>${authBadge(pars.dkim_result)}
+        <span style="font-size:11px;color:#64748b;margin-left:6px">DMARC</span>${authBadge(pars.dmarc_result)}
+      </div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">L1 OSINT (${checksRun} checks)</div>
+      ${hardHitsHtml || '<div style="font-size:11px;color:#22c55e">✓ No hard OSINT hits</div>'}
+      ${weakHitsHtml}
+    </div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px">L2 AI Engine Scores</div>
+      ${scoreBar(scores.nlp||0,'NLP Intent Analyst (weight 50%)')}
+      ${scoreBar(scores.structural||0,'Structural Forensics (weight 30%)')}
+      ${scoreBar(scores.behavioral||0,'Behavioral Anomaly (weight 20%)')}
+      ${scoreBar(composite,'Composite Score')}
+      <div style="margin-top:10px;padding:10px;background:#141925;border-radius:8px;border:1px solid #2a3346">
+        <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Threshold Decision</div>
+        ${[
+          {label:'Tier 1 — Phishing (single engine)',thr:0.90,val:scores[Object.keys(scores).reduce((a,b)=>scores[a]>scores[b]?a:b)]||0},
+          {label:'Tier 2 — Phishing (composite)',thr:0.70,val:composite},
+          {label:'Tier 3 — Suspicious (composite)',thr:0.42,val:composite},
+        ].map(function(row){
+          const exceeded = row.val >= row.thr;
+          const c = exceeded ? '#f87171' : '#22c55e';
+          const icon = exceeded ? '▲ EXCEEDED' : '▽ not reached';
+          return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px">
+            <span style="color:${c};font-weight:700;min-width:90px">${icon}</span>
+            <span style="color:#94a3b8;flex:1">${row.label}</span>
+            <span style="color:#64748b">threshold</span>
+            <span style="font-weight:700;color:#e2e8f0;min-width:32px;text-align:right">${row.thr.toFixed(2)}</span>
+            <span style="color:#4b5563">score</span>
+            <span style="font-weight:700;color:${row.val>=row.thr?'#f87171':'#94a3b8'};min-width:32px;text-align:right">${row.val.toFixed(2)}</span>
+          </div>`;
+        }).join('')}
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a3346;font-size:11px;color:#94a3b8">
+          <b style="color:#60a5fa">Result:</b> ${escapeHtml(tierExplain[trigTier]||trigTier)}
+        </div>
+      </div>
+    </div>
+
+    ${nlp.score!==undefined?`<div style="margin-bottom:14px">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">NLP Analysis (${escapeHtml(nlp.provider||nlp.model||'AI')})</div>
+      <div style="font-size:12px;margin-bottom:6px"><span style="color:#94a3b8">Intent:</span> <b style="color:#fbbf24">${escapeHtml(nlp.intent||'unknown')}</b></div>
+      <div style="margin-bottom:6px">${tacticsHtml||'<span style="font-size:11px;color:#374151">No tactics detected</span>'}</div>
+      ${nlp.reasoning?`<div style="font-size:11px;color:#94a3b8;font-style:italic;line-height:1.6;border-left:2px solid #2a3346;padding-left:8px">"${escapeHtml((nlp.reasoning||'').substring(0,280))}${(nlp.reasoning||'').length>280?'…':''}"</div>`:''}
+    </div>`:''}
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Structural Red Flags</div>
+      ${redFlagsHtml}
+      ${structural.domain_age_days!=null?`<div style="font-size:11px;color:#94a3b8;margin-top:5px">Domain age: <b style="color:#e2e8f0">${structural.domain_age_days} days</b></div>`:''}
+      ${structural.auth_alignment?`<div style="font-size:11px;color:#94a3b8">Auth alignment: <b style="color:#e2e8f0">${escapeHtml(structural.auth_alignment)}</b></div>`:''}
+    </div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Behavioral Anomaly</div>
+      <div style="font-size:11px;color:#94a3b8">Sender tier: <b style="color:#e2e8f0">${escapeHtml(tierNames[bTier]||String(bTier))}</b></div>
+      <div style="font-size:11px;color:#94a3b8">Emails seen from sender: <b style="color:#e2e8f0">${behavioral.emails_in_baseline||0}</b></div>
+      ${behavioral.dominant_deviation?`<div style="font-size:11px;color:#94a3b8">Dominant deviation: <b style="color:#fbbf24">${escapeHtml(behavioral.dominant_deviation)}</b></div>`:''}
+    </div>
+
+    <div>
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">L5 ML Classifier</div>
+      ${mlAvail
+        ?`<div style="font-size:11px;color:#94a3b8">ML score: <b style="color:#e2e8f0">${(l5.ml_score||0).toFixed(3)}</b> &nbsp;·&nbsp; Blended (60% L2 + 40% ML): <b style="color:#e2e8f0">${(data.confidence||0).toFixed(3)}</b></div>
+           ${data.confidence!==l2.confidence?'<div style="font-size:10px;color:#4b5563;margin-top:2px">Floor protection applied — L2 verdict preserved</div>':''}`
+        :'<div style="font-size:11px;color:#374151">ML classifier not available</div>'
+      }
+    </div>
+  </div>`;
 }
 
 async function loadML(){
@@ -1048,6 +1395,13 @@ async function openReport(sid){
   try{
     const r = await api("/api/scan/" + encodeURIComponent(sid));
     const d = await r.json();
+    // Strip email body content — raw email text is not displayed for privacy
+    if(d.data && d.data.parsed){
+      delete d.data.parsed.body_text;
+      delete d.data.parsed.body_html;
+      delete d.data.parsed.body_plain;
+    }
+    if(d.body_preview) d.body_preview = '[redacted]';
     const raw = escapeHtml(JSON.stringify(d, null, 2));
     const safe = (typeof DOMPurify !== "undefined") ? DOMPurify.sanitize(raw) : raw;
 

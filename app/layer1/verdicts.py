@@ -61,6 +61,23 @@ TRUSTED_SENDER_DOMAINS = {
     "skylo.tech",
 }
 
+_trusted_cache: dict = {"ts": 0.0, "domains": set()}
+
+
+def _get_all_trusted() -> set:
+    """Return hardcoded + user-added trusted domains, cached for 60 seconds."""
+    import time as _time
+    if _time.time() - _trusted_cache["ts"] > 60:
+        try:
+            from app import storage as _st
+            dynamic = {r["domain"] for r in _st.list_trusted_domains()}
+        except Exception:
+            dynamic = set()
+        _trusted_cache["domains"] = TRUSTED_SENDER_DOMAINS | dynamic
+        _trusted_cache["ts"] = _time.time()
+    return _trusted_cache["domains"]
+
+
 MAX_URLS_PER_EMAIL = 10
 HARD_QUARANTINE_SOURCES = {
     "virustotal",
@@ -106,8 +123,9 @@ async def run_layer1(
             _addr = _addr.split("<", 1)[1].split(">", 1)[0]
         _sender_domain = _addr.split("@")[-1].strip() if "@" in _addr else ""
         # Match exact domain OR any subdomain (e.g. e.linkedin.com, engagemail.microsoft.com)
-        if _sender_domain in TRUSTED_SENDER_DOMAINS or \
-           any(_sender_domain.endswith('.' + td) for td in TRUSTED_SENDER_DOMAINS):
+        _all_trusted = _get_all_trusted()
+        if _sender_domain in _all_trusted or \
+           any(_sender_domain.endswith('.' + td) for td in _all_trusted):
             spf_pass  = spf_result  == "pass"
             dkim_pass = dkim_result == "pass"
             spf_fail  = spf_result  == "fail"
