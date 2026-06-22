@@ -39,15 +39,72 @@ def _load_jsonl_records(data_dir):
     return rows
 
 
-def _load_db_records(db_path):
+def _load_feedback_records(db_path):
+    """Load SOC-corrected verdicts from the feedback table.
+
+    Returns (rows, corrected_scan_ids):
+      rows              — feature vectors with the human-corrected label
+      corrected_scan_ids — set of scan IDs whose original label must be
+                          excluded from _load_db_records so the wrong label
+                          doesn't compete with the human correction.
+
+    When the same scan is corrected multiple times only the latest correction
+    is used (most recent submitted_at wins).
+    """
+    if not os.path.exists(db_path):
+        return [], set()
+
+    rows = []
+    corrected_scan_ids = set()
+    db = sqlite3.connect(db_path)
+    cur = db.cursor()
+    try:
+        # Latest correction per scan (subquery handles multiple edits)
+        cur.execute("""
+            SELECT f.scan_id, f.corrected_verdict, s.data_json
+            FROM feedback f
+            JOIN scans s ON s.id = f.scan_id
+            WHERE s.data_json IS NOT NULL
+              AND f.submitted_at = (
+                  SELECT MAX(f2.submitted_at)
+                  FROM feedback f2
+                  WHERE f2.scan_id = f.scan_id
+              )
+        """)
+        for scan_id, corrected_verdict, data_json in cur.fetchall():
+            try:
+                doc = json.loads(data_json) if isinstance(data_json, str) else None
+            except json.JSONDecodeError:
+                continue
+            if not doc:
+                continue
+            feats = extract_features(doc)
+            row = [float(feats.get(k, 0.0)) for k in FEATURE_KEYS]
+            label = 1 if corrected_verdict == "phishing" else 0
+            rows.append((row, label, f"feedback:{corrected_verdict}"))
+            corrected_scan_ids.add(scan_id)
+    finally:
+        db.close()
+
+    if rows:
+        logger.info("feedback_records_loaded", count=len(rows))
+    return rows, corrected_scan_ids
+
+
+def _load_db_records(db_path, exclude_scan_ids=None):
     if not os.path.exists(db_path):
         return []
     rows = []
     db = sqlite3.connect(db_path)
     cur = db.cursor()
     try:
-        cur.execute("SELECT verdict, data_json FROM scans WHERE data_json IS NOT NULL")
-        for verdict, data_json in cur.fetchall():
+        cur.execute("SELECT id, verdict, data_json FROM scans WHERE data_json IS NOT NULL")
+        for scan_id, verdict, data_json in cur.fetchall():
+            # Skip scans that have a human feedback correction — the corrected
+            # version is loaded separately by _load_feedback_records so the
+            # original (potentially wrong) label doesn't pollute training.
+            if exclude_scan_ids and scan_id in exclude_scan_ids:
+                continue
             try:
                 doc = json.loads(data_json) if isinstance(data_json, str) else None
             except json.JSONDecodeError:
@@ -74,15 +131,22 @@ def _dedupe(rows):
 
 
 def _assemble_corpus(data_dir, db_path):
+    # Feedback corrections come first so their scan IDs can be excluded from
+    # the raw DB load — prevents the original (wrong) label from competing.
+    feedback_rows, corrected_ids = _load_feedback_records(db_path)
     jsonl_rows = _load_jsonl_records(data_dir)
-    db_rows = _load_db_records(db_path)
-    combined = _dedupe(jsonl_rows + db_rows)
+    db_rows = _load_db_records(db_path, exclude_scan_ids=corrected_ids)
+    # Feedback rows are added last so deduplication keeps them over any
+    # duplicate from jsonl (same features, same label would dedupe fine;
+    # different label means feedback always wins because it's the authoritative
+    # human correction).
+    combined = _dedupe(jsonl_rows + db_rows + feedback_rows)
     by_source = {}
     for _, _, src in combined:
         by_source[src] = by_source.get(src, 0) + 1
     X = [r[0] for r in combined]
     y = [r[1] for r in combined]
-    return X, y, by_source
+    return X, y, by_source, len(feedback_rows)
 
 
 def _format_confusion_matrix(cm):
@@ -134,7 +198,7 @@ def train_and_evaluate(
         logger.warning("sklearn_missing", error=str(exc))
         return {"status": "error", "error": "sklearn import failed: " + str(exc)}
 
-    X, y, by_source = _assemble_corpus(data_dir, db_path)
+    X, y, by_source, n_feedback = _assemble_corpus(data_dir, db_path)
     n_samples = len(X)
     n_pos = sum(y)
     n_neg = n_samples - n_pos
@@ -175,6 +239,7 @@ def train_and_evaluate(
 
     metrics = {
         "n_samples_total": n_samples,
+        "n_feedback_corrections": n_feedback,
         "n_pos": n_pos,
         "n_neg": n_neg,
         "n_train": len(X_train),
