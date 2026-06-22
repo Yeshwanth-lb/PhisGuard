@@ -1395,39 +1395,293 @@ async function openReport(sid){
   try{
     const r = await api("/api/scan/" + encodeURIComponent(sid));
     const d = await r.json();
-    // Strip email body content — raw email text is not displayed for privacy
     if(d.data && d.data.parsed){
       delete d.data.parsed.body_text;
       delete d.data.parsed.body_html;
       delete d.data.parsed.body_plain;
     }
-    if(d.body_preview) d.body_preview = '[redacted]';
-    const raw = escapeHtml(JSON.stringify(d, null, 2));
-    const safe = (typeof DOMPurify !== "undefined") ? DOMPurify.sanitize(raw) : raw;
+    if(d.body_preview) delete d.body_preview;
 
-    // Try to load sandbox screenshot
-    let screenshotHtml = '';
-    try {
-      const shotResp = await api('/api/scan/' + encodeURIComponent(sid) + '/screenshot');
-      if(shotResp.ok) {
-        const blob = await shotResp.blob();
-        const url = URL.createObjectURL(blob);
-        screenshotHtml = `
-          <div style="margin-bottom:18px">
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#f87171;margin-bottom:8px">
-              🧪 Sandbox Screenshot — Suspicious URL detonated
-            </div>
-            <img src="${url}" style="max-width:100%;border-radius:8px;border:2px solid #f87171;display:block"
-                 alt="Sandbox screenshot" onerror="this.parentElement.style.display='none'"/>
-            <div class="mono" style="font-size:10px;color:#64748b;margin-top:6px">
-              Screenshot captured by headless Chrome sandbox during URL detonation
-            </div>
-          </div>`;
-      }
-    } catch(e) {}
+    let screenshotUrl = null;
+    try{
+      const sr = await api('/api/scan/'+encodeURIComponent(sid)+'/screenshot');
+      if(sr.ok){ const blob = await sr.blob(); screenshotUrl = URL.createObjectURL(blob); }
+    }catch(e){}
 
-    body.innerHTML = screenshotHtml + `<pre class="mono" style="white-space:pre-wrap;word-break:break-word;background:#0a0d14;padding:16px;border-radius:8px;font-size:11px;line-height:1.6;color:#cbd5e1">${safe}</pre>`;
+    body.innerHTML = renderScanReport(d, screenshotUrl);
   }catch(e){ body.innerHTML = `<div class="empty">Failed to load report</div>`; }
+}
+
+function renderScanReport(scan, screenshotUrl){
+  const data    = scan.data || {};
+  const verdict = (scan.verdict || data.verdict || 'unknown').toLowerCase();
+  const conf    = typeof scan.confidence === 'number' ? scan.confidence : (data.confidence || 0);
+  const pct     = Math.round(conf * 100);
+  const pars    = data.parsed || {};
+  const l1      = data.l1  || {};
+  const l2      = data.l2  || {};
+  const l3      = data.l3  || null;
+  const l5      = data.l5  || {};
+  const l0      = data.l0  || null;
+  const soar    = data.soar || {};
+  const engines = l2.engines || {};
+  const scores  = l2.engine_scores || {};
+  const structural = engines.structural || {};
+  const nlp        = engines.nlp        || {};
+  const behavioral = engines.behavioral || {};
+  const composite  = typeof l2.confidence === 'number' ? l2.confidence : conf;
+  const ts = scan.ts ? new Date(scan.ts*1000).toLocaleString() : '-';
+  const ms = data.processing_time_ms || scan.processing_time_ms || '';
+
+  const VC = {phishing:'#f87171', suspicious:'#fbbf24', clean:'#34d399', unknown:'#94a3b8'};
+  const VBG = {phishing:'#2d0f0f', suspicious:'#2d1f00', clean:'#0f2419', unknown:'#1c2333'};
+  const VBD = {phishing:'#5a1f1f', suspicious:'#5a3a00', clean:'#1a4020', unknown:'#2a3346'};
+  const vc = VC[verdict]||'#94a3b8';
+  const vbg = VBG[verdict]||'#1c2333';
+  const vbd = VBD[verdict]||'#2a3346';
+
+  const ICONS = {phishing:'🚨', suspicious:'⚠️', clean:'✅', unknown:'❓'};
+
+  function authBadge(val){
+    const c  = val==='pass'?'#22c55e':val==='fail'?'#f87171':'#64748b';
+    const bg = val==='pass'?'#14532d':val==='fail'?'#7f1d1d':'#1c2333';
+    return `<span style="padding:3px 10px;border-radius:5px;font-size:11px;font-weight:700;background:${bg};color:${c};text-transform:uppercase;letter-spacing:.4px">${val||'unknown'}</span>`;
+  }
+
+  function scoreBar(score, label, weight){
+    const pct2 = Math.round((score||0)*100);
+    const c = score>=0.9?'#f87171':score>=0.70?'#f97316':score>=0.42?'#fbbf24':'#22c55e';
+    return `<div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:12px;color:#94a3b8">${label}${weight?` <span style="color:#4b5563;font-size:10px">(weight ${weight})</span>`:''}</span>
+        <span style="font-size:14px;font-weight:800;color:${c}">${(score||0).toFixed(2)}</span>
+      </div>
+      <div style="position:relative;height:10px;background:#0a0d14;border-radius:5px">
+        <div style="height:100%;width:${pct2}%;background:${c};border-radius:5px;transition:.4s"></div>
+        <div style="position:absolute;top:-4px;left:42%;width:2px;height:18px;background:#fbbf2466" title="Suspicious 0.42"></div>
+        <div style="position:absolute;top:-4px;left:70%;width:2px;height:18px;background:#f9731666" title="Phishing 0.70"></div>
+        <div style="position:absolute;top:-4px;left:90%;width:2px;height:18px;background:#f8717166" title="Tier-1 0.90"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:3px">
+        <span style="font-size:9px;color:#374151">▲0.42 suspicious</span>
+        <span style="font-size:9px;color:#374151">▲0.70 phishing</span>
+        <span style="font-size:9px;color:#374151">▲0.90 tier-1</span>
+      </div>
+    </div>`;
+  }
+
+  function card(title, content, accent){
+    const border = accent || '#2a3346';
+    return `<div style="background:#141925;border:1px solid ${border};border-radius:12px;padding:18px;margin-bottom:16px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:14px">${title}</div>
+      ${content}
+    </div>`;
+  }
+
+  function row(label, value){
+    return `<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;font-size:13px">
+      <span style="color:#64748b;min-width:90px;flex-shrink:0">${label}</span>
+      <span style="color:#e2e8f0;word-break:break-all">${value}</span>
+    </div>`;
+  }
+
+  // ── 1. Verdict Banner ─────────────────────────────────────────────────────
+  const banner = `<div style="background:${vbg};border:1px solid ${vbd};border-radius:14px;padding:24px 28px;margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="font-size:52px;line-height:1">${ICONS[verdict]||'❓'}</div>
+      <div>
+        <div style="font-size:28px;font-weight:900;color:${vc};letter-spacing:-.5px;line-height:1.1">${verdict.toUpperCase()}</div>
+        <div style="font-size:42px;font-weight:900;color:${vc};line-height:1">${pct}%</div>
+      </div>
+      <div style="flex:1;min-width:180px">
+        ${data.fast_path?`<div style="font-size:12px;color:#34d399;margin-bottom:4px">⚡ Fast-path: ${escapeHtml(data.fast_path)}</div>`:''}
+        ${data.blocked_at?`<div style="font-size:12px;color:#f87171;margin-bottom:4px">🛑 Blocked at: ${escapeHtml(data.blocked_at)}</div>`:''}
+        <div style="font-size:12px;color:#94a3b8">${ts}${ms?' · <b style="color:#e2e8f0">'+ms+'ms</b>':''}</div>
+        <div style="font-size:11px;color:#4b5563;margin-top:4px;font-family:monospace">${escapeHtml(scan.id||'')}</div>
+      </div>
+    </div>
+  </div>`;
+
+  // ── 2. Email Metadata + Auth (two-col grid) ───────────────────────────────
+  const metaContent = row('From', escapeHtml(scan.sender||pars.from_header||'—'))
+    + row('Subject', escapeHtml(scan.subject||pars.subject||'—'))
+    + row('To', escapeHtml(pars.to||pars.rcpt||'—'));
+  const authContent = `<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+    <div><div style="font-size:10px;color:#64748b;margin-bottom:5px">SPF</div>${authBadge(pars.spf_result)}</div>
+    <div><div style="font-size:10px;color:#64748b;margin-bottom:5px">DKIM</div>${authBadge(pars.dkim_result)}</div>
+    <div><div style="font-size:10px;color:#64748b;margin-bottom:5px">DMARC</div>${authBadge(pars.dmarc_result)}</div>
+  </div>`;
+  const twoCol = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:0">
+    ${card('📧 Email Metadata', metaContent)}
+    ${card('🔐 Authentication', authContent)}
+  </div>`;
+
+  // ── 3. Layer 0 fast-path ──────────────────────────────────────────────────
+  const l0html = l0 && l0.passed ? card('⚡ Layer 0 — Trivial Clean Fast-Exit',
+    `<div style="color:#34d399;font-size:13px;margin-bottom:8px">All pre-flight checks passed — OSINT and AI layers were skipped.</div>`
+    + row('SPF', l0.spf) + row('DKIM', l0.dkim)
+    + row('URLs found', String(l0.url_count||0)) + row('Body length', (l0.body_len||0)+' chars'),
+    '#1a4020') : '';
+
+  // ── 4. Layer 1 OSINT ──────────────────────────────────────────────────────
+  const hardHits = (l1.hits||[]);
+  const weakHits = (l1.weak_hits||[]);
+  const checksRun = (l1.detail_list||[]).length;
+  const l1Content = `
+    <div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="background:#0a0d14;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px">
+        <div style="font-size:22px;font-weight:800;color:#60a5fa">${checksRun}</div>
+        <div style="font-size:10px;color:#64748b">checks run</div>
+      </div>
+      <div style="background:#0a0d14;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px">
+        <div style="font-size:22px;font-weight:800;color:${hardHits.length?'#f87171':'#34d399'}">${hardHits.length}</div>
+        <div style="font-size:10px;color:#64748b">hard hits</div>
+      </div>
+      <div style="background:#0a0d14;border-radius:8px;padding:10px 16px;text-align:center;min-width:80px">
+        <div style="font-size:22px;font-weight:800;color:${weakHits.length?'#fbbf24':'#34d399'}">${weakHits.length}</div>
+        <div style="font-size:10px;color:#64748b">weak signals</div>
+      </div>
+    </div>
+    ${hardHits.map(h=>`<div style="padding:8px 12px;background:#2d0f0f;border-radius:6px;margin-bottom:6px;font-size:12px">
+      <span style="color:#f87171;font-weight:700">🚨 ${escapeHtml(h.source||'')}</span>
+      <span style="color:#fca5a5;margin-left:8px">${escapeHtml(h.ioc||h.reason||'')}</span>
+    </div>`).join('')}
+    ${weakHits.map(h=>`<div style="padding:6px 12px;background:#2d1f00;border-radius:6px;margin-bottom:4px;font-size:12px">
+      <span style="color:#fbbf24;font-weight:700">⚠ ${escapeHtml(h.source||'')}</span>
+      <span style="color:#fde68a;margin-left:8px">${escapeHtml(h.reason||h.ioc||String(h.score||''))}</span>
+    </div>`).join('')}
+    ${!hardHits.length && !weakHits.length ? '<div style="color:#34d399;font-size:13px">✓ No OSINT hits — all threat databases clean</div>' : ''}`;
+  const l1html = card('🔍 Layer 1 — OSINT Pre-Filter', l1Content, hardHits.length?'#5a1f1f':weakHits.length?'#5a3a00':'#1a4020');
+
+  // ── 5. Layer 2 AI ─────────────────────────────────────────────────────────
+  const trigTier = l2.triggered_tier||'fallback';
+  const tierExplain = {
+    tier1:`Single engine ≥ 0.90 → phishing (${escapeHtml(l2.triggered_by||'')})`,
+    tier2:`Composite ${composite.toFixed(2)} ≥ 0.70 → phishing`,
+    tier3:`Composite ${composite.toFixed(2)} ≥ 0.42 → suspicious`,
+    fallback:`Composite ${composite.toFixed(2)} < 0.42 → clean`,
+  };
+  const l2BarsHtml = scoreBar(scores.nlp||0,'NLP Intent Analyst','50%')
+    + scoreBar(scores.structural||0,'Structural Forensics','30%')
+    + scoreBar(scores.behavioral||0,'Behavioral Anomaly','20%')
+    + `<div style="height:1px;background:#2a3346;margin:10px 0"></div>`
+    + scoreBar(composite,'Composite Score','');
+  const threshDecision = `<div style="margin-top:12px;padding:12px;background:#0a0d14;border-radius:8px">
+    <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Threshold Decision</div>
+    ${[
+      {label:'Tier 1 — single engine ≥ 0.90',thr:0.90,val:Math.max(...Object.values(scores).map(Number).filter(n=>!isNaN(n)),0)},
+      {label:'Tier 2 — composite ≥ 0.70 → phishing',thr:0.70,val:composite},
+      {label:'Tier 3 — composite ≥ 0.42 → suspicious',thr:0.42,val:composite},
+    ].map(function(t){
+      const hit = t.val >= t.thr;
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px">
+        <span style="color:${hit?'#f87171':'#34d399'};font-weight:700;min-width:100px">${hit?'▲ EXCEEDED':'▽ not reached'}</span>
+        <span style="color:#94a3b8;flex:1">${t.label}</span>
+        <span style="color:#4b5563;font-size:11px">thr</span><span style="font-weight:700;color:#e2e8f0;min-width:34px;text-align:right">${t.thr.toFixed(2)}</span>
+        <span style="color:#4b5563;font-size:11px">score</span><span style="font-weight:700;color:${t.val>=t.thr?'#f87171':'#94a3b8'};min-width:34px;text-align:right">${t.val.toFixed(2)}</span>
+      </div>`;
+    }).join('')}
+    <div style="padding-top:8px;border-top:1px solid #2a3346;font-size:12px;color:#94a3b8;margin-top:6px">
+      <b style="color:#60a5fa">Result: </b>${tierExplain[trigTier]||escapeHtml(trigTier)}
+      ${l2.llm_provider?`<span style="color:#4b5563;margin-left:8px">· NLP via ${escapeHtml(l2.llm_provider)}</span>`:''}
+    </div>
+  </div>`;
+  const l2html = card('🤖 Layer 2 — AI Consensus', l2BarsHtml + threshDecision);
+
+  // ── 6. NLP Details ────────────────────────────────────────────────────────
+  const nlphtml = nlp.score !== undefined ? card('🧠 NLP Intent Analysis',
+    `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+      <span style="font-size:13px;color:#94a3b8">Detected intent:</span>
+      <span style="padding:4px 14px;border-radius:20px;background:#2d1f00;color:#fbbf24;font-weight:700;font-size:13px">${escapeHtml(nlp.intent||'unknown')}</span>
+      <span style="font-size:12px;color:#4b5563">score: <b style="color:#e2e8f0">${(nlp.score||0).toFixed(3)}</b></span>
+      ${nlp.provider?`<span style="font-size:11px;color:#4b5563">via ${escapeHtml(nlp.provider)}</span>`:''}
+    </div>
+    <div style="margin-bottom:12px">${(nlp.tactics||[]).map(t=>`<span style="padding:2px 10px;border-radius:12px;background:#1e3a5f;color:#93c5fd;font-size:11px;margin-right:6px;display:inline-block;margin-bottom:4px">${escapeHtml(t)}</span>`).join('')||'<span style="color:#4b5563;font-size:12px">No tactics flagged</span>'}</div>
+    ${nlp.reasoning?`<div style="padding:12px;background:#0a0d14;border-radius:8px;border-left:3px solid #3b82f6;font-size:12px;color:#94a3b8;line-height:1.7;font-style:italic">"${escapeHtml((nlp.reasoning||'').substring(0,400))}${(nlp.reasoning||'').length>400?'…':''}"</div>`:''}`) : '';
+
+  // ── 7. Structural Red Flags ───────────────────────────────────────────────
+  const redFlags = structural.red_flags||[];
+  const structhtml = redFlags.length || structural.domain_age_days != null ? card('🏗 Structural Forensics',
+    `${redFlags.length ? redFlags.map(f=>{
+      const sevC = f.severity==='critical'?'#f87171':f.severity==='high'?'#f97316':'#fbbf24';
+      const sevBg = f.severity==='critical'?'#2d0f0f':f.severity==='high'?'#2d1500':'#2d1f00';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${sevBg};border-radius:7px;margin-bottom:6px">
+        <span style="padding:2px 8px;border-radius:4px;background:${sevC}22;color:${sevC};font-size:10px;font-weight:700;text-transform:uppercase;min-width:62px;text-align:center">${f.severity}</span>
+        <span style="font-size:12px;color:#e2e8f0">${escapeHtml(f.flag||'')}</span>
+      </div>`;
+    }).join('') : '<div style="color:#34d399;font-size:13px">✓ No structural red flags</div>'}
+    <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
+      ${structural.domain_age_days!=null?`<div style="font-size:12px;color:#94a3b8">Domain age: <b style="color:#e2e8f0">${structural.domain_age_days} days</b></div>`:''}
+      ${structural.auth_alignment?`<div style="font-size:12px;color:#94a3b8">Auth alignment: <b style="color:#e2e8f0">${escapeHtml(structural.auth_alignment)}</b></div>`:''}
+      ${structural.score!=null?`<div style="font-size:12px;color:#94a3b8">Engine score: <b style="color:#e2e8f0">${(structural.score||0).toFixed(3)}</b></div>`:''}
+    </div>`) : '';
+
+  // ── 8. Behavioral ─────────────────────────────────────────────────────────
+  const tierNames = {0:'Cold start — new sender',1:'Learning (1–5 emails)',2:'Developing (6–19)',3:'Established (20+)'};
+  const bTier = behavioral.cold_start_tier||0;
+  const bEmails = behavioral.emails_in_baseline||0;
+  const behhtml = card('📊 Behavioral Anomaly',
+    `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px">
+      <div style="background:#0a0d14;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:24px;font-weight:800;color:#60a5fa">${bEmails}</div>
+        <div style="font-size:10px;color:#64748b">emails seen from sender</div>
+      </div>
+      <div style="background:#0a0d14;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:24px;font-weight:800;color:#a78bfa">T${bTier}</div>
+        <div style="font-size:10px;color:#64748b">baseline tier</div>
+      </div>
+      <div style="background:#0a0d14;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:24px;font-weight:800;color:#e2e8f0">${(behavioral.score||0).toFixed(2)}</div>
+        <div style="font-size:10px;color:#64748b">anomaly score</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:#94a3b8">Tier: <b style="color:#e2e8f0">${escapeHtml(tierNames[bTier]||String(bTier))}</b></div>
+    ${behavioral.dominant_deviation?`<div style="font-size:12px;color:#94a3b8;margin-top:4px">Dominant deviation: <b style="color:#fbbf24">${escapeHtml(behavioral.dominant_deviation)}</b></div>`:''}`);
+
+  // ── 9. Layer 3 Sandbox ────────────────────────────────────────────────────
+  const l3html = l3 ? card('🧪 Layer 3 — Sandbox Detonation',
+    `<div style="font-size:13px;margin-bottom:10px">Verdict: <b style="color:${l3.verdict==='phishing'?'#f87171':'#fbbf24'}">${escapeHtml(l3.verdict||'ran')}</b></div>
+    ${screenshotUrl?`<div style="margin-top:10px"><img src="${screenshotUrl}" style="max-width:100%;border-radius:8px;border:2px solid #f87171" alt="Sandbox screenshot"/><div style="font-size:10px;color:#64748b;margin-top:6px">Headless Chrome screenshot during URL detonation</div></div>`:''}
+    ${l3.error?`<div style="color:#f87171;font-size:12px">Error: ${escapeHtml(l3.error)}</div>`:''}`,
+    '#2d1500') :
+    (screenshotUrl ? card('🧪 Layer 3 — Sandbox Screenshot',
+      `<img src="${screenshotUrl}" style="max-width:100%;border-radius:8px;border:2px solid #f87171" alt="Sandbox screenshot"/>`) : '');
+
+  // ── 10. Layer 5 ML ────────────────────────────────────────────────────────
+  const l5html = l5.ml_available ? card('🤖 Layer 5 — ML Classifier',
+    `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      <div style="background:#0a0d14;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:#a78bfa">${(l5.ml_score||0).toFixed(3)}</div>
+        <div style="font-size:10px;color:#64748b">ML raw score</div>
+      </div>
+      <div style="background:#0a0d14;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:#60a5fa">${conf.toFixed(3)}</div>
+        <div style="font-size:10px;color:#64748b">blended (60% L2 + 40% ML)</div>
+      </div>
+      <div style="background:#0a0d14;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:${vc}">${pct}%</div>
+        <div style="font-size:10px;color:#64748b">final confidence</div>
+      </div>
+    </div>
+    ${conf !== l2.confidence ? '<div style="font-size:11px;color:#64748b;margin-top:8px">Floor protection applied — L2 verdict preserved over ML score</div>' : ''}`) : '';
+
+  // ── 11. SOAR ──────────────────────────────────────────────────────────────
+  const soarKeys = Object.keys(soar).filter(k=>k!=='error');
+  const soarhtml = soarKeys.length ? card('⚡ SOAR Actions',
+    `<div style="display:flex;flex-wrap:wrap;gap:8px">
+    ${soarKeys.map(k=>{
+      const v = soar[k]||{};
+      const ok = v.ok===true || v.status==='ok' || (typeof v==='object'&&!v.error);
+      return `<div style="padding:8px 14px;border-radius:8px;background:${ok?'#0f2419':'#2d0f0f'};border:1px solid ${ok?'#1a4020':'#5a1f1f'}">
+        <div style="font-size:11px;font-weight:700;color:${ok?'#34d399':'#f87171'}">${ok?'✓':'✗'} ${escapeHtml(k)}</div>
+        ${v.index?`<div style="font-size:10px;color:#64748b">${escapeHtml(v.index)}</div>`:''}
+        ${v.event_id?`<div style="font-size:10px;color:#64748b">event #${escapeHtml(String(v.event_id))}</div>`:''}
+        ${v.error?`<div style="font-size:10px;color:#f87171">${escapeHtml(String(v.error).substring(0,60))}</div>`:''}
+      </div>`;
+    }).join('')}
+    </div>`) : '';
+
+  return banner + twoCol + l0html + l1html + l2html + nlphtml + structhtml + behhtml + l3html + l5html + soarhtml;
 }
 function closeReport(){
   document.getElementById("reports-list-card").style.display = "block";
