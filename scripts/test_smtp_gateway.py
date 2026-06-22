@@ -1,12 +1,13 @@
-"""PhishGuard SMTP Gateway — randomised 9-email demo test.
+"""PhishGuard SMTP Gateway — procedurally generated 9-email demo.
 
-Picks 3 clean + 3 suspicious + 3 phishing at random from a pool of
-diverse emails each run, so the ML model sees varied feature vectors
-and avoids overfitting to a fixed synthetic set.
+Every run produces genuinely unique emails — randomised names, companies,
+domains, amounts, urgency levels and phrasing — so the ML model never sees
+the same feature vector twice.
 
 Usage:
-    python3 scripts/test_smtp_gateway.py
-    python3 scripts/test_smtp_gateway.py --seed 42   # reproducible run
+    python3 scripts/test_smtp_gateway.py              # fresh random run
+    python3 scripts/test_smtp_gateway.py --seed 42    # reproducible run
+    python3 scripts/test_smtp_gateway.py --count 3    # emails per category
 """
 import argparse
 import random
@@ -23,252 +24,370 @@ RESET  = "\033[0m"; BOLD = "\033[1m"
 GREEN  = "\033[92m"; YELLOW = "\033[93m"; RED = "\033[91m"; CYAN = "\033[96m"
 
 
-# ── CLEAN pool (10 emails) ───────────────────────────────────────────────────
-CLEAN_POOL = [
-    dict(
-        mail_from="alice@partnerco.com", subject="Q3 project sync — notes from today",
-        body="Hi Yeshwanth,\n\nQuick summary from today's sync:\n1. API integration on track for Thursday\n2. Docs review Monday\n3. Demo confirmed June 25\n\nBest,\nAlice",
-        label="Business sync (no links)",
-    ),
-    dict(
-        mail_from="hr@mycompany.com", subject="Team lunch on Friday — please RSVP",
-        body="Hi team,\n\nJoining us for lunch this Friday at 1pm?\nVenue: The Garden Cafe, Level 2.\nPlease reply by Thursday.\n\nHR Team",
-        label="Internal HR (short, plain)",
-    ),
-    dict(
-        mail_from="newsletter@techcrunch.com", subject="This week in tech: AI funding rounds",
-        body="TechCrunch Weekly\n\nTop stories:\n- OpenAI raises $10B\n- Intel releases next-gen chip\n- PhishGuard wins security award\n\nRead more at techcrunch.com",
-        label="Newsletter (known domain)",
-    ),
-    dict(
-        mail_from="manager@acmecorp.com", subject="Can you cover the 3pm standup?",
-        body="Hey,\n\nI'm stuck in another call at 3. Can you run the standup today and share notes?\n\nThanks,\nMike",
-        label="Short internal ask (no links)",
-    ),
-    dict(
-        mail_from="devops@mycompany.com", subject="Deployment successful — v2.4.1 is live",
-        body="Hi team,\n\nDeployment of v2.4.1 completed successfully at 14:32 UTC.\nAll health checks passing. Rollback window closes in 2 hours.\n\nDevOps",
-        label="Deployment notification",
-    ),
-    dict(
-        mail_from="support@github.com", subject="Your pull request was merged",
-        body="Hi Yeshwanth,\n\nYour pull request #42 'fix: handle edge case in parser' was merged into main by alice.\n\nView it on GitHub: github.com/myorg/repo/pull/42\n\nThe GitHub Team",
-        label="GitHub PR notification",
-    ),
-    dict(
-        mail_from="noreply@notion.so", subject="Yeshwanth shared a page with you",
-        body="Alice shared 'Q3 Roadmap' with you on Notion.\n\nOpen it at notion.so to view.\n\nThe Notion Team",
-        label="Notion share (trusted domain)",
-    ),
-    dict(
-        mail_from="calendar@google.com", subject="Reminder: Team sync in 15 minutes",
-        body="This is a reminder that 'Team sync' starts in 15 minutes.\n\nWhen: Today at 3:00 PM IST\nWhere: Google Meet\n\nGoogle Calendar",
-        label="Calendar reminder (Google)",
-    ),
-    dict(
-        mail_from="invoices@stripe.com", subject="Your invoice is ready — $49.00",
-        body="Hi Yeshwanth,\n\nYour invoice for June 2026 is ready.\nAmount: $49.00\nPlan: Starter\n\nLog in to your Stripe dashboard to view it.\n\nStripe Billing",
-        label="Stripe invoice (trusted)",
-    ),
-    dict(
-        mail_from="recruiter@linkedin.com", subject="You have a new connection request",
-        body="Hi Yeshwanth,\n\nSarah Chen wants to connect with you on LinkedIn.\nSarah is a Senior Engineer at Acme Corp.\n\nLinkedIn",
-        label="LinkedIn connection (trusted)",
-    ),
-]
+# ── Word banks ───────────────────────────────────────────────────────────────
 
-# ── SUSPICIOUS pool (10 emails) ──────────────────────────────────────────────
-SUSPICIOUS_POOL = [
-    dict(
-        mail_from="verify@account-management-portal-2026.com",
-        subject="Your account requires attention",
-        body="Hi, We noticed your account has not been verified yet. To ensure continued access please complete verification. This will only take a few minutes. If you do not verify within 7 days your access may be restricted. Account Team",
-        label="Unknown domain account verification",
-    ),
-    dict(
-        mail_from="support@cloudstorage-backup-2026.com",
-        subject="Your backup completed successfully",
-        body="Hello, Your scheduled backup completed successfully. 2.3 GB backed up to our servers. Next backup tomorrow. If you did not set up this service please contact us. Cloud Backup Support",
-        label="Unknown backup service",
-    ),
-    dict(
-        mail_from="billing@payment-services-hub-2026.com",
-        subject="Invoice pending for your review",
-        body="Dear Customer, An invoice from last month is pending review. Amount due will be processed automatically in 10 days unless you raise a dispute. Log in to review. Finance Department",
-        label="Unknown billing portal",
-    ),
-    dict(
-        mail_from="noreply@secure-doc-review-2026.net",
-        subject="Document shared with you — action required",
-        body="A document has been shared with you for review. Please complete your review before the deadline on Friday. Access the document through our secure portal. Document Services Team",
-        label="Suspicious doc share",
-    ),
-    dict(
-        mail_from="alerts@it-helpdesk-notifications.com",
-        subject="Your password expires in 3 days",
-        body="Hi, Your company password is set to expire in 3 days. Please update it soon to avoid being locked out of your account. Contact the IT helpdesk if you have questions. IT Support",
-        label="Password expiry from unknown IT domain",
-    ),
-    dict(
-        mail_from="rewards@loyalty-program-hub.net",
-        subject="You have unclaimed reward points — 4,200 pts",
-        body="Hi Yeshwanth, You have 4,200 loyalty points that will expire this month. Log in to redeem them for gift cards or cashback. Loyalty Rewards Team",
-        label="Reward points from unknown domain",
-    ),
-    dict(
-        mail_from="survey@feedback-portal-enterprise.com",
-        subject="Quick 2-minute survey — your opinion matters",
-        body="Dear Customer, We value your feedback. Please take 2 minutes to complete our satisfaction survey. Your responses will help us improve our service. Customer Success",
-        label="Survey from unknown domain",
-    ),
-    dict(
-        mail_from="noreply@subscription-renewal-center.com",
-        subject="Your subscription renews in 5 days — review now",
-        body="Hi, Your annual subscription is set to auto-renew in 5 days for $149.99. Log in to your account to review or cancel before renewal. Billing Department",
-        label="Subscription renewal from unknown",
-    ),
-    dict(
-        mail_from="tax@refund-processing-gov-2026.com",
-        subject="Tax refund notice — verify your details",
-        body="Dear Taxpayer, A refund has been processed on your account. To receive it please verify your banking details. The process takes 3-5 business days. Revenue Department",
-        label="Fake tax refund",
-    ),
-    dict(
-        mail_from="hr@benefits-enrollment-portal-2026.com",
-        subject="Open enrollment ends this week — update your benefits",
-        body="Hi Yeshwanth, The annual benefits enrollment period closes on Friday. Please log in and confirm your selections to avoid losing your current coverage. HR Benefits Team",
-        label="Benefits enrollment from unknown HR domain",
-    ),
-]
+_FIRST  = ["Alice","Bob","Sarah","Mike","Priya","James","Emma","David","Ravi","Chen","Omar","Nina"]
+_LAST   = ["Smith","Johnson","Patel","Kumar","Chen","Williams","Brown","Kim","Garcia","Müller"]
+_DEPT   = ["Engineering","Product","HR","Finance","DevOps","Security","Sales","Design"]
+_CO     = ["Acme","Nexus","Vertex","Pulse","Orbit","Crest","Sigma","Apex","Forge","Delta"]
+_CO_SFX = ["Corp","Inc","Tech","Systems","Solutions","Labs","Group","HQ"]
+_DAY    = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
+_TIME   = ["9am","10am","11am","2pm","3pm","4pm","5pm"]
+_TOPIC  = ["API integration","product roadmap","Q3 planning","design review","sprint goals",
+           "security audit","infrastructure upgrade","budget review","go-to-market strategy",
+           "incident retrospective","release planning","hiring strategy"]
+_ALERT_NOUNS = ["outage","latency spike","memory spike","disk usage alert","deploy failure"]
 
-# ── PHISHING pool (10 emails) ────────────────────────────────────────────────
-PHISHING_POOL = [
-    dict(
-        mail_from="security@paypa1-verify.com",
-        subject="URGENT: Your PayPal account has been limited",
-        body="Dear Customer,\n\nYour PayPal account has been LIMITED.\nVerify your identity IMMEDIATELY:\nhttp://paypa1-verify.com/restore?id=8472\n\nYou have 24 hours or your account will be permanently closed.\n\nPayPal Security",
-        label="PayPal typosquat + malicious URL",
-    ),
-    dict(
-        mail_from="noreply@micros0ft-account-alert.net",
-        subject="Your Microsoft 365 session has expired",
-        body="Microsoft Account Security\n\nYour session expired due to unusual activity.\nClick here to restore access immediately:\nhttp://micros0ft-account-alert.net/verify\n\nFailure to verify will result in account suspension.\n\nMicrosoft Security",
-        label="Microsoft typosquat + credential harvest",
-    ),
-    dict(
-        mail_from="ceo-transfer@company-exec-wire.net",
-        subject="CONFIDENTIAL: Urgent wire transfer — board approval",
-        body="This is strictly confidential.\n\nWe are closing an acquisition today. Wire $87,500 immediately:\nBank: First National Trust\nAccount: 4521987630\nRouting: 021000021\n\nDo NOT discuss with anyone. Confirm when done.\n\nCEO",
-        label="BEC wire fraud",
-    ),
-    dict(
-        mail_from="appleid@app1e-security-alert.com",
-        subject="Your Apple ID has been locked — verify now",
-        body="Dear Apple User,\n\nYour Apple ID was locked due to suspicious activity.\nVerify your account to restore access:\nhttp://app1e-security-alert.com/unlock\n\nIf you do not verify within 24 hours your account will be deleted.\n\nApple Support",
-        label="Apple ID phish + homoglyph domain",
-    ),
-    dict(
-        mail_from="netflix-billing@netfl1x-payments.com",
-        subject="Payment failed — update your billing info now",
-        body="Dear Member,\n\nWe were unable to process your payment. Your account will be suspended unless you update your billing information within 48 hours.\n\nUpdate now: http://netfl1x-payments.com/billing\n\nNetflix Support",
-        label="Netflix billing phish + typosquat",
-    ),
-    dict(
-        mail_from="security-alert@amaz0n-prime-verify.net",
-        subject="Unusual sign-in detected — secure your account",
-        body="Hello,\n\nWe detected a sign-in to your Amazon account from a new device in Lagos, Nigeria.\n\nIf this wasn't you, secure your account immediately:\nhttp://amaz0n-prime-verify.net/secure\n\nAmazon Security Team",
-        label="Amazon phish + location urgency",
-    ),
-    dict(
-        mail_from="hr-payroll@company-payslip-portal.net",
-        subject="Action required: confirm your bank details for payroll",
-        body="Dear Employee,\n\nOur payroll system is being upgraded. Please confirm your bank account details by Friday to ensure your salary is processed without delay.\n\nUpdate here: http://company-payslip-portal.net/confirm\n\nHR & Payroll",
-        label="Payroll BEC + credential harvest",
-    ),
-    dict(
-        mail_from="docu-sign@docusign-secure-document.net",
-        subject="You have a document waiting for your signature",
-        body="Yeshwanth LB has sent you a document to review and sign.\n\nIMPORTANT: This document expires in 24 hours.\n\nReview & Sign: http://docusign-secure-document.net/sign?id=X9K2\n\nDocuSign Electronic Signature",
-        label="DocuSign impersonation",
-    ),
-    dict(
-        mail_from="irs-refund@tax-refund-irs-gov-2026.com",
-        subject="IRS: You are eligible for a $1,240 tax refund",
-        body="Dear Taxpayer,\n\nAfter reviewing your tax return, the IRS has determined you are eligible for a refund of $1,240.00.\n\nClaim your refund: http://tax-refund-irs-gov-2026.com/claim\n\nThis offer expires in 72 hours.\n\nInternal Revenue Service",
-        label="IRS impersonation + fake refund",
-    ),
-    dict(
-        mail_from="admin@it-support-desk-helpdesk.com",
-        subject="Your account will be deactivated in 24 hours",
-        body="Dear User,\n\nYour corporate account is scheduled for deactivation due to inactivity.\n\nTo keep your account active please log in and verify:\nhttp://it-support-desk-helpdesk.com/verify?user=yeshwanth\n\nIT Security Department",
-        label="IT helpdesk impersonation",
-    ),
-]
+_SUS_SERVICES = ["CloudVault","DataSync","AccountHub","PaymentGateway","BillingPortal",
+                 "StorageCloud","BackupNow","SecureVault","DocuPortal","InvoiceCenter",
+                 "SubscriptionPro","NotifyHub","SyncDrive","AlertCenter","ServiceDesk"]
+_SUS_TLDS     = ["com","net","io","org","co","biz","info"]
+_SUS_ROLES    = ["support","noreply","billing","alerts","verify","admin","service","notify"]
+_SUS_ACTIONS  = ["verify","confirm","review","update","validate","complete","activate"]
+
+_BRANDS = {
+    "paypal":    (["paypa1","paypai","pay-pal","paypa-l","p4ypal"],        "payment account"),
+    "microsoft": (["micros0ft","m1crosoft","microsft","micro-soft","mlcrosoft"], "Microsoft 365 account"),
+    "apple":     (["app1e","appl3","app-le","aapple","appie"],             "Apple ID"),
+    "amazon":    (["amaz0n","amazn","amason","amazoon","am4zon"],          "Amazon account"),
+    "netflix":   (["netfl1x","netlfix","netffix","netf1ix","nettflix"],    "Netflix subscription"),
+    "google":    (["go0gle","g00gle","gooogle","goog1e","googie"],         "Google account"),
+    "docusign":  (["docu-sign","d0cusign","docusiqn","docusgin"],         "DocuSign document"),
+    "dropbox":   (["dr0pbox","dropb0x","dropbx","d-ropbox"],             "Dropbox account"),
+}
+_PHISH_TACTICS = ["typosquat","bec","credential","irs","it_helpdesk","payroll"]
 
 
-def send(mail_from, rcpt_to, subject, body, label, colour):
+# ── Clean generator ───────────────────────────────────────────────────────────
+
+def gen_clean(rng: random.Random) -> dict:
+    tactic = rng.choice(["meeting","update","alert","hr","infra"])
+
+    if tactic == "meeting":
+        name    = rng.choice(_FIRST)
+        co      = rng.choice(_CO) + " " + rng.choice(_CO_SFX)
+        topic   = rng.choice(_TOPIC)
+        day     = rng.choice(_DAY)
+        t       = rng.choice(_TIME)
+        domain  = co.split()[0].lower() + ".com"
+        return dict(
+            mail_from=f"{name.lower()}@{domain}",
+            subject=f"{topic.title()} — {day} {t}",
+            body=(f"Hi,\n\nJust confirming our {topic} session on {day} at {t}.\n\n"
+                  f"Please come prepared with your latest updates. We'll use the usual link.\n\n"
+                  f"Thanks,\n{name}\n{rng.choice(_DEPT)}, {co}"),
+            label=f"Meeting invite from {co}",
+        )
+
+    if tactic == "update":
+        name    = rng.choice(_FIRST)
+        dept    = rng.choice(_DEPT)
+        version = f"v{rng.randint(1,5)}.{rng.randint(0,9)}.{rng.randint(0,9)}"
+        feature = rng.choice(["authentication","dashboard","reporting","API","notifications","search"])
+        return dict(
+            mail_from=f"{dept.lower()}@mycompany.com",
+            subject=f"Release {version} shipped — {feature} improvements",
+            body=(f"Hi team,\n\nRelease {version} is now live.\n\n"
+                  f"Key changes:\n- Improved {feature} performance\n"
+                  f"- Bug fixes from last sprint\n- Updated documentation\n\n"
+                  f"Rollback window closes in 2 hours. Ping {name} with any issues.\n\n{dept} Team"),
+            label=f"Deployment notice {version}",
+        )
+
+    if tactic == "alert":
+        svc   = rng.choice(["Datadog","PagerDuty","Grafana","Prometheus","CloudWatch"])
+        noun  = rng.choice(_ALERT_NOUNS)
+        env   = rng.choice(["prod","staging","dev-us","eu-west"])
+        pct   = rng.randint(70, 95)
+        return dict(
+            mail_from=f"alerts@{svc.lower()}.com",
+            subject=f"[RESOLVED] {noun} on {env}",
+            body=(f"Alert resolved.\n\nService: {env}\nIssue: {noun}\n"
+                  f"Peak usage: {pct}%\nDuration: {rng.randint(3,45)} minutes\n\n"
+                  f"No action required. This alert has auto-resolved.\n\n— {svc}"),
+            label=f"Resolved {svc} alert",
+        )
+
+    if tactic == "hr":
+        event   = rng.choice(["team lunch","quarterly all-hands","office social","training day","hackathon"])
+        day     = rng.choice(_DAY)
+        venue   = rng.choice(["Level 2 boardroom","main cafeteria","rooftop terrace","Conference Room A","Building B"])
+        return dict(
+            mail_from="hr@mycompany.com",
+            subject=f"Invitation: {event.title()} — {day}",
+            body=(f"Hi team,\n\nYou're invited to our upcoming {event} on {day}.\n\n"
+                  f"Venue: {venue}\nTime: {rng.choice(_TIME)}\n\n"
+                  f"Please RSVP by {rng.choice(['Wednesday','Thursday','end of week'])}.\n\nHR Team"),
+            label=f"HR {event} invitation",
+        )
+
+    # infra
+    tool = rng.choice(["GitHub","Jira","Confluence","Slack","Datadog","AWS"])
+    change = rng.choice(["scheduled maintenance","certificate renewal","API version upgrade","region migration"])
+    window = f"{rng.randint(1,4)}:00–{rng.randint(5,8)}:00 UTC"
+    return dict(
+        mail_from=f"infra@mycompany.com",
+        subject=f"[Notice] {tool} {change} — {rng.choice(_DAY)}",
+        body=(f"Hi,\n\nWe will be performing a {change} for {tool}.\n\n"
+              f"Maintenance window: {window}\nExpected downtime: {rng.randint(5,30)} minutes\n\n"
+              f"No action required on your end.\n\nInfrastructure Team"),
+        label=f"{tool} maintenance notice",
+    )
+
+
+# ── Suspicious generator ──────────────────────────────────────────────────────
+
+def gen_suspicious(rng: random.Random) -> dict:
+    svc    = rng.choice(_SUS_SERVICES)
+    year   = rng.randint(2024, 2027)
+    num    = rng.randint(1, 99)
+    tld    = rng.choice(_SUS_TLDS)
+    domain = f"{svc.lower()}-{year}.{tld}"
+    role   = rng.choice(_SUS_ROLES)
+    days   = rng.randint(3, 14)
+    amount = rng.choice([49.99, 79.00, 149.99, 199.00, 249.99, 9.99, 29.99])
+    action = rng.choice(_SUS_ACTIONS)
+    gb     = rng.randint(1, 50)
+    tactic = rng.choice(["account","backup","billing","subscription","it","survey","reward"])
+
+    if tactic == "account":
+        return dict(
+            mail_from=f"{role}@{domain}",
+            subject=f"Your account requires {action}ion",
+            body=(f"Hi,\n\nWe noticed your account has not been {action}ed yet. "
+                  f"To ensure continued access to our services please {action} within {days} days.\n\n"
+                  f"This will only take a few minutes. Failure to {action} may result in "
+                  f"restricted access.\n\n{svc} Account Team"),
+            label=f"Account {action} — {domain}",
+        )
+    if tactic == "backup":
+        return dict(
+            mail_from=f"{role}@{domain}",
+            subject=f"Your {gb}GB backup completed successfully",
+            body=(f"Hello,\n\nYour scheduled backup completed successfully.\n\n"
+                  f"{gb} GB of data has been secured on our servers.\n"
+                  f"Next backup: {rng.choice(['tomorrow','in 3 days','next week'])}\n\n"
+                  f"If you did not set up this service please contact us immediately.\n\n{svc} Support"),
+            label=f"Backup notification — {domain}",
+        )
+    if tactic == "billing":
+        return dict(
+            mail_from=f"{role}@{domain}",
+            subject=f"Invoice #{rng.randint(10000,99999)} pending your review",
+            body=(f"Dear Customer,\n\nAn invoice of ${amount:.2f} is pending your review.\n\n"
+                  f"Amount will be processed automatically in {days} days unless disputed.\n"
+                  f"Please log in to {action} the invoice details.\n\n{svc} Finance Department"),
+            label=f"Billing notice — {domain}",
+        )
+    if tactic == "subscription":
+        return dict(
+            mail_from=f"{role}@{domain}",
+            subject=f"Your {svc} subscription renews in {days} days — ${amount:.2f}",
+            body=(f"Hi,\n\nYour {svc} annual subscription is set to auto-renew in {days} days.\n\n"
+                  f"Renewal amount: ${amount:.2f}\n\n"
+                  f"Log in to {action} or cancel before renewal date.\n\n{svc} Billing"),
+            label=f"Subscription renewal — {domain}",
+        )
+    if tactic == "it":
+        return dict(
+            mail_from=f"{role}@{domain}",
+            subject=f"IT Notice: your password expires in {days} days",
+            body=(f"Hi,\n\nYour company password will expire in {days} days.\n\n"
+                  f"Please {action} your credentials soon to avoid being locked out.\n"
+                  f"Contact {svc} helpdesk if you need assistance.\n\n{svc} IT Support"),
+            label=f"IT password notice — {domain}",
+        )
+    if tactic == "survey":
+        mins = rng.choice([2, 3, 5])
+        return dict(
+            mail_from=f"{role}@{domain}",
+            subject=f"Quick {mins}-minute survey — your feedback matters",
+            body=(f"Dear Customer,\n\nWe value your opinion. Please take {mins} minutes to "
+                  f"{action} our satisfaction survey.\n\n"
+                  f"Your responses help us improve our service.\n\n{svc} Customer Success"),
+            label=f"Survey — {domain}",
+        )
+    # reward
+    pts = rng.randint(500, 9999)
+    return dict(
+        mail_from=f"{role}@{domain}",
+        subject=f"You have {pts:,} unclaimed reward points expiring soon",
+        body=(f"Hi,\n\nYou have {pts:,} loyalty points that expire this month.\n\n"
+              f"Log in to {action} them for gift cards or cashback before they expire.\n\n"
+              f"{svc} Loyalty Rewards"),
+        label=f"Reward points — {domain}",
+    )
+
+
+# ── Phishing generator ────────────────────────────────────────────────────────
+
+def gen_phishing(rng: random.Random) -> dict:
+    tactic = rng.choice(_PHISH_TACTICS)
+
+    if tactic == "typosquat":
+        brand, (typos, acct_name) = rng.choice(list(_BRANDS.items()))
+        typo_base = rng.choice(typos)
+        tld       = rng.choice(["com","net","org","io","co"])
+        ext_tld   = rng.choice(["verify","secure","alert","account","login","update"])
+        domain    = f"{typo_base}-{ext_tld}.{tld}"
+        hours     = rng.choice([12, 24, 48, 72])
+        action    = rng.choice(["verify","confirm","restore","secure","reactivate"])
+        reason    = rng.choice(["unusual activity","a suspicious login","a policy update","your payment failing","a security review"])
+        url_path  = rng.choice(["verify","restore","secure","confirm","unlock"])
+        uid       = rng.randint(10000, 99999)
+        return dict(
+            mail_from=f"security@{domain}",
+            subject=f"URGENT: Your {acct_name} has been {'suspended' if rng.random()>0.5 else 'limited'}",
+            body=(f"Dear Customer,\n\nWe detected {reason} on your {acct_name}.\n\n"
+                  f"Please {action} your identity immediately:\n"
+                  f"http://{domain}/{url_path}?id={uid}\n\n"
+                  f"You have {hours} hours or your account will be permanently closed.\n\n"
+                  f"{brand.title()} Security Team"),
+            label=f"{brand.title()} typosquat — {domain}",
+        )
+
+    if tactic == "bec":
+        amount   = rng.choice([12500, 47500, 87000, 135000, 250000, 33750, 19999])
+        bank     = rng.choice(["First National Trust","Pacific Commerce Bank","Meridian Financial","Atlantic Reserve","Global Trust Bank"])
+        acct     = rng.randint(1000000000, 9999999999)
+        routing  = rng.choice([21000021, 11000138, 21001088, 22300173, 9000782])
+        deadline = rng.choice(["today","before 3pm","within the hour","before close of business"])
+        exec_name= rng.choice(["CEO","CFO","COO","Chairman","Managing Director"])
+        reason   = rng.choice(["closing an acquisition","settling a board-approved transaction",
+                               "completing a time-sensitive deal","processing an urgent vendor payment"])
+        return dict(
+            mail_from=f"{exec_name.lower().replace(' ','-')}@{rng.choice(['company-exec-wire','corp-finance-urgent','board-transfer-secure'])}.{rng.choice(['net','com','org'])}",
+            subject=f"CONFIDENTIAL: Urgent wire transfer — {exec_name} approval",
+            body=(f"This is strictly confidential.\n\nWe are {reason} {deadline}. "
+                  f"Wire ${amount:,} immediately to:\n\n"
+                  f"Bank: {bank}\nAccount: {acct}\nRouting: {routing}\n\n"
+                  f"Do NOT discuss this with anyone. Confirm by reply when done.\n\n{exec_name}"),
+            label=f"BEC wire fraud — ${amount:,}",
+        )
+
+    if tactic == "credential":
+        brand    = rng.choice(["IT Security","HR Department","Systems Administration","Corporate Security"])
+        reason   = rng.choice(["a mandatory password reset","an urgent security audit","new compliance requirements","suspicious access detected"])
+        hours    = rng.choice([4, 8, 12, 24])
+        portal   = f"corp-{rng.choice(['security','helpdesk','it','hr','sso'])}-{rng.choice(['portal','login','access'])}.{rng.choice(['com','net','org'])}"
+        uid      = rng.randint(10000, 99999)
+        return dict(
+            mail_from=f"noreply@{portal}",
+            subject=f"Action Required: {reason.title()} within {hours} hours",
+            body=(f"Dear Employee,\n\nDue to {reason}, you must update your credentials within {hours} hours.\n\n"
+                  f"Failure to act will result in account lockout.\n\n"
+                  f"Update now: http://{portal}/login?token={uid}\n\n"
+                  f"Do not share this link. It is unique to your account.\n\n{brand}"),
+            label=f"Credential harvest — {portal}",
+        )
+
+    if tactic == "irs":
+        amount   = rng.choice([840, 1240, 2190, 3450, 780, 1890, 4200])
+        year_ref = rng.choice([2023, 2024, 2025])
+        domain   = f"irs-refund-{rng.randint(2024,2027)}.{rng.choice(['com','net','gov-refund.com'])}"
+        uid      = rng.randint(100000, 999999)
+        return dict(
+            mail_from=f"refunds@{domain}",
+            subject=f"IRS: Tax refund of ${amount:,} — claim within 72 hours",
+            body=(f"Dear Taxpayer,\n\nAfter reviewing your {year_ref} tax return, "
+                  f"the IRS has determined you are eligible for a refund of ${amount:,}.\n\n"
+                  f"Claim your refund: http://{domain}/claim?ref={uid}\n\n"
+                  f"This offer expires in 72 hours. Unclaimed refunds are forfeited.\n\nInternal Revenue Service"),
+            label=f"IRS impersonation — ${amount:,} refund",
+        )
+
+    if tactic == "it_helpdesk":
+        days   = rng.choice([1, 2, 3])
+        domain = f"it-{rng.choice(['helpdesk','support','security','servicedesk'])}-{rng.randint(2024,2027)}.{rng.choice(['com','net','org'])}"
+        uid    = rng.randint(10000, 99999)
+        reason = rng.choice(["inactivity","a policy change","failed login attempts","an expired certificate","a system upgrade"])
+        return dict(
+            mail_from=f"helpdesk@{domain}",
+            subject=f"URGENT: Account deactivation in {days} day{'s' if days>1 else ''} — verify now",
+            body=(f"Dear User,\n\nYour corporate account is scheduled for deactivation due to {reason}.\n\n"
+                  f"To keep your account active:\nhttp://{domain}/verify?user={uid}\n\n"
+                  f"You have {days * 24} hours to respond before permanent deactivation.\n\nIT Security Department"),
+            label=f"IT helpdesk impersonation — {domain}",
+        )
+
+    # payroll
+    amount  = rng.choice([3200, 4800, 5500, 7200, 9100, 6300])
+    domain  = f"payroll-{rng.choice(['secure','update','portal','hr'])}-{rng.randint(2024,2027)}.{rng.choice(['com','net','org'])}"
+    uid     = rng.randint(10000, 99999)
+    day     = rng.choice(_DAY)
+    return dict(
+        mail_from=f"payroll@{domain}",
+        subject=f"Payroll: Confirm your bank details by {day} to avoid delays",
+        body=(f"Dear Employee,\n\nOur payroll system is being upgraded. "
+              f"Please confirm your bank account details by {day} to ensure "
+              f"your ${amount:,} salary payment is processed without delay.\n\n"
+              f"Update here: http://{domain}/confirm?emp={uid}\n\n"
+              f"HR & Payroll Department"),
+        label=f"Payroll BEC — ${amount:,}",
+    )
+
+
+# ── Send helper ───────────────────────────────────────────────────────────────
+
+def send(email: dict, colour: str) -> None:
     msg = MIMEMultipart("alternative")
-    msg["From"]    = mail_from
-    msg["To"]      = rcpt_to
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    msg["From"]    = email["mail_from"]
+    msg["To"]      = RECIPIENT
+    msg["Subject"] = email["subject"]
+    msg.attach(MIMEText(email["body"], "plain"))
 
-    print(f"{colour}{BOLD}Sending: {label}{RESET}")
-    print(f"  From   : {mail_from}")
-    print(f"  Subject: {subject}")
+    print(f"{colour}{BOLD}  From   : {email['mail_from']}{RESET}")
+    print(f"{colour}{BOLD}  Subject: {email['subject']}{RESET}")
     try:
         with smtplib.SMTP(PHISHGUARD_HOST, PHISHGUARD_PORT, timeout=30) as s:
             s.ehlo()
-            s.sendmail(mail_from, [rcpt_to], msg.as_bytes())
-        print(f"  {colour}✓ Accepted by PhishGuard{RESET}\n")
+            s.sendmail(email["mail_from"], [RECIPIENT], msg.as_bytes())
+        print(f"  {colour}✓ Accepted — {email['label']}{RESET}\n")
     except Exception as e:
         print(f"  ✗ Error: {e}\n")
 
 
-def main():
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Random seed for reproducible run")
+    parser.add_argument("--seed",  type=int, default=None, help="Random seed for reproducible run")
+    parser.add_argument("--count", type=int, default=3,    help="Emails per category (default 3)")
     args = parser.parse_args()
 
-    rng = random.Random(args.seed)
-    clean     = rng.sample(CLEAN_POOL,      3)
-    suspicious = rng.sample(SUSPICIOUS_POOL, 3)
-    phishing  = rng.sample(PHISHING_POOL,   3)
-
+    rng      = random.Random(args.seed)
+    n        = max(1, args.count)
     seed_str = f"seed={args.seed}" if args.seed is not None else "random"
-    print(f"\n{BOLD}{CYAN}PhishGuard SMTP Gateway — 9-Email Demo ({seed_str}){RESET}")
-    print(f"{CYAN}Sending 3 clean + 3 suspicious + 3 phishing to port {PHISHGUARD_PORT}{RESET}\n")
+
+    print(f"\n{BOLD}{CYAN}PhishGuard SMTP Gateway — Procedural Demo ({seed_str}){RESET}")
+    print(f"{CYAN}Generating {n} clean + {n} suspicious + {n} phishing to port {PHISHGUARD_PORT}{RESET}\n")
     print("─" * 60)
 
-    for i, e in enumerate(clean, 1):
-        print(f"\n{GREEN}{BOLD}[{i}/9] CLEAN — {e['label']}{RESET}")
-        send(e["mail_from"], RECIPIENT, e["subject"], e["body"], e["label"], GREEN)
+    cleans     = [gen_clean(rng)     for _ in range(n)]
+    suspicious = [gen_suspicious(rng) for _ in range(n)]
+    phishings  = [gen_phishing(rng)  for _ in range(n)]
+
+    for i, e in enumerate(cleans, 1):
+        print(f"\n{GREEN}{BOLD}[{i}/{n*3}] CLEAN{RESET}")
+        send(e, GREEN)
         time.sleep(2)
 
     for i, e in enumerate(suspicious, 1):
-        print(f"\n{YELLOW}{BOLD}[{i+3}/9] SUSPICIOUS — {e['label']}{RESET}")
-        send(e["mail_from"], RECIPIENT, e["subject"], e["body"], e["label"], YELLOW)
+        print(f"\n{YELLOW}{BOLD}[{n+i}/{n*3}] SUSPICIOUS{RESET}")
+        send(e, YELLOW)
         time.sleep(2)
 
-    for i, e in enumerate(phishing, 1):
-        print(f"\n{RED}{BOLD}[{i+6}/9] PHISHING — {e['label']}{RESET}")
-        send(e["mail_from"], RECIPIENT, e["subject"], e["body"], e["label"], RED)
+    for i, e in enumerate(phishings, 1):
+        print(f"\n{RED}{BOLD}[{n*2+i}/{n*3}] PHISHING{RESET}")
+        send(e, RED)
         time.sleep(2)
 
     print("─" * 60)
-    print(f"\n{BOLD}All 9 sent. Expected results:{RESET}")
-    print(f"  {GREEN}✅ 3 CLEAN      → Gmail inbox (label: PhishGuard-Delivered){RESET}")
-    print(f"  {YELLOW}🟡 3 SUSPICIOUS → Pending Review tab (press F5 first){RESET}")
-    print(f"  {RED}🔴 3 PHISHING   → Quarantine tab{RESET}")
+    print(f"\n{BOLD}All {n*3} sent. Expected results:{RESET}")
+    print(f"  {GREEN}✅ {n} CLEAN      → Gmail inbox (label: PhishGuard-Delivered){RESET}")
+    print(f"  {YELLOW}🟡 {n} SUSPICIOUS → Pending Review tab (press F5 first){RESET}")
+    print(f"  {RED}🔴 {n} PHISHING   → Quarantine tab{RESET}")
     print(f"\n  {CYAN}Dashboard: http://localhost:8000{RESET}\n")
-
-    print(f"{BOLD}Emails sent this run:{RESET}")
-    for label, pool, colour in [("Clean", clean, GREEN), ("Suspicious", suspicious, YELLOW), ("Phishing", phishing, RED)]:
-        print(f"  {colour}{label}:{RESET}")
-        for e in pool:
-            print(f"    · {e['label']} ({e['mail_from']})")
-    print()
 
 
 if __name__ == "__main__":
