@@ -61,7 +61,17 @@ def test_layer3_empty_urls():
 # TC-P3-05: Sandbox runner - Docker SDK detonation
 # The sandbox switched from CLI (create_subprocess_exec) to the Python
 # Docker SDK. Tests now mock docker.DockerClient instead.
+# test_sandbox_no_docker_image_uses_node still uses the CLI path (no
+# docker_image arg) so it correctly mocks create_subprocess_exec.
 # ---------------------------------------------------------------------------
+
+def _make_mock_proc(stdout: bytes, returncode: int = 0):
+    """Helper for the no-docker-image test which still uses the CLI path."""
+    proc = MagicMock()
+    proc.returncode = returncode
+    proc.communicate = AsyncMock(return_value=(stdout, b""))
+    proc.kill = MagicMock()
+    return proc
 
 def test_sandbox_docker_command_flags():
     """detonate_url must call containers.run with the correct security flags."""
