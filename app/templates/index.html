@@ -1070,29 +1070,66 @@ async function loadCampaigns(){
         </div>
         ${domains ? `<div style="margin-top:6px">${domains}${extra}</div>` : ''}
         <div style="margin-top:10px">
-          <button class="bs" style="padding:5px 12px;font-size:11px" onclick="viewCampaignScans(${JSON.stringify(c.scan_ids)})">View ${c.email_count} Scans in Reports →</button>
+          <button class="bs" style="padding:5px 12px;font-size:11px" data-scan-ids='${JSON.stringify(c.scan_ids)}' onclick="viewCampaignScans(JSON.parse(this.dataset.scanIds))">View ${c.email_count} Scans in Reports →</button>
         </div>
       </div>`;
     }).join('');
   }catch(e){ body.innerHTML = '<div class="empty">Could not load campaigns: '+e.message+'</div>'; }
 }
 
-function viewCampaignScans(scanIds){
+async function viewCampaignScans(scanIds){
   if(!scanIds||!scanIds.length) return;
-  showSection('reports');
-  // Filter reports to only show campaign scans
-  setTimeout(async function(){
-    const body = document.getElementById('reportsBody');
-    body.innerHTML = '<div class="empty">Loading campaign scans...</div>';
-    try{
-      // Load all scans then filter to those in the campaign
-      const r = await api('/api/scans?limit=500');
-      const d = await r.json();
-      const idSet = new Set(scanIds);
-      _allReportItems = (d.items||[]).filter(it => idSet.has(it.id||it.scan_id||it.email_id||''));
-      filterReports();
-    }catch(e){ body.innerHTML = '<div class="empty">Could not load scans</div>'; }
-  }, 100);
+
+  // Fetch data FIRST — if we call showSection() first it triggers loadReports()
+  // async which would race and overwrite _allReportItems with unfiltered data.
+  const body = document.getElementById('reportsBody');
+  if(body) body.innerHTML = '<div class="empty">Loading campaign scans...</div>';
+
+  try{
+    // Fetch enough scans to cover the full campaign window (campaigns can span weeks)
+    const r = await api('/api/scans?limit=2000');
+    const d = await r.json();
+    const idSet = new Set(scanIds);
+    _allReportItems = (d.items||[]).filter(function(it){
+      return idSet.has(it.id||it.scan_id||it.email_id||'');
+    });
+    if(!_allReportItems.length){
+      toast('No matching scans found — try refreshing', 'warn');
+      return;
+    }
+  }catch(e){
+    toast('Could not load campaign scans: '+e.message, 'error');
+    return;
+  }
+
+  // Clear search filters so all campaign emails show
+  const sf = document.getElementById('reportFilterSender');
+  const vf = document.getElementById('reportFilterVerdict');
+  if(sf) sf.value = '';
+  if(vf) vf.value = '';
+
+  // Manually switch to Reports tab WITHOUT calling showSection() to avoid
+  // triggering loadReports() which would overwrite our filtered _allReportItems.
+  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","soar","audit","gmail","settings"];
+  all.forEach(function(s){
+    const sec = document.getElementById('sec-'+s);
+    const nav = document.getElementById('nav-'+s);
+    if(sec) sec.classList.remove('active');
+    if(nav) nav.classList.remove('active');
+  });
+  const secEl = document.getElementById('sec-reports');
+  const navEl = document.getElementById('nav-reports');
+  if(secEl) secEl.classList.add('active');
+  if(navEl) navEl.classList.add('active');
+  currentSection = 'reports';
+
+  // Make sure list view is showing (not detail view)
+  const listCard = document.getElementById('reports-list-card');
+  const detailCard = document.getElementById('report-detail-card');
+  if(listCard)  listCard.style.display  = '';
+  if(detailCard) detailCard.style.display = 'none';
+
+  filterReports();
 }
 
 async function sendDigest(btn){
@@ -1117,8 +1154,8 @@ let _prevPendingCount  = -1;
 
 async function pollPendingBadge(){
   try{
-    const [pr, sr] = await Promise.all([api('/api/pending'), api('/api/stats')]);
-    const pd = await pr.json(); const sd = await sr.json();
+    const [pr, sr, cr] = await Promise.all([api('/api/pending'), api('/api/stats'), api('/api/campaigns?days=7')]);
+    const pd = await pr.json(); const sd = await sr.json(); const cd = await cr.json();
     const n = (pd.items||[]).length;
     const badge = document.getElementById('pendingBadge');
     if(badge){ badge.textContent = n; badge.style.display = n>0 ? 'inline' : 'none'; }
@@ -1133,6 +1170,11 @@ async function pollPendingBadge(){
       _notify('⚠️ PhishGuard', `${newPend - _prevPendingCount} new email(s) held for SOC review`);
     }
     _prevPhishingCount = newPhish; _prevPendingCount = newPend;
+
+    // Update campaign badge
+    const activeCampaigns = cd.active || 0;
+    const campBadge = document.getElementById('campaignBadge');
+    if(campBadge){ campBadge.textContent = activeCampaigns; campBadge.style.display = activeCampaigns > 0 ? 'inline' : 'none'; }
   }catch(e){}
 }
 
