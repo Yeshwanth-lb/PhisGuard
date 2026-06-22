@@ -87,10 +87,14 @@ class PhishGuardSMTPHandler:
         original_rcpts: list[str] = list(envelope.rcpt_tos)
 
         # ── Rate limiting — protects against email bombing ───────────────────
-        peer_ip = session.peer[0] if session.peer else "unknown"
-        allowed, reason = _rl_check(peer_ip, mail_from)
+        peer_ip  = session.peer[0] if session.peer else "unknown"
+        rcpt_str = original_rcpts[0] if original_rcpts else ""
+        allowed, reason, tarpit = _rl_check(peer_ip, mail_from, rcpt_str)
         if not allowed:
-            logger.warning("smtp_rate_limited", peer=peer_ip, sender=mail_from, reason=reason)
+            logger.warning("smtp_rate_limited", peer=peer_ip, sender=mail_from,
+                           rcpt=rcpt_str, tarpit=tarpit, reason=reason)
+            if tarpit:
+                await asyncio.sleep(tarpit)   # slow down the bombing tool
             return reason  # 421 = temporary failure, MTA will retry
 
         logger.info("smtp_received", peer=str(session.peer),
