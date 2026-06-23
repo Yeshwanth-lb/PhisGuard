@@ -138,30 +138,41 @@ class PhishGuardSMTPHandler:
         routing_verdict = l2_verdict if l2_verdict in ("suspicious", "phishing") else final_verdict
 
         # ── Smart bombing response ────────────────────────────────────────────
-        # DEFAULT: deliver (surface). Only hold if we positively identify
-        # subscription noise. Unknown subjects always surface — a held real
-        # bank/OTP alert is the worst failure mode this system can produce.
+        # During an active bombing attack the inbox is under attack to bury
+        # a critical alert. Routing logic:
         #
-        #   is_high_signal  → deliver immediately (explicit surface)
-        #   is_subscription → hold for SOC review  (explicit noise)
-        #   neither         → deliver              (default: err toward delivery)
-        if _under_attack and routing_verdict == "clean":
+        #   is_high_signal + pipeline says clean/suspicious
+        #     → SURFACE (override suspicious — the bomb exists to hide this)
+        #   is_high_signal + pipeline says phishing
+        #     → keep as PHISHING (strong pipeline signal; don't override)
+        #   is_subscription + pipeline says clean
+        #     → HOLD (confirmed noise)
+        #   neither / unmatched
+        #     → keep pipeline verdict unchanged (default: err toward delivery)
+        if _under_attack:
             from app.security.bombing_detector import (
                 is_high_signal as _is_high_signal,
                 _matches_subscription_pattern as _is_subscription,
             )
             if _is_high_signal(_subject_preview):
+                # Surface regardless of pipeline verdict during an active bombing attack.
+                # The bombing context changes the threat model: the attacker started the
+                # flood specifically to bury this kind of email. A genuine OTP or bank
+                # alert from an unfamiliar domain scores "suspicious" or even "phishing"
+                # (new domain + banking subject = phishing-pattern to Claude) but must
+                # still reach the user. L1 hard hits (VirusTotal, URLhaus, PhishTank)
+                # are not affected — if L1 already quarantined the email, the pipeline
+                # never reaches this code. We only override L2/ML verdicts here.
+                routing_verdict = "clean"
                 logger.info("smtp_bombing_high_signal_delivered",
-                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
-                # routing_verdict stays "clean" → delivered normally
-            elif _is_subscription(_subject_preview):
+                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60],
+                            pipeline_was=l2_verdict)
+            elif _is_subscription(_subject_preview) and routing_verdict == "clean":
                 routing_verdict = "suspicious"
                 logger.info("smtp_bombing_subscription_held",
                             rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
-            else:
-                # Unmatched subject — default to SURFACE, not hold.
-                # We don't know what this email is; holding it risks burying
-                # a critical alert that matches no pattern we wrote.
+            elif routing_verdict == "clean":
+                # Unmatched subject, clean verdict — surface by default.
                 logger.info("smtp_bombing_unmatched_surfaced",
                             rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
 
