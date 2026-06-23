@@ -1,5 +1,5 @@
 # PhishGuard — Session Handoff Document
-**Last updated:** 2026-06-23 (session 5)  
+**Last updated:** 2026-06-23 (session 6)  
 **Project root:** `/Users/intern4/Desktop/phishguard`  
 **Developer:** Yeshwanth (yeshwanthlb0@gmail.com)  
 **Purpose:** End-to-end email security gateway with 7-layer AI detection
@@ -17,15 +17,15 @@
 ### Git Status
 - Branch: `master` — all changes committed, working tree clean
 - Latest commits:
-  - `4668766` fix: high-signal override applies to phishing verdict during bombing hold
-  - `f5922fb` fix: demo_bombing.py sends concurrently so velocity trigger fires
-  - `7af0528` fix+docs: correct three doc inconsistencies, env-tune rate limits
-  - `85a464a` fix: bombing response defaults to SURFACE; thresholds load from env
-  - `b0f20cf` feat: inbox bombing detector — subscription bomb detection and hold
+  - `531f3e1` fix: Grafana dashboard metric names and datasource UID
+  - `045cc6f` fix: MISP nginx redirect includes port 8443, remove HSTS
+  - `c3b7f14` fix: MISP serves HTTP directly (reverted — secure cookies issue)
+  - `bfd9298` fix: expose MISP HTTPS on port 8443, fix connector-misp URL
+  - `15edfed` docs: add FULL_PROJECT_JOURNAL.md
 
-### Database State (as of 2026-06-22)
-- **Total scans stored:** ~1,400+
-- **Phishing:** ~160+ | **Suspicious:** ~235+ | **Clean:** ~960+
+### Database State (as of 2026-06-23)
+- **Total scans stored:** 1,445
+- **Phishing:** 182 | **Suspicious:** 240 | **Clean:** 1,023
 - SQLite at `data/phishguard.db` (Docker volume: `phishguard_app_data`)
 - 4 tables: `scans`, `pending_review`, `trusted_domains`, `feedback`
 - **IMPORTANT:** Local `data/phishguard.db` and Docker volume DB can drift if you run Python scripts directly. Fix:
@@ -137,20 +137,20 @@ SMTP routing uses **L2 verdict** (not blended) to prevent ML floor from bypassin
 
 ## 3. Running Services and Ports
 
-| Service | URL | Login |
-|---|---|---|
-| **PhishGuard SOC Console** | `localhost:8000` | `dev-key` (any role) |
-| **Elasticsearch** | `localhost:9200` | `elastic / changeme` |
-| **Kibana** | `localhost:5601` | `elastic / changeme` |
-| **MLflow** | `localhost:5000` | none |
-| **MinIO API** | `localhost:9000` | `phishguard / changeme123` |
-| **MinIO UI** | `localhost:9001` | `phishguard / changeme123` |
-| **MISP** | `localhost:8888` | `admin@admin.test / changeme123` |
-| **OpenCTI** | `localhost:8080` | `admin@phishguard.local / changeme123` |
-| **Grafana** | `localhost:3000` | `admin / changeme` |
-| **Prometheus** | `localhost:9090` | none |
-| **Redis** | `localhost:6379` | password: `redispassword` |
-| **SMTP Gateway** | `localhost:8025` | none |
+| Service | URL | Login | Notes |
+|---|---|---|---|
+| **PhishGuard SOC Console** | `localhost:8000` | `dev-key` (any role) | ✅ Fully working |
+| **Elasticsearch** | `localhost:9200` | `elastic / changeme` | ✅ 2,100+ docs |
+| **Kibana** | `localhost:5601` | `elastic / changeme` | ✅ Working |
+| **MLflow** | `localhost:5000` | none | ✅ Working |
+| **MinIO API** | `localhost:9000` | `phishguard / changeme123` | ✅ Working |
+| **MinIO UI** | `localhost:9001` | `phishguard / changeme123` | ✅ Working |
+| **MISP** | `http://localhost:8888` → redirects to `https://localhost:8443` | `admin@admin.test / changeme123` | ⚠️ Accept SSL cert warning. 287 events exported. connector-misp version mismatch so no OpenCTI sync. |
+| **OpenCTI** | `localhost:8080` | `admin@phishguard.local / changeme123` | ⚠️ Platform runs but 0 objects (connector broken) |
+| **Grafana** | `localhost:3000` | `admin / changeme` | ✅ 4/8 panels showing (other 4 correctly empty — no errors, no /analyze traffic) |
+| **Prometheus** | `localhost:9090` | none | ✅ Scraping every 15s |
+| **Redis** | `localhost:6379` | password: `redispassword` | ✅ Working |
+| **SMTP Gateway** | `localhost:8025` | none | ✅ Working |
 
 ### Docker Commands
 ```bash
@@ -172,14 +172,18 @@ docker compose up -d --no-deps app     # restart app only
 
 ---
 
-## 4. Demo Numbers (as of 2026-06-22 session 3)
+## 4. Demo Numbers (as of 2026-06-23 session 6)
 
 | Metric | Value |
 |---|---|
-| Total emails scanned | 1,400+ |
-| Tests passing | 147 / 150 (3 skipped) |
-| Running containers | 13/13 healthy |
-| Campaigns detected (30d) | 33 total, 7 active |
+| Total emails scanned | 1,445 |
+| Phishing blocked | 182 |
+| Suspicious held for SOC | 240 |
+| Clean delivered | 1,023 |
+| Tests passing | 186 / 189 (3 skipped) |
+| Running containers | 13/13 |
+| Campaigns detected (30d) | 33+ |
+| MISP threat events | 287 |
 | Elasticsearch docs | 2,100+ |
 | Behavioral baseline files | 15+ (persisted) |
 
@@ -310,15 +314,35 @@ Cert is for hostname `misp` not `localhost`. Do not restart MISP without cert fi
 
 ---
 
-## 8. Immediate Next Steps
+## 8. Known Issues
+
+### MISP web UI (⚠️ not blocking demo)
+- `http://localhost:8888` redirects to `https://localhost:8443`
+- Browser shows SSL cert warning (cert issued for hostname `misp`, not `localhost`) — click **Advanced → Proceed**
+- Once logged in, nav links may redirect to `https://localhost/` (strips port) — manually type `https://localhost:8443/events/index`
+- Login: `admin@admin.test` / `changeme123` (password reset via PHP bcrypt in session 6)
+- **MISP still works for PhishGuard** — L1 queries it, L4 exports to it (287 events). Web UI is cosmetic for demo.
+
+### connector-misp (⚠️ not blocking demo)
+- connector-misp v6.2.18 uses GET `/events/restSearch` but MISP v2.5.40 requires POST → API mismatch
+- OpenCTI has 0 objects — MISP→OpenCTI sync never completed
+- Fix would require upgrading connector-misp image to a version compatible with MISP 2.5.40
+
+### Grafana empty panels (✅ correct behaviour)
+- Error Rate, 5xx Total show no data → **correct**, there are no 5xx errors
+- `/analyze` panels show no data → **correct**, emails go via SMTP (port 8025) not the REST `/analyze` endpoint
+- To populate `/analyze` panels: paste an email manually in the dashboard Scan tab
+
+## 9. Immediate Next Steps
 
 1. **Default passwords** — ES, Kibana, MinIO, OpenCTI, Grafana, MISP still use `changeme`/`changeme123`
 2. **CORS lockdown** — `allow_origins=['*']` in `app/main.py` ~line 77
-3. **Retrain ML** — 1,400+ real scan records in DB, retrain from ML Ops tab to improve accuracy
+3. **Retrain ML** — 1,445 real scan records in DB, retrain from ML Ops tab
 4. **PhishTank key** — registration may be re-enabled at phishtank.org/api_register.php
 5. **Jira** — add `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` to .env
-6. **SMTP rate limiter tuning** — defaults conservative for demo; production shared inboxes (support@, sales@) may need higher per-recipient limit
-7. **Gmail Workspace ingestion** — `INBOX_INGESTION_ENABLED` flag not yet built; needs service account + Workspace admin approval
+6. **SMTP rate limiter** — `.env` has `SMTP_RATE_PER_IP=200 SMTP_RATE_GLOBAL=200` set for bombing demo. Revert to defaults (10/60) for production: remove those lines from `.env`
+7. **connector-misp upgrade** — upgrade to version compatible with MISP 2.5.40 to restore OpenCTI sync
+8. **Gmail Workspace ingestion** — `INBOX_INGESTION_ENABLED` flag not yet built; needs service account + Workspace admin
 
 ---
 
