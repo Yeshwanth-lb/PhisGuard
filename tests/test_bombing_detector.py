@@ -38,10 +38,10 @@ class TestSubjectPatternMatching:
 class TestBombingDetection:
     def setup_method(self): _reset()
 
-    def test_no_attack_below_volume(self):
-        """Under the volume threshold → never detected."""
+    def test_no_attack_below_volume_without_pattern(self):
+        """High volume but no subscription pattern → no detection."""
         for i in range(bd.VOLUME_THRESHOLD - 1):
-            under, new = bd.record("victim@co.com", f"x@d{i}.com", "Confirm your email")
+            under, new = bd.record("victim@co.com", f"x@d{i}.com", "Team meeting update")
             assert not under and not new
 
     def test_no_attack_low_diversity(self):
@@ -123,3 +123,32 @@ class TestBombingDetection:
         assert "active_attacks" in s
         assert "thresholds" in s
         assert s["thresholds"]["volume_threshold"] == bd.VOLUME_THRESHOLD
+
+
+class TestVelocityDetection:
+    def setup_method(self): _reset()
+
+    def test_fires_before_volume_threshold(self):
+        """VELOCITY_THRESHOLD subscription emails in 30s fires before VOLUME_THRESHOLD."""
+        results = []
+        for i in range(bd.VELOCITY_THRESHOLD):
+            under, new = bd.record(
+                "victim@co.com",
+                f"x@domain-{i}.com",
+                "Confirm your email address",
+            )
+            results.append((under, new))
+        # Should have fired by VELOCITY_THRESHOLD, well before VOLUME_THRESHOLD
+        assert bd.VELOCITY_THRESHOLD < bd.VOLUME_THRESHOLD
+        assert any(new for _, new in results)
+
+    def test_velocity_requires_pattern(self):
+        """Velocity check requires subscription pattern — burst of normal emails should not fire."""
+        for i in range(bd.VELOCITY_THRESHOLD + 2):
+            under, new = bd.record(
+                "victim@co.com",
+                f"x@domain-{i}.com",
+                "Team meeting tomorrow at 3pm",   # not a subscription pattern
+            )
+        # No velocity trigger — subject doesn't match pattern
+        assert not any([bd.is_under_attack("victim@co.com")])

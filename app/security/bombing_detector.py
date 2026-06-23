@@ -41,6 +41,14 @@ DIVERSITY_RATIO      = 0.70     # fraction of emails from unseen sender domains
 HOLD_MINUTES         = 20       # minutes to hold ALL emails after attack detected
 ALERT_SUPPRESS_SECS  = 600      # don't re-alert same recipient within 10 min
 
+# ── Early velocity detection (catches the attack sooner) ─────────────────────
+# If VELOCITY_THRESHOLD subscription-pattern emails arrive within VELOCITY_WINDOW
+# seconds that is clearly bot-speed behaviour — no human signs up to 5 newsletters
+# in 30 seconds. Fire the hold immediately without waiting for VOLUME_THRESHOLD.
+# Lower false-positive risk: pattern check is still required (not just raw volume).
+VELOCITY_WINDOW      = 30       # seconds — short burst window
+VELOCITY_THRESHOLD   = 5        # subscription-pattern emails in that window = bomb
+
 # ── Subscription bomb subject patterns ───────────────────────────────────────
 _SUBSCRIPTION_RES = [
     re.compile(p, re.IGNORECASE) for p in [
@@ -142,7 +150,28 @@ def record(rcpt: str, sender_email: str, subject: str) -> tuple[bool, bool]:
         if now < st.under_attack_until:
             return True, False
 
-        # ── Evaluate bombing score ────────────────────────────────────────────
+        # ── Early velocity check (fires before VOLUME_THRESHOLD) ─────────────
+        # If VELOCITY_THRESHOLD subscription-pattern emails arrive within
+        # VELOCITY_WINDOW seconds → bot-speed sign-ups, hold immediately.
+        # Pattern is required so a burst of legitimate direct emails (e.g.
+        # company all-hands CC) doesn't trigger a false positive.
+        velocity_window_emails = [e for e in st.arrivals if e[0] >= now - VELOCITY_WINDOW]
+        velocity_pattern_count = sum(1 for _, _, p in velocity_window_emails if p)
+        if velocity_pattern_count >= VELOCITY_THRESHOLD:
+            st.under_attack_until = now + HOLD_MINUTES * 60
+            if now - st.last_alerted > ALERT_SUPPRESS_SECS:
+                st.last_alerted = now
+                logger.warning(
+                    "inbox_bombing_velocity_detected",
+                    rcpt=rcpt,
+                    pattern_emails_in_30s=velocity_pattern_count,
+                    window_secs=VELOCITY_WINDOW,
+                )
+                _alert_async(rcpt, velocity_pattern_count, 1.0, 0.0,
+                             trigger="velocity")
+            return True, True
+
+        # ── Full volume+pattern+diversity check ───────────────────────────────
         window = list(st.arrivals)  # snapshot
         n = len(window)
 
@@ -245,7 +274,8 @@ def stats() -> dict:
 
 # ── Slack alert ───────────────────────────────────────────────────────────────
 
-def _alert_async(rcpt: str, count: int, pattern_ratio: float, diversity_ratio: float) -> None:
+def _alert_async(rcpt: str, count: int, pattern_ratio: float, diversity_ratio: float,
+                 trigger: str = "volume") -> None:
     import threading as _thr
 
     def _send():
@@ -265,7 +295,8 @@ def _alert_async(rcpt: str, count: int, pattern_ratio: float, diversity_ratio: f
                 ]},
                 {"type": "section", "text": {"type": "mrkdwn",
                     "text": (
-                        f"⚠️ *Subscription bomb in progress.* All emails to `{rcpt}` are being "
+                        f"⚠️ *Subscription bomb in progress ({trigger} trigger).* "
+                        f"All emails to `{rcpt}` are being "
                         f"held in SOC Pending Review for {HOLD_MINUTES} minutes to prevent real "
                         f"phishing or OTP emails from being buried in the flood.\n\n"
                         f"_SOC: review and bulk-approve legitimate emails, then clear the hold via dashboard._"
