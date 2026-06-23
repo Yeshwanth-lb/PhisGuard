@@ -675,4 +675,31 @@ PHISHGUARD_DB_PATH=data/phishguard.db
 
 ---
 
-*This prompt fully specifies PhishGuard v1.5 as it exists after sessions 1-4 (2026-06-21 to 2026-06-22).*
+## Session 6 additions (2026-06-23)
+
+**MISP web UI fix:**
+Two custom nginx configs mounted into the MISP container:
+- `docker/misp-nginx-http.conf` → `/etc/nginx/sites-enabled/misp80` — redirects `http://localhost:8888` to `https://localhost:8443` (hardcoded port, not `$host` which strips port)
+- `docker/misp-nginx-https.conf` → `/etc/nginx/sites-enabled/misp443` — serves HTTPS without HSTS header (HSTS on localhost breaks other local services)
+
+MISP ports in docker-compose: `8888:80` + `8443:443`. Access via `http://localhost:8888` → browser redirects to `https://localhost:8443` → accept SSL cert warning → login `admin@admin.test` / `changeme123`.
+
+MISP admin password was reset via PHP bcrypt: `docker exec phishguard-misp php -r "echo password_hash('changeme123', PASSWORD_BCRYPT, ['cost'=>12]);"` then UPDATE in MySQL.
+
+connector-misp `MISP_URL` changed from `https://misp` to `http://misp` — port 443 wasn't ready at container startup time, port 80 always is.
+
+**Grafana dashboard fixed:**
+`docker/grafana/provisioning/dashboards/phishguard.json` had wrong metric names:
+- `http_request_duration_seconds_bucket` → `http_request_duration_highr_seconds_bucket`
+- `status_code=~"5.."` → `status="5xx"` (label name mismatch)
+- `http_requests_in_progress` → `sum(rate(http_requests_total[30s]))` (metric doesn't exist)
+- Datasource UID `PBFA97CFB590B2093` wired into all 8 panels
+
+**Known issues (not fixed):**
+- connector-misp v6.2.18 incompatible with MISP 2.5.40 API (GET vs POST on /events/restSearch) → OpenCTI has 0 objects
+- MISP web UI: internal nginx redirects strip port (nav links go to `https://localhost/` not `https://localhost:8443/`) — workaround: manually type `https://localhost:8443/events/index`
+
+**SMTP rate limiter demo override:**
+`.env` has `SMTP_RATE_PER_IP=200` and `SMTP_RATE_GLOBAL=200` for the email bombing demo (prevents per-IP limit from firing before bombing detector). Revert these for production.
+
+*This prompt fully specifies PhishGuard v1.5 as it exists after sessions 1-6 (2026-06-21 to 2026-06-23).*
