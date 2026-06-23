@@ -138,22 +138,32 @@ class PhishGuardSMTPHandler:
         routing_verdict = l2_verdict if l2_verdict in ("suspicious", "phishing") else final_verdict
 
         # ── Smart bombing response ────────────────────────────────────────────
-        # Holding ALL mail during a bombing attack would help the attacker —
-        # the whole point is to bury an OTP or bank alert. Instead:
-        #   HIGH-SIGNAL email (OTP, password reset, bank alert) → deliver immediately
-        #   Subscription noise / unknown → hold for SOC review
+        # DEFAULT: deliver (surface). Only hold if we positively identify
+        # subscription noise. Unknown subjects always surface — a held real
+        # bank/OTP alert is the worst failure mode this system can produce.
+        #
+        #   is_high_signal  → deliver immediately (explicit surface)
+        #   is_subscription → hold for SOC review  (explicit noise)
+        #   neither         → deliver              (default: err toward delivery)
         if _under_attack and routing_verdict == "clean":
-            from app.security.bombing_detector import is_high_signal as _is_high_signal
+            from app.security.bombing_detector import (
+                is_high_signal as _is_high_signal,
+                _matches_subscription_pattern as _is_subscription,
+            )
             if _is_high_signal(_subject_preview):
-                # Surface the needle — deliver immediately even during bombing
-                logger.info("smtp_bombing_high_signal_delivered", rcpt=_rcpt_for_bomb,
-                            subject=_subject_preview[:60])
+                logger.info("smtp_bombing_high_signal_delivered",
+                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
                 # routing_verdict stays "clean" → delivered normally
-            else:
-                # Suppress the noise — hold for SOC
+            elif _is_subscription(_subject_preview):
                 routing_verdict = "suspicious"
-                logger.info("smtp_bombing_hold_applied", rcpt=_rcpt_for_bomb,
-                            original_verdict="clean", forced_to="suspicious")
+                logger.info("smtp_bombing_subscription_held",
+                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
+            else:
+                # Unmatched subject — default to SURFACE, not hold.
+                # We don't know what this email is; holding it risks burying
+                # a critical alert that matches no pattern we wrote.
+                logger.info("smtp_bombing_unmatched_surfaced",
+                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
 
         # Extract metadata for logging/queue
         parsed  = result.get("parsed") or {}

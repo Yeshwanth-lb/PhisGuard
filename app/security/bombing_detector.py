@@ -61,20 +61,23 @@ import structlog
 
 logger = structlog.get_logger()
 
-# ── Tunable thresholds (can be overridden via env/config) ─────────────────────
-WINDOW_SECS              = 300    # 5-minute main detection window
-VOLUME_THRESHOLD         = 20     # min emails in window before scoring
-DIVERSITY_RATIO          = 0.70   # fraction from unseen domains → high signal
-PATTERN_RATIO            = 0.60   # fraction matching subscription subjects
-DETECT_SCORE_THRESHOLD   = 60     # score ≥ this → bombing detected
-HOLD_MINUTES             = 20     # hold duration after detection
-ALERT_SUPPRESS_SECS      = 600    # suppress repeat Slack alerts per recipient
+# ── Tunable thresholds — loaded from env, with documented defaults ─────────────
+import os as _os
 
-VELOCITY_WINDOW          = 30     # seconds for early velocity check
-VELOCITY_THRESHOLD       = 5      # subscription emails in VELOCITY_WINDOW → bot
+def _int(key: str, default: int)   -> int:   return int(_os.environ.get(key, default))
+def _float(key: str, default: float) -> float: return float(_os.environ.get(key, default))
 
-COLD_START_MIN_HISTORY   = 10     # min seen domains before diversity is trusted
-MAX_SEEN_DOMAINS         = 500    # cap per recipient to bound memory
+WINDOW_SECS            = _int  ("BOMBING_WINDOW_SECS",          300)
+VOLUME_THRESHOLD       = _int  ("BOMBING_VOLUME_THRESHOLD",       20)
+DIVERSITY_RATIO        = _float("BOMBING_DIVERSITY_RATIO",       0.70)
+PATTERN_RATIO          = _float("BOMBING_PATTERN_RATIO",         0.60)
+DETECT_SCORE_THRESHOLD = _int  ("BOMBING_DETECT_SCORE",           60)
+HOLD_MINUTES           = _int  ("BOMBING_HOLD_MINUTES",           20)
+ALERT_SUPPRESS_SECS    = _int  ("BOMBING_ALERT_SUPPRESS_SECS",   600)
+VELOCITY_WINDOW        = _int  ("BOMBING_VELOCITY_WINDOW_SECS",   30)
+VELOCITY_THRESHOLD     = _int  ("BOMBING_VELOCITY_THRESHOLD",      5)
+COLD_START_MIN_HISTORY = _int  ("BOMBING_COLD_START_MIN_HISTORY", 10)
+MAX_SEEN_DOMAINS       = _int  ("BOMBING_MAX_SEEN_DOMAINS",      500)
 
 # ── Subscription subject patterns (confidence booster, not hard gate) ─────────
 _SUBSCRIPTION_RES = [
