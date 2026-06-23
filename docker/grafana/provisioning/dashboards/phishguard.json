@@ -4,119 +4,269 @@
   "schemaVersion": 38,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "title": "Request Rate (req/s)",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "rate(http_requests_total{job=\"phishguard\"}[1m])",
-          "legendFormat": "{{method}} {{handler}} {{status_code}}"
+          "legendFormat": "{{method}} {{handler}} {{status_code}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 2,
       "title": "Error Rate (5xx/s)",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
-          "expr": "rate(http_requests_total{job=\"phishguard\",status_code=~\"5..\"}[1m])",
-          "legendFormat": "{{handler}}"
+          "expr": "rate(http_requests_total{job=\"phishguard\",status=\"5xx\"}[1m])",
+          "legendFormat": "{{handler}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 3,
       "title": "Request Latency p50 / p95 / p99",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"phishguard\"}[1m]))",
-          "legendFormat": "p50"
+          "expr": "histogram_quantile(0.50, rate(http_request_duration_highr_seconds_bucket{job=\"phishguard\"}[1m]))",
+          "legendFormat": "p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         },
         {
-          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"phishguard\"}[1m]))",
-          "legendFormat": "p95"
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_highr_seconds_bucket{job=\"phishguard\"}[1m]))",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         },
         {
-          "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"phishguard\"}[1m]))",
-          "legendFormat": "p99"
+          "expr": "histogram_quantile(0.99, rate(http_request_duration_highr_seconds_bucket{job=\"phishguard\"}[1m]))",
+          "legendFormat": "p99",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 4,
       "title": "/analyze Scan Rate",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "rate(http_requests_total{job=\"phishguard\",handler=\"/analyze\"}[1m])",
-          "legendFormat": "{{status_code}}"
+          "legendFormat": "{{status_code}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 5,
       "title": "/analyze p95 Latency",
       "type": "stat",
-      "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
-      "options": { "unit": "s", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "options": {
+        "unit": "s",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"phishguard\",handler=\"/analyze\"}[5m]))",
-          "legendFormat": "p95"
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_highr_seconds_bucket{job=\"phishguard\",handler=\"/analyze\"}[5m]))",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 6,
       "title": "Active Requests",
       "type": "stat",
-      "gridPos": { "x": 6, "y": 16, "w": 6, "h": 4 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": {
+        "x": 6,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "targets": [
         {
-          "expr": "http_requests_in_progress{job=\"phishguard\"}",
-          "legendFormat": "in-flight"
+          "expr": "sum(rate(http_requests_total{job=\"phishguard\"}[30s]))",
+          "legendFormat": "in-flight",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 7,
       "title": "Total Requests",
       "type": "stat",
-      "gridPos": { "x": 12, "y": 16, "w": 6, "h": 4 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "targets": [
         {
           "expr": "sum(http_requests_total{job=\"phishguard\"})",
-          "legendFormat": "total"
+          "legendFormat": "total",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     },
     {
       "id": 8,
       "title": "5xx Error Total",
       "type": "stat",
-      "gridPos": { "x": 18, "y": 16, "w": 6, "h": 4 },
+      "gridPos": {
+        "x": 18,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "background",
-        "thresholds": { "steps": [{"color": "green","value": 0},{"color": "red","value": 1}] }
+        "thresholds": {
+          "steps": [
+            {
+              "color": "green",
+              "value": 0
+            },
+            {
+              "color": "red",
+              "value": 1
+            }
+          ]
+        }
       },
       "targets": [
         {
-          "expr": "sum(http_requests_total{job=\"phishguard\",status_code=~\"5..\"})",
-          "legendFormat": "5xx"
+          "expr": "sum(http_requests_total{job=\"phishguard\",status=\"5xx\"})",
+          "legendFormat": "5xx",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      }
     }
-  ]
+  ],
+  "__inputs": []
 }
