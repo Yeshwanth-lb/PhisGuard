@@ -31,10 +31,11 @@ import structlog
 logger = structlog.get_logger()
 
 # ── Tunable limits ────────────────────────────────────────────────────────────
-PER_IP_LIMIT     = 10    # emails per IP per minute
-PER_DOMAIN_LIMIT = 20    # emails per sender domain per hour
-PER_RCPT_LIMIT   = 30    # emails to same recipient per minute (stops distributed bombing)
-GLOBAL_LIMIT     = 60    # emails total per minute
+import os as _rl_os
+PER_IP_LIMIT     = int(_rl_os.environ.get("SMTP_RATE_PER_IP",    10))   # emails per IP per minute
+PER_DOMAIN_LIMIT = int(_rl_os.environ.get("SMTP_RATE_PER_DOMAIN",20))   # emails per sender domain per hour
+PER_RCPT_LIMIT   = int(_rl_os.environ.get("SMTP_RATE_PER_RCPT",  30))   # emails to same recipient per minute
+GLOBAL_LIMIT     = int(_rl_os.environ.get("SMTP_RATE_GLOBAL",    60))   # emails total per minute
 
 BURST_WINDOW     = 10    # seconds — detect rapid bursts
 BURST_THRESHOLD  = 5     # emails within BURST_WINDOW = bombing
