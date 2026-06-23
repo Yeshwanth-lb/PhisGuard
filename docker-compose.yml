@@ -157,10 +157,11 @@ services:
       - MYSQL_PASSWORD=misp_db_pass
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - MISP_BASEURL=http://localhost:8888
+      - MISP_BASEURL=https://localhost:8443
       - MISP_ORG=PhishGuard
     ports:
-      - "8888:80"    # MISP web UI
+      - "8888:80"    # MISP HTTP (redirects to HTTPS)
+      - "8443:443"   # MISP HTTPS UI — use https://localhost:8443
     volumes:
       - misp_data:/var/www/MISP
       - ./docker/misp-cert.pem:/etc/nginx/certs/cert.pem:ro
@@ -261,8 +262,8 @@ services:
       - CONNECTOR_NAME=MISP PhishGuard
       - CONNECTOR_SCOPE=misp-galaxy,misp-attack-pattern,misp-course-of-action,misp-intrusion-set,misp-malware,misp-tool,misp-vulnerability
       - CONNECTOR_LOG_LEVEL=error
-      - MISP_URL=https://misp
-      - MISP_REFERENCE_URL=http://localhost:8888
+      - MISP_URL=http://misp
+      - MISP_REFERENCE_URL=https://localhost:8443
       - MISP_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
       - MISP_SSL=false
       - MISP_VERIFYCERT=false
