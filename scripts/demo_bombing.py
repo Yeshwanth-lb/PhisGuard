@@ -62,68 +62,78 @@ BOMBING_EMAILS = [
 ]
 
 
-def send(mail_from, subject, colour, label):
+_results: list = []
+_results_lock = __import__("threading").Lock()
+
+
+def _send_one(i: int, mail_from: str, subject: str, colour: str, label: str) -> None:
     msg = MIMEText("This is a test email for bombing detection demo.")
     msg["From"]    = mail_from
     msg["To"]      = VICTIM
     msg["Subject"] = subject
     try:
-        with smtplib.SMTP(PHISHGUARD_HOST, PHISHGUARD_PORT, timeout=10) as s:
+        with smtplib.SMTP(PHISHGUARD_HOST, PHISHGUARD_PORT, timeout=30) as s:
             s.ehlo()
             s.sendmail(mail_from, [VICTIM], msg.as_bytes())
-        print(f"  {colour}✓ Accepted{RESET}  {label:<30} \"{subject}\"")
-        return True
+        with _results_lock:
+            _results.append((i, True, colour, label, subject, None))
     except smtplib.SMTPResponseException as e:
-        if e.smtp_code == 421:
-            print(f"  {RED}✗ 421 RATE LIMITED{RESET}  \"{subject}\" — hit per-IP limit before bombing detector!")
-            print(f"  {YELLOW}  Fix: set SMTP_RATE_PER_IP=200 in app env and restart{RESET}")
-        else:
-            print(f"  {RED}✗ SMTP {e.smtp_code}{RESET}  \"{subject}\"")
-        return False
+        with _results_lock:
+            _results.append((i, False, RED, label, subject, f"SMTP {e.smtp_code}"))
     except Exception as e:
-        print(f"  {RED}✗ Error: {e}{RESET}")
-        return False
+        with _results_lock:
+            _results.append((i, False, RED, label, subject, str(e)))
 
 
 def main():
+    import threading
     parser = argparse.ArgumentParser()
     parser.add_argument("--delay", type=float, default=0.3,
-                        help="Seconds between emails (default 0.3 — fast enough for velocity trigger)")
+                        help="Seconds between launching each thread (default 0.3)")
     args = parser.parse_args()
 
     print(f"\n{BOLD}{CYAN}PhishGuard — Inbox Bombing Detection Demo{RESET}")
-    print(f"{CYAN}Sending {len(BOMBING_EMAILS)} emails to {VICTIM}{RESET}")
-    print(f"{CYAN}Delay: {args.delay}s between emails{RESET}\n")
+    print(f"{CYAN}Sending {len(BOMBING_EMAILS)} emails to {VICTIM} concurrently{RESET}")
+    print(f"{CYAN}Thread launch interval: {args.delay}s — emails arrive rapidly in parallel{RESET}\n")
     print("─" * 65)
-    print(f"\n{YELLOW}NOTE: If emails start returning 421 after email 10,{RESET}")
-    print(f"{YELLOW}the SMTP per-IP rate limiter fired before the bombing detector.{RESET}")
-    print(f"{YELLOW}Fix: docker exec --user root phishguard-app sh -c{RESET}")
-    print(f"{YELLOW}  'kill -HUP 1'  # or restart with SMTP_RATE_PER_IP=200{RESET}\n")
 
+    threads = []
     for i, (mail_from, subject) in enumerate(BOMBING_EMAILS, 1):
         if "one-time password" in subject.lower() or "otp" in subject.lower():
-            colour = GREEN
-            label  = f"[{i:2d}] OTP — should SURFACE"
-        elif subject.lower().startswith(("can ", "hi ", "re:", "fwd:", "meeting", "call")):
-            colour = GREEN
-            label  = f"[{i:2d}] Normal — should SURFACE"
+            colour, label = GREEN, f"[{i:2d}] OTP — should SURFACE"
+        elif any(subject.lower().startswith(w) for w in ("can ", "hi ", "re:", "meeting", "call", "resc")):
+            colour, label = GREEN, f"[{i:2d}] Normal — should SURFACE"
         else:
-            colour = YELLOW
-            label  = f"[{i:2d}] Subscription — should HOLD"
+            colour, label = YELLOW, f"[{i:2d}] Subscription — should HOLD"
 
-        ok = send(mail_from, subject, colour, label)
-        if not ok:
-            break
+        t = threading.Thread(target=_send_one,
+                             args=(i, mail_from, subject, colour, label),
+                             daemon=True)
+        t.start()
+        threads.append(t)
+        print(f"  {colour}→ Launched{RESET}  {label:<34} \"{subject}\"")
         time.sleep(args.delay)
 
+    print(f"\n{CYAN}All {len(BOMBING_EMAILS)} threads launched — waiting for SMTP accepts...{RESET}")
+    for t in threads:
+        t.join(timeout=35)
+
+    _results.sort(key=lambda r: r[0])
+    print(f"\n{BOLD}Results:{RESET}")
+    for _, ok, colour, label, subject, err in _results:
+        if ok:
+            print(f"  {colour}✓ Accepted{RESET}  {label}")
+        else:
+            print(f"  {RED}✗ {err}{RESET}  {label}")
+
     print("\n" + "─" * 65)
-    print(f"\n{BOLD}What to look for:{RESET}")
-    print(f"  {YELLOW}inbox_bombing_velocity_detected{RESET}  — fires after email 5 (30s window)")
-    print(f"  {YELLOW}smtp_bombing_subscription_held{RESET}   — subscription noise captured")
-    print(f"  {GREEN}smtp_bombing_high_signal_delivered{RESET} — OTP surfaces despite hold")
-    print(f"  {GREEN}smtp_bombing_unmatched_surfaced{RESET}    — normal email delivers")
-    print(f"\n  {CYAN}Dashboard: http://localhost:8000 → Overview tab (orange banner){RESET}")
-    print(f"  {CYAN}Logs: docker compose logs -f app | grep bombing{RESET}\n")
+    print(f"\n{BOLD}What to look for in logs:{RESET}")
+    print(f"  {YELLOW}inbox_bombing_velocity_detected{RESET}   — fires after 5 subscription emails in 30s")
+    print(f"  {YELLOW}smtp_bombing_subscription_held{RESET}    — subscription noise held for SOC")
+    print(f"  {GREEN}smtp_bombing_high_signal_delivered{RESET} — OTP delivered despite active hold")
+    print(f"  {GREEN}smtp_bombing_unmatched_surfaced{RESET}    — normal business email delivered")
+    print(f"\n  {CYAN}Check logs:     docker compose logs -f app | grep bombing{RESET}")
+    print(f"  {CYAN}Dashboard:      http://localhost:8000 → Overview tab (orange banner){RESET}\n")
 
 
 if __name__ == "__main__":
