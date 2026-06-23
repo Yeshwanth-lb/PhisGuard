@@ -137,14 +137,23 @@ class PhishGuardSMTPHandler:
         l2_verdict = result.get("l2", {}).get("verdict", final_verdict) if result.get("l2") else final_verdict
         routing_verdict = l2_verdict if l2_verdict in ("suspicious", "phishing") else final_verdict
 
-        # ── Bombing override — force-hold during active attack ────────────────
-        # When an inbox is under a subscription bomb, even legitimate clean
-        # emails are held for SOC review. This prevents real phishing or OTP
-        # emails from being buried in the flood where the user can't see them.
+        # ── Smart bombing response ────────────────────────────────────────────
+        # Holding ALL mail during a bombing attack would help the attacker —
+        # the whole point is to bury an OTP or bank alert. Instead:
+        #   HIGH-SIGNAL email (OTP, password reset, bank alert) → deliver immediately
+        #   Subscription noise / unknown → hold for SOC review
         if _under_attack and routing_verdict == "clean":
-            routing_verdict = "suspicious"
-            logger.info("smtp_bombing_hold_applied", rcpt=_rcpt_for_bomb,
-                        original_verdict="clean", forced_to="suspicious")
+            from app.security.bombing_detector import is_high_signal as _is_high_signal
+            if _is_high_signal(_subject_preview):
+                # Surface the needle — deliver immediately even during bombing
+                logger.info("smtp_bombing_high_signal_delivered", rcpt=_rcpt_for_bomb,
+                            subject=_subject_preview[:60])
+                # routing_verdict stays "clean" → delivered normally
+            else:
+                # Suppress the noise — hold for SOC
+                routing_verdict = "suspicious"
+                logger.info("smtp_bombing_hold_applied", rcpt=_rcpt_for_bomb,
+                            original_verdict="clean", forced_to="suspicious")
 
         # Extract metadata for logging/queue
         parsed  = result.get("parsed") or {}

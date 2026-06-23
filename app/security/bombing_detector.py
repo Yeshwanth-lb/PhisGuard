@@ -1,28 +1,56 @@
 """Email bombing detector — subscription bomb and inbox flooding detection.
 
-Detects coordinated inbox bombing attacks where attackers sign the victim
-up to hundreds of legitimate services (newsletters, e-commerce, forums)
-causing a flood of SPF/DKIM-passing emails from diverse sources.
+DETECTION MODEL
+===============
+Three signals scored independently, combined as weighted sum (not hard AND).
+This makes detection language-independent: volume + diversity alone is enough.
+Subject pattern is a confidence booster, not a veto gate.
 
-WHY THIS WORKS despite the attacker using 500 different legitimate domains:
-  The attacker cannot change who the VICTIM is. The recipient address is
-  the invariant. We detect the attack by watching the RECIPIENT, not the
-  sender. Three signals must coalesce to avoid false positives:
+  Signal            Weight  Language-independent?
+  Volume spike        40    Yes — raw count, no NLP
+  Sender diversity    40    Yes — domain comparison
+  Subject pattern     20    No  — English regex, optional
 
-  1. VOLUME SPIKE     — recipient receives N× baseline in a short window
-  2. SUBJECT PATTERN  — majority match subscription/welcome/verify patterns
-  3. SENDER DIVERSITY — most senders are domains never seen from before
+Detection fires when score >= DETECT_SCORE_THRESHOLD (default 60).
+This means:
+  volume + high diversity (non-English bomb)  = 80 → DETECTED
+  volume + pattern (low-diversity newsletter) = 60 → DETECTED
+  volume alone (company blast)                = 40 → not detected
+  diversity + pattern (low volume)            =  0 → not detected (gated by volume)
 
-All three together = subscription bomb with high confidence.
-Any one alone = too many false positives (a real newsletter blast triggers
-volume; a company all-hands triggers diversity; a welcome email is pattern).
+EARLY VELOCITY PATH
+===================
+5 subscription-pattern emails in 30s = bot speed → hold immediately.
+Fires before reaching volume threshold so first 4 emails arrive, hold is
+active before email 5. Pattern still required to avoid false-positive on
+legitimate email bursts (company all-hands CC).
 
-Response:
-  - Fires a dedicated Slack alert ("inbox under attack")
-  - Marks recipient as UNDER_ATTACK for HOLD_MINUTES minutes
-  - While under attack, ALL emails to that recipient are held for SOC
-    review regardless of verdict — prevents real phishing/OTP being
-    buried in the flood
+SMART RESPONSE
+==============
+Holding ALL mail during a bombing attack can harm the user — the whole
+point of the attack is to bury a real OTP/password-reset/bank alert.
+Response is tiered:
+
+  Email is HIGH-SIGNAL (OTP, reset, bank, security alert)
+    → deliver immediately, tag PhishGuard-Priority
+    → OTP never gets buried even during active bombing hold
+
+  Email is subscription noise (matches subscription patterns)
+    → hold for SOC review
+
+  Email is neither (normal business email during hold window)
+    → hold for SOC review (cautious, SOC can bulk-approve)
+
+COLD-START GRACE PERIOD
+========================
+A new mailbox has seen 0 domains so diversity is always 100%.
+When seen_domain history < COLD_START_MIN_HISTORY, the diversity signal
+is downweighted so new employees are not flagged on first day.
+
+MEMORY SAFETY
+=============
+seen_domains is capped at MAX_SEEN_DOMAINS per recipient. Arrivals deque
+is pruned on every record() call — no unbounded growth.
 """
 import re
 import threading
@@ -33,23 +61,22 @@ import structlog
 
 logger = structlog.get_logger()
 
-# ── Tunable thresholds ────────────────────────────────────────────────────────
-WINDOW_SECS          = 300      # 5-minute sliding detection window
-VOLUME_THRESHOLD     = 20       # emails in window to consider "spike"
-PATTERN_RATIO        = 0.60     # fraction of emails matching subscription pattern
-DIVERSITY_RATIO      = 0.70     # fraction of emails from unseen sender domains
-HOLD_MINUTES         = 20       # minutes to hold ALL emails after attack detected
-ALERT_SUPPRESS_SECS  = 600      # don't re-alert same recipient within 10 min
+# ── Tunable thresholds (can be overridden via env/config) ─────────────────────
+WINDOW_SECS              = 300    # 5-minute main detection window
+VOLUME_THRESHOLD         = 20     # min emails in window before scoring
+DIVERSITY_RATIO          = 0.70   # fraction from unseen domains → high signal
+PATTERN_RATIO            = 0.60   # fraction matching subscription subjects
+DETECT_SCORE_THRESHOLD   = 60     # score ≥ this → bombing detected
+HOLD_MINUTES             = 20     # hold duration after detection
+ALERT_SUPPRESS_SECS      = 600    # suppress repeat Slack alerts per recipient
 
-# ── Early velocity detection (catches the attack sooner) ─────────────────────
-# If VELOCITY_THRESHOLD subscription-pattern emails arrive within VELOCITY_WINDOW
-# seconds that is clearly bot-speed behaviour — no human signs up to 5 newsletters
-# in 30 seconds. Fire the hold immediately without waiting for VOLUME_THRESHOLD.
-# Lower false-positive risk: pattern check is still required (not just raw volume).
-VELOCITY_WINDOW      = 30       # seconds — short burst window
-VELOCITY_THRESHOLD   = 5        # subscription-pattern emails in that window = bomb
+VELOCITY_WINDOW          = 30     # seconds for early velocity check
+VELOCITY_THRESHOLD       = 5      # subscription emails in VELOCITY_WINDOW → bot
 
-# ── Subscription bomb subject patterns ───────────────────────────────────────
+COLD_START_MIN_HISTORY   = 10     # min seen domains before diversity is trusted
+MAX_SEEN_DOMAINS         = 500    # cap per recipient to bound memory
+
+# ── Subscription subject patterns (confidence booster, not hard gate) ─────────
 _SUBSCRIPTION_RES = [
     re.compile(p, re.IGNORECASE) for p in [
         r"confirm\s+(your\s+)?(email|account|subscription|registration|address)",
@@ -67,10 +94,29 @@ _SUBSCRIPTION_RES = [
     ]
 ]
 
+# ── High-signal subjects — surface immediately even during bombing hold ────────
+_HIGH_SIGNAL_RES = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"(one.?time|otp|verification)\s*(code|password|pin)",
+        r"(password|account)\s*reset",
+        r"new\s*(device|sign.?in|login|location)\s*(detected|alert)?",
+        r"security\s*(alert|code|notification|warning)",
+        r"(payment|transaction|wire\s*transfer)\s*(alert|notification|received)?",
+        r"unusual\s*(activity|sign.?in|access|login)",
+        r"(your\s+)?(bank|financial)\s*(alert|notification|message)",
+        r"(login|sign.?in)\s*(attempt|from\s+new)",
+        r"your\s+(account|card)\s+(was|has\s+been)\s+(charged|debited|used)",
+    ]
+]
+
+
+def is_high_signal(subject: str) -> bool:
+    """True for emails that should bypass the bombing hold — OTPs, resets, bank alerts."""
+    return any(rx.search(subject or "") for rx in _HIGH_SIGNAL_RES)
+
 
 def _matches_subscription_pattern(subject: str) -> bool:
-    s = subject.strip()
-    return any(rx.search(s) for rx in _SUBSCRIPTION_RES)
+    return any(rx.search(subject or "") for rx in _SUBSCRIPTION_RES)
 
 
 def _sender_domain(sender: str) -> str:
@@ -82,21 +128,53 @@ def _sender_domain(sender: str) -> str:
     return addr.split("@")[-1] if "@" in addr else addr
 
 
+def _compute_score(n: int, pattern_ratio: float, diversity_ratio: float,
+                   history_size: int) -> int:
+    """
+    Compute bombing confidence score 0–100.
+    Volume gates everything. Diversity + pattern are independent signals.
+    Cold-start: downweight diversity when history is thin.
+    """
+    if n < VOLUME_THRESHOLD:
+        return 0
+
+    score = 40  # volume threshold passed
+
+    # Diversity signal (language-independent, strong)
+    if history_size >= COLD_START_MIN_HISTORY:
+        if diversity_ratio >= DIVERSITY_RATIO:
+            score += 40
+        elif diversity_ratio >= 0.50:
+            score += 20
+    else:
+        # Not enough history — partial credit to avoid cold-start false negatives
+        if diversity_ratio >= 0.90:
+            score += 20   # extremely high diversity even without history = suspicious
+
+    # Pattern signal (English, optional booster)
+    if pattern_ratio >= PATTERN_RATIO:
+        score += 20
+    elif pattern_ratio >= 0.30:
+        score += 10
+
+    return score
+
+
 # ── Per-recipient state ───────────────────────────────────────────────────────
 
 class _RecipientState:
     __slots__ = (
-        "arrivals",          # deque of (ts, sender_domain, is_pattern_match)
-        "seen_domains",      # set of all domains ever seen for this recipient
-        "under_attack_until",# monotonic timestamp when attack hold expires (0 = not active)
-        "last_alerted",      # last time Slack alert fired
+        "arrivals",           # deque of (ts, sender_domain, is_pattern_match)
+        "seen_domains",       # set of all sender domains ever seen (capped)
+        "under_attack_until", # monotonic ts when hold expires (0 = not active)
+        "last_alerted",       # last Slack alert ts
     )
 
     def __init__(self):
-        self.arrivals:           deque  = deque()
-        self.seen_domains:       set    = set()
-        self.under_attack_until: float  = 0.0
-        self.last_alerted:       float  = 0.0
+        self.arrivals:           deque = deque()
+        self.seen_domains:       set   = set()
+        self.under_attack_until: float = 0.0
+        self.last_alerted:       float = 0.0
 
 
 _lock  = threading.Lock()
@@ -109,7 +187,7 @@ def _get_or_create(rcpt: str) -> _RecipientState:
     return _state[rcpt]
 
 
-def _prune_window(arrivals: deque, now: float) -> None:
+def _prune(arrivals: deque, now: float) -> None:
     while arrivals and arrivals[0][0] < now - WINDOW_SECS:
         arrivals.popleft()
 
@@ -120,101 +198,82 @@ def record(rcpt: str, sender_email: str, subject: str) -> tuple[bool, bool]:
     """
     Record an arriving email and evaluate the bombing score.
 
-    Returns:
-      (is_under_attack, newly_detected)
-
-      is_under_attack  — True if recipient is currently in the hold window
-                         (caller should route to SOC Pending Review)
-      newly_detected   — True if this call triggered the detection
-                         (caller should fire a Slack alert)
+    Returns (is_under_attack, newly_detected).
+      is_under_attack  — caller should adjust routing
+      newly_detected   — caller should log; Slack alert fires internally
     """
     if not rcpt:
         return False, False
 
-    rcpt   = rcpt.strip().lower()
-    domain = _sender_domain(sender_email)
+    rcpt       = rcpt.strip().lower()
+    domain     = _sender_domain(sender_email)
     is_pattern = _matches_subscription_pattern(subject or "")
-    now    = time.monotonic()
+    now        = time.monotonic()
 
     with _lock:
         st = _get_or_create(rcpt)
+        _prune(st.arrivals, now)
 
-        # Prune stale entries
-        _prune_window(st.arrivals, now)
+        # Already under attack — don't re-evaluate, just report
+        if now < st.under_attack_until:
+            st.arrivals.append((now, domain, is_pattern))
+            if len(st.seen_domains) < MAX_SEEN_DOMAINS:
+                st.seen_domains.add(domain)
+            return True, False
 
         # Record this email
         st.arrivals.append((now, domain, is_pattern))
-        st.seen_domains.add(domain)
+        if len(st.seen_domains) < MAX_SEEN_DOMAINS:
+            st.seen_domains.add(domain)
 
-        # If already under attack, just extend visibility
-        if now < st.under_attack_until:
-            return True, False
+        # ── Early velocity path ───────────────────────────────────────────────
+        vel_emails  = [e for e in st.arrivals if e[0] >= now - VELOCITY_WINDOW]
+        vel_pattern = sum(1 for _, _, p in vel_emails if p)
+        if vel_pattern >= VELOCITY_THRESHOLD:
+            return _trigger(st, rcpt, len(vel_emails), 1.0, 0.0, now, "velocity")
 
-        # ── Early velocity check (fires before VOLUME_THRESHOLD) ─────────────
-        # If VELOCITY_THRESHOLD subscription-pattern emails arrive within
-        # VELOCITY_WINDOW seconds → bot-speed sign-ups, hold immediately.
-        # Pattern is required so a burst of legitimate direct emails (e.g.
-        # company all-hands CC) doesn't trigger a false positive.
-        velocity_window_emails = [e for e in st.arrivals if e[0] >= now - VELOCITY_WINDOW]
-        velocity_pattern_count = sum(1 for _, _, p in velocity_window_emails if p)
-        if velocity_pattern_count >= VELOCITY_THRESHOLD:
-            st.under_attack_until = now + HOLD_MINUTES * 60
-            if now - st.last_alerted > ALERT_SUPPRESS_SECS:
-                st.last_alerted = now
-                logger.warning(
-                    "inbox_bombing_velocity_detected",
-                    rcpt=rcpt,
-                    pattern_emails_in_30s=velocity_pattern_count,
-                    window_secs=VELOCITY_WINDOW,
-                )
-                _alert_async(rcpt, velocity_pattern_count, 1.0, 0.0,
-                             trigger="velocity")
-            return True, True
-
-        # ── Full volume+pattern+diversity check ───────────────────────────────
-        window = list(st.arrivals)  # snapshot
-        n = len(window)
+        # ── Full scoring path ─────────────────────────────────────────────────
+        window = list(st.arrivals)
+        n      = len(window)
 
         if n < VOLUME_THRESHOLD:
             return False, False
 
-        # Pattern ratio
-        pattern_count = sum(1 for _, _, p in window if p)
-        pattern_ratio = pattern_count / n
+        pattern_count  = sum(1 for _, _, p in window if p)
+        pattern_ratio  = pattern_count / n
 
-        # Sender diversity — fraction from domains NOT seen before this window
-        window_domains = [d for _, d, _ in window]
-        window_start_seen = st.seen_domains - set(window_domains)  # seen BEFORE window
-        new_domain_count = sum(1 for d in window_domains if d not in window_start_seen)
-        diversity_ratio = new_domain_count / n
+        window_domains     = [d for _, d, _ in window]
+        pre_window_seen    = st.seen_domains - set(window_domains)
+        new_domain_count   = sum(1 for d in window_domains if d not in pre_window_seen)
+        diversity_ratio    = new_domain_count / n
 
-        # All three signals must coalesce
-        if pattern_ratio < PATTERN_RATIO or diversity_ratio < DIVERSITY_RATIO:
+        score = _compute_score(n, pattern_ratio, diversity_ratio, len(st.seen_domains))
+
+        if score < DETECT_SCORE_THRESHOLD:
             return False, False
 
-        # ── Bombing confirmed ─────────────────────────────────────────────────
-        st.under_attack_until = now + HOLD_MINUTES * 60
-        newly_detected = True
+        return _trigger(st, rcpt, n, pattern_ratio, diversity_ratio, now,
+                        f"score={score}")
 
-        logger.warning(
-            "inbox_bombing_detected",
-            rcpt=rcpt,
-            emails_in_window=n,
-            pattern_ratio=round(pattern_ratio, 2),
-            diversity_ratio=round(diversity_ratio, 2),
-            hold_until_mins=HOLD_MINUTES,
-        )
 
-        # Slack alert (suppressed if fired recently)
-        if now - st.last_alerted > ALERT_SUPPRESS_SECS:
-            st.last_alerted = now
-            _alert_async(rcpt, n, pattern_ratio, diversity_ratio)
-
-        return True, True
+def _trigger(st: _RecipientState, rcpt: str, count: int,
+             pattern_ratio: float, diversity_ratio: float,
+             now: float, trigger: str) -> tuple[bool, bool]:
+    st.under_attack_until = now + HOLD_MINUTES * 60
+    logger.warning(
+        "inbox_bombing_detected",
+        rcpt=rcpt, emails=count, trigger=trigger,
+        pattern_pct=round(pattern_ratio * 100),
+        diversity_pct=round(diversity_ratio * 100),
+        hold_mins=HOLD_MINUTES,
+    )
+    if now - st.last_alerted > ALERT_SUPPRESS_SECS:
+        st.last_alerted = now
+        _alert_async(rcpt, count, pattern_ratio, diversity_ratio, trigger)
+    return True, True
 
 
 def is_under_attack(rcpt: str) -> bool:
-    """Check if a recipient is currently in the hold window."""
     if not rcpt:
         return False
     rcpt = rcpt.strip().lower()
@@ -225,7 +284,6 @@ def is_under_attack(rcpt: str) -> bool:
 
 
 def clear_attack(rcpt: str) -> None:
-    """SOC manually clears the bombing hold for a recipient."""
     rcpt = rcpt.strip().lower()
     with _lock:
         st = _state.get(rcpt)
@@ -235,21 +293,19 @@ def clear_attack(rcpt: str) -> None:
 
 
 def active_attacks() -> list[dict]:
-    """Return all recipients currently under a bombing hold."""
     now = time.monotonic()
     out = []
     with _lock:
         for rcpt, st in _state.items():
             if now < st.under_attack_until:
                 window = list(st.arrivals)
-                _prune_window(deque(window), now)
-                n = len(window)
-                secs_remaining = int(st.under_attack_until - now)
+                _prune(deque(window), now)
+                secs_left = int(st.under_attack_until - now)
                 out.append({
-                    "rcpt": rcpt,
-                    "emails_in_window": n,
-                    "hold_expires_in_secs": secs_remaining,
-                    "hold_expires_in_mins": round(secs_remaining / 60, 1),
+                    "rcpt":                 rcpt,
+                    "emails_in_window":     len(window),
+                    "hold_expires_in_secs": secs_left,
+                    "hold_expires_in_mins": round(secs_left / 60, 1),
                 })
     return out
 
@@ -263,19 +319,21 @@ def stats() -> dict:
             "active_attacks":     len(attacks),
             "attacked_inboxes":   attacks,
             "thresholds": {
-                "window_secs":       WINDOW_SECS,
-                "volume_threshold":  VOLUME_THRESHOLD,
-                "pattern_ratio":     PATTERN_RATIO,
-                "diversity_ratio":   DIVERSITY_RATIO,
-                "hold_minutes":      HOLD_MINUTES,
+                "window_secs":             WINDOW_SECS,
+                "volume_threshold":        VOLUME_THRESHOLD,
+                "diversity_ratio":         DIVERSITY_RATIO,
+                "pattern_ratio":           PATTERN_RATIO,
+                "detect_score_threshold":  DETECT_SCORE_THRESHOLD,
+                "hold_minutes":            HOLD_MINUTES,
+                "velocity_window_secs":    VELOCITY_WINDOW,
+                "velocity_threshold":      VELOCITY_THRESHOLD,
+                "cold_start_min_history":  COLD_START_MIN_HISTORY,
             },
         }
 
 
-# ── Slack alert ───────────────────────────────────────────────────────────────
-
-def _alert_async(rcpt: str, count: int, pattern_ratio: float, diversity_ratio: float,
-                 trigger: str = "volume") -> None:
+def _alert_async(rcpt: str, count: int, pattern_ratio: float,
+                 diversity_ratio: float, trigger: str) -> None:
     import threading as _thr
 
     def _send():
@@ -289,22 +347,19 @@ def _alert_async(rcpt: str, count: int, pattern_ratio: float, diversity_ratio: f
                     "text": "🌊 PhishGuard — Inbox Bombing Attack Detected"}},
                 {"type": "section", "fields": [
                     {"type": "mrkdwn", "text": f"*Target inbox:*\n`{rcpt}`"},
-                    {"type": "mrkdwn", "text": f"*Emails in 5 min:*\n{count}"},
-                    {"type": "mrkdwn", "text": f"*Subscription pattern:*\n{round(pattern_ratio*100)}% match"},
-                    {"type": "mrkdwn", "text": f"*New sender domains:*\n{round(diversity_ratio*100)}% unseen"},
+                    {"type": "mrkdwn", "text": f"*Emails in window:*\n{count}"},
+                    {"type": "mrkdwn", "text": f"*Trigger:*\n`{trigger}`"},
+                    {"type": "mrkdwn", "text": f"*Pattern match:*\n{round(pattern_ratio*100)}%"},
+                    {"type": "mrkdwn", "text": f"*New domains:*\n{round(diversity_ratio*100)}%"},
+                    {"type": "mrkdwn", "text": f"*Hold duration:*\n{HOLD_MINUTES} minutes"},
                 ]},
                 {"type": "section", "text": {"type": "mrkdwn",
                     "text": (
-                        f"⚠️ *Subscription bomb in progress ({trigger} trigger).* "
-                        f"All emails to `{rcpt}` are being "
-                        f"held in SOC Pending Review for {HOLD_MINUTES} minutes to prevent real "
-                        f"phishing or OTP emails from being buried in the flood.\n\n"
-                        f"_SOC: review and bulk-approve legitimate emails, then clear the hold via dashboard._"
+                        f"⚠️ *Subscription bomb in progress.*\n"
+                        f"• Subscription noise → held for SOC review\n"
+                        f"• OTP/password-reset/bank emails → delivered immediately\n"
+                        f"• _SOC: bulk-approve clean emails, clear hold when done_"
                     )}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "Open Dashboard"},
-                     "url": "http://localhost:8000", "style": "primary"},
-                ]},
             ]}
             _hx.post(webhook, json=payload, timeout=10)
         except Exception as exc:
