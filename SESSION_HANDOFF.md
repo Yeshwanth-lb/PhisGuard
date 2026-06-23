@@ -1,5 +1,5 @@
 # PhishGuard — Session Handoff Document
-**Last updated:** 2026-06-22 (session 4)  
+**Last updated:** 2026-06-23 (session 5)  
 **Project root:** `/Users/intern4/Desktop/phishguard`  
 **Developer:** Yeshwanth (yeshwanthlb0@gmail.com)  
 **Purpose:** End-to-end email security gateway with 7-layer AI detection
@@ -9,19 +9,19 @@
 ## 1. Current System State
 
 ### Tests
-- **167 passing, 3 skipped, 0 failing**
+- **186 passing, 3 skipped, 0 failing**
 - Run with: `python3 -m pytest tests/ -q --ignore=tests/locustfile.py --ignore=tests/test_layer4_smtp_live.py --ignore=tests/test_layer2_claude_live.py`
 - 3 skipped: live Slack tests (no webhook in env)
-- Test files: `test_layer0.py` (12), `test_campaigns.py` (13), `test_smtp_rate_limiter.py` (17), `test_layer1/2/3/4/5/6/7.py`
+- Test files: `test_layer0.py` (12), `test_campaigns.py` (13), `test_smtp_rate_limiter.py` (17), `test_bombing_detector.py` (21), `test_layer1/2/3/4/5/6/7.py`
 
 ### Git Status
 - Branch: `master` — all changes committed, working tree clean
 - Latest commits:
-  - `0bf825d` feat: per-recipient rate limit and tarpit for distributed email bombing
-  - `94e657c` feat: SMTP rate limiter — email bombing protection
-  - `a7cd281` fix: restore _make_mock_proc helper removed during SDK mock rewrite
-  - `d29a84f` docs: add PROJECT_CONTEXT.md — complete project explanation
-  - `535ae7e` feat: PDF export for scan reports
+  - `4668766` fix: high-signal override applies to phishing verdict during bombing hold
+  - `f5922fb` fix: demo_bombing.py sends concurrently so velocity trigger fires
+  - `7af0528` fix+docs: correct three doc inconsistencies, env-tune rate limits
+  - `85a464a` fix: bombing response defaults to SURFACE; thresholds load from env
+  - `b0f20cf` feat: inbox bombing detector — subscription bomb detection and hold
 
 ### Database State (as of 2026-06-22)
 - **Total scans stored:** ~1,400+
@@ -88,19 +88,46 @@ JWT (HS256), RBAC (admin/analyst/readonly), rate limiter (120 req/min), audit lo
 
 ### SMTP Rate Limiter — Email Bombing Protection
 **File:** `app/security/smtp_rate_limiter.py`  
-Four sliding-window counters checked before every email enters the pipeline:
+Four sliding-window counters checked before every email enters the pipeline. All configurable via env vars:
 
-| Counter | Limit | Stops |
-|---|---|---|
-| Per-IP | 10/min | Single-source flooding |
-| Per-sender-domain | 20/hour | Domain-based campaigns |
-| **Per-recipient** | **30/min** | **Distributed bombing (rotating IPs/domains)** |
-| Global | 60/min | Total throughput cap |
+| Counter | Limit | Env var | Stops |
+|---|---|---|---|
+| Per-IP | 10/min | `SMTP_RATE_PER_IP` | Single-source flooding |
+| Per-sender-domain | 20/hour | `SMTP_RATE_PER_DOMAIN` | Domain campaigns |
+| **Per-recipient** | **30/min** | `SMTP_RATE_PER_RCPT` | **Distributed bombing (rotating IPs/domains)** |
+| Global | 60/min | `SMTP_RATE_GLOBAL` | Total throughput cap |
 
 **Tarpit:** 2s sleep before 421 — slows automated tools from 500/min to ~30/min.  
-**Burst alert:** 5+ emails from same source in 10s → Slack alert (suppressed 5 min per source).  
-**421 = temporary** — sending MTA retries, no legitimate email permanently lost.  
-Stats visible in `GET /health` → `smtp_rate_limiter`.
+**Burst alert:** 5+ emails from same source in 10s → Slack alert.  
+**421 = temporary** — MTA retries, no legitimate email permanently lost.  
+Stats: `GET /health` → `smtp_rate_limiter`.  
+**Demo:** Set `SMTP_RATE_PER_IP=200` in `.env` before running `demo_bombing.py` (current `.env` already has this set).
+
+### Inbox Bombing Detector — Subscription Bomb Detection
+**File:** `app/security/bombing_detector.py`  
+Detects subscription bombs (attacker signs victim up to hundreds of legitimate services to bury critical alerts). Watches the RECIPIENT, not the sender — attacker can rotate infinite domains but can't change who the victim is.
+
+**Two detection paths:**
+1. **Velocity (fires email 5):** 5+ subscription subjects in 30s = bot speed → hold immediately
+2. **Scoring (fires email 20):** `volume(40) + diversity(40) + pattern(20) ≥ 60`
+   - Diversity is graduated: ≥70% new domains → +40, 50–70% → +20 (language-independent)
+   - Pattern (English subscription subjects) is optional +20 booster — not a hard gate
+   - Volume + diversity alone = 80 → detected (non-English bombs caught)
+
+**Smart 3-way routing during hold:**
+- `is_high_signal(subject)` (OTP, reset, bank alert, new-device) → **SURFACE — overrides even phishing verdict**. L1 OSINT already ran; bombing context means delivery is right.
+- `is_subscription_pattern(subject)` → **HOLD** for SOC Pending Review
+- Neither (unmatched) → **SURFACE** (default — err toward delivery)
+
+**Why high-signal overrides phishing verdict:** A genuine bank OTP from an unknown domain scores "phishing" at L2 (new domain + banking subject = phishing pattern to Claude). During a bombing attack that's exactly the email to surface. L1 hard hits (VirusTotal/URLhaus) still quarantine before reaching this code.
+
+**Cold-start:** < 10 known sender domains → diversity downweighted (protects new employees).  
+**Memory:** `seen_domains` append-only, capped at 500 — no eviction.  
+**All 11 thresholds** configurable via `BOMBING_*` env vars.  
+**API:** `GET /api/bombing/status`, `POST /api/bombing/{rcpt}/clear`  
+**Dashboard:** Orange banner on Overview tab, "Clear Hold" button, auto-expires after 20 min.  
+**Demo:** `python3 scripts/demo_bombing.py` — 20 concurrent emails, velocity fires at email 5–7, OTP surfaces with `smtp_bombing_high_signal_delivered` log.  
+**Full explanation:** `EMAIL_BOMBING_EXPLANATION.md`
 
 ### Layer 7 — Email Ingestion
 3 paths: SMTP gateway (port 8025), Gmail OAuth historical scanner, REST `/analyze`.  
@@ -290,7 +317,8 @@ Cert is for hostname `misp` not `localhost`. Do not restart MISP without cert fi
 3. **Retrain ML** — 1,400+ real scan records in DB, retrain from ML Ops tab to improve accuracy
 4. **PhishTank key** — registration may be re-enabled at phishtank.org/api_register.php
 5. **Jira** — add `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` to .env
-6. **SMTP rate limiter tuning** — current defaults are conservative for demo; production may need per-recipient limit raised if legitimate bulk senders (newsletters etc.) hit it
+6. **SMTP rate limiter tuning** — defaults conservative for demo; production shared inboxes (support@, sales@) may need higher per-recipient limit
+7. **Gmail Workspace ingestion** — `INBOX_INGESTION_ENABLED` flag not yet built; needs service account + Workspace admin approval
 
 ---
 
@@ -333,7 +361,8 @@ phishguard/
 │   ├── layer4_soar/digest.py           # Weekly Slack digest + scheduler
 │   ├── layer5_ml/training_pipeline.py  # ExtraTrees + feedback loop
 │   ├── layer5_ml/feature_extractor.py  # 24 ML features
-│   ├── security/smtp_rate_limiter.py   # Email bombing protection (4 counters + tarpit)
+│   ├── security/smtp_rate_limiter.py   # Direct flooding protection (4 counters + tarpit)
+│   ├── security/bombing_detector.py   # Subscription bomb detection (velocity + scoring)
 │   ├── layer7_gmail/smtp_receiver.py   # SMTP gateway routing
 │   └── templates/index.html            # SOC Console SPA (~1,800 lines)
 ├── scripts/
@@ -341,9 +370,12 @@ phishguard/
 │   ├── send_eml.py                     # Pipe real .eml files through port 8025
 │   └── fake_mail_server.py             # Fake downstream (port 1025)
 ├── tests/
+│   ├── scripts/demo_bombing.py         # Concurrent subscription bomb demo (20 emails)
+│   ├── EMAIL_BOMBING_EXPLANATION.md   # Lead-ready explanation of bombing protection
 │   ├── test_layer0.py                  # 12 pre-filter tests
 │   ├── test_campaigns.py               # 13 campaign detection tests
 │   ├── test_smtp_rate_limiter.py       # 17 rate limiter + tarpit tests
+│   ├── test_bombing_detector.py       # 21 subscription bomb detection tests
 │   └── test_layer1/2/3/4/5/6/7.py     # Layer-specific tests
 ├── data/
 │   ├── phishguard.db                   # SQLite (4 tables)
