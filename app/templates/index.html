@@ -199,6 +199,17 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
 </div>
 
 <div class="section active" id="sec-overview">
+  <!-- Bombing attack alert banner — hidden by default, shown when active attacks exist -->
+  <div id="bombingAlert" style="display:none;background:#2d1f00;border:1px solid #f97316;border-radius:10px;padding:14px 18px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span style="font-size:20px">🌊</span>
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:700;color:#f97316">Inbox Bombing Attack In Progress</div>
+        <div id="bombingAlertBody" style="font-size:12px;color:#fde68a;margin-top:3px"></div>
+      </div>
+      <button class="bs" id="bombingClearBtn" style="padding:5px 12px;font-size:11px;border-color:#f97316;color:#f97316" onclick="clearBombingAttack()">Clear Hold</button>
+    </div>
+  </div>
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
     <div><div class="section-title">Overview</div><div class="section-sub">Real-time threat posture across all 7 detection layers</div></div>
     <div style="display:flex;gap:4px;align-items:center" id="timeRangeBar">
@@ -1179,7 +1190,42 @@ async function pollPendingBadge(){
     const activeCampaigns = cd.active || 0;
     const campBadge = document.getElementById('campaignBadge');
     if(campBadge){ campBadge.textContent = activeCampaigns; campBadge.style.display = activeCampaigns > 0 ? 'inline' : 'none'; }
+
+    // Update bombing alert banner
+    try{
+      const br = await api('/api/bombing/status');
+      const bd = await br.json();
+      const attacks = bd.attacked_inboxes || [];
+      const alertEl = document.getElementById('bombingAlert');
+      const alertBody = document.getElementById('bombingAlertBody');
+      if(alertEl){
+        if(attacks.length > 0){
+          alertEl.style.display = 'block';
+          const lines = attacks.map(a =>
+            `<b>${escapeHtml(a.rcpt)}</b> — ${a.emails_in_window} emails in last 5 min · hold expires in ${a.hold_expires_in_mins} min`
+          ).join('<br/>');
+          if(alertBody) alertBody.innerHTML = lines;
+          // Store attacked recipients for clear button
+          alertEl.dataset.attacked = JSON.stringify(attacks.map(a => a.rcpt));
+        } else {
+          alertEl.style.display = 'none';
+        }
+      }
+    }catch(e){}
   }catch(e){}
+}
+
+async function clearBombingAttack(){
+  const alertEl = document.getElementById('bombingAlert');
+  const rcpts = JSON.parse(alertEl.dataset.attacked || '[]');
+  const btn = document.getElementById('bombingClearBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Clearing…'; }
+  for(const rcpt of rcpts){
+    try{ await api('/api/bombing/'+encodeURIComponent(rcpt)+'/clear', {method:'POST'}); }catch(e){}
+  }
+  alertEl.style.display = 'none';
+  toast('Bombing hold cleared — emails will route normally', 'success');
+  if(btn){ btn.disabled = false; btn.textContent = 'Clear Hold'; }
 }
 
 function _notify(title, body){

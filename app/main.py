@@ -188,9 +188,11 @@ async def health():
     ml_path = getattr(settings, 'ml_model_path', 'data/model.pkl')
     ml_ok = _os.path.exists(ml_path)
     from app.security.smtp_rate_limiter import stats as _smtp_rl_stats
+    from app.security.bombing_detector import stats as _bomb_stats
     return {
         'status': 'ok',
         'smtp_rate_limiter': _smtp_rl_stats(),
+        'bombing_detector': _bomb_stats(),
         'virustotal_api': 'ok' if settings.virustotal_api_key else 'unconfigured',
         'abuseipdb_api': 'ok' if settings.abuseipdb_api_key else 'unconfigured',
         'urlhaus_api': 'ok',
@@ -332,6 +334,21 @@ async def add_denylist(body: dict):
 async def remove_denylist(kind: str, value: str):
     ok = _deny.remove_entry(kind, value)
     return {'ok': ok}
+
+
+@app.get('/api/bombing/status')
+async def bombing_status(current_user: dict = Depends(require_auth)):
+    """Return active inbox bombing attacks and detector thresholds."""
+    from app.security.bombing_detector import stats as _bomb_stats
+    return _bomb_stats()
+
+
+@app.post('/api/bombing/{rcpt}/clear')
+async def clear_bombing(rcpt: str, current_user: dict = Depends(require_permission('quarantine'))):
+    """SOC manually clears the bombing hold for a recipient inbox."""
+    from app.security.bombing_detector import clear_attack
+    clear_attack(rcpt)
+    return {'ok': True, 'rcpt': rcpt, 'message': 'Bombing hold cleared'}
 
 
 @app.get('/api/campaigns')

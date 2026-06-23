@@ -100,6 +100,25 @@ class PhishGuardSMTPHandler:
         logger.info("smtp_received", peer=str(session.peer),
                     size=len(raw_bytes), rcpt=original_rcpts)
 
+        # ── Bombing detection ─────────────────────────────────────────────────
+        # Parse subject from raw bytes before running pipeline so we can
+        # score the subscription-pattern signal immediately on arrival.
+        from app.security.bombing_detector import record as _bomb_record
+        try:
+            from email import message_from_bytes as _mfb
+            from email.policy import compat32 as _c32
+            _msg_preview = _mfb(raw_bytes[:4096], policy=_c32)
+            _subject_preview = str(_msg_preview.get("Subject", "") or "")
+        except Exception:
+            _subject_preview = ""
+        _rcpt_for_bomb = original_rcpts[0] if original_rcpts else ""
+        _under_attack, _newly_detected = _bomb_record(
+            _rcpt_for_bomb, mail_from, _subject_preview
+        )
+        if _newly_detected:
+            logger.warning("inbox_bombing_started", rcpt=_rcpt_for_bomb,
+                           sender=mail_from)
+
         # ── Run the full detection pipeline ──────────────────────────────
         try:
             result = await self.analyze_fn(raw_bytes, self.settings)
@@ -117,6 +136,15 @@ class PhishGuardSMTPHandler:
         # to hold anything the AI flagged as suspicious.
         l2_verdict = result.get("l2", {}).get("verdict", final_verdict) if result.get("l2") else final_verdict
         routing_verdict = l2_verdict if l2_verdict in ("suspicious", "phishing") else final_verdict
+
+        # ── Bombing override — force-hold during active attack ────────────────
+        # When an inbox is under a subscription bomb, even legitimate clean
+        # emails are held for SOC review. This prevents real phishing or OTP
+        # emails from being buried in the flood where the user can't see them.
+        if _under_attack and routing_verdict == "clean":
+            routing_verdict = "suspicious"
+            logger.info("smtp_bombing_hold_applied", rcpt=_rcpt_for_bomb,
+                        original_verdict="clean", forced_to="suspicious")
 
         # Extract metadata for logging/queue
         parsed  = result.get("parsed") or {}
