@@ -9,7 +9,7 @@ import os
 import sqlite3
 import threading
 
-from app.threatlens.models import ActorCluster, IoCSet
+from app.threatlens.models import ActorCluster, AdversaryProfile, Finding, IoCSet, TTP, CorroboratedClaim
 
 _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 _lock = threading.Lock()
@@ -189,5 +189,111 @@ def get_all_clusters(db_path: str = _DB_PATH) -> list[ActorCluster]:
                 "SELECT * FROM actor_clusters WHERE status != 'merged' ORDER BY last_seen DESC"
             ).fetchall()
             return [_row_to_cluster(r) for r in rows]
+        finally:
+            c.close()
+
+
+# ---------------------------------------------------------------------------
+# Profile CRUD
+# ---------------------------------------------------------------------------
+
+def upsert_profile(profile: AdversaryProfile, db_path: str = _DB_PATH) -> None:
+    """Insert or replace the profile for a cluster (one current profile per cluster)."""
+    with _lock:
+        c = _conn(db_path)
+        try:
+            # Keep only one profile per cluster — delete any existing row first
+            c.execute("DELETE FROM actor_profiles WHERE cluster_id = ?", (profile.cluster_id,))
+            c.execute("""
+                INSERT INTO actor_profiles
+                    (id, cluster_id, generated_at, assessed_identity, suspected_apt,
+                     assessed_intent, severity, confidence, ttp_json, surface_zones_json,
+                     segments_json, evidence_json, summary, model)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                profile.id,
+                profile.cluster_id,
+                profile.generated_at,
+                profile.assessed_identity,
+                profile.suspected_apt,
+                profile.assessed_intent,
+                profile.severity,
+                profile.confidence,
+                json.dumps([t.model_dump() for t in profile.ttps]),
+                json.dumps(profile.surface_zones),
+                json.dumps(profile.segments),
+                json.dumps([e.model_dump() for e in profile.evidence]),
+                profile.summary,
+                profile.model,
+            ))
+            c.commit()
+        finally:
+            c.close()
+
+
+def _row_to_profile(row: sqlite3.Row) -> AdversaryProfile:
+    ttps = [TTP(**t) for t in json.loads(row["ttp_json"] or "[]")]
+    evidence = []
+    for e in json.loads(row["evidence_json"] or "[]"):
+        evidence.append(Finding(
+            agent=e.get("agent", "profiler"),
+            claim=e.get("claim", ""),
+            source_url=e.get("source_url"),
+            source_title=e.get("source_title"),
+            confidence=e.get("confidence", "low"),
+            raw=e.get("raw", {}),
+        ))
+    return AdversaryProfile(
+        id=row["id"],
+        cluster_id=row["cluster_id"],
+        generated_at=row["generated_at"],
+        assessed_identity=row["assessed_identity"] or "Unattributed Cluster",
+        suspected_apt=row["suspected_apt"],
+        assessed_intent=row["assessed_intent"] or "unknown",
+        severity=row["severity"] or "low",
+        confidence=row["confidence"] or "speculative",
+        ttps=ttps,
+        surface_zones=json.loads(row["surface_zones_json"] or "[]"),
+        segments=json.loads(row["segments_json"] or "[]"),
+        claims=[],
+        evidence=evidence,
+        summary=row["summary"] or "",
+        model=row["model"] or "",
+    )
+
+
+def get_profile(profile_id: str, db_path: str = _DB_PATH) -> AdversaryProfile | None:
+    with _lock:
+        c = _conn(db_path)
+        try:
+            row = c.execute(
+                "SELECT * FROM actor_profiles WHERE id = ?", (profile_id,)
+            ).fetchone()
+            return _row_to_profile(row) if row else None
+        finally:
+            c.close()
+
+
+def get_profile_by_cluster(cluster_id: str, db_path: str = _DB_PATH) -> AdversaryProfile | None:
+    with _lock:
+        c = _conn(db_path)
+        try:
+            row = c.execute(
+                "SELECT * FROM actor_profiles WHERE cluster_id = ? ORDER BY generated_at DESC LIMIT 1",
+                (cluster_id,)
+            ).fetchone()
+            return _row_to_profile(row) if row else None
+        finally:
+            c.close()
+
+
+def get_profiles(db_path: str = _DB_PATH) -> list[AdversaryProfile]:
+    with _lock:
+        c = _conn(db_path)
+        try:
+            rows = c.execute(
+                "SELECT * FROM actor_profiles ORDER BY generated_at DESC"
+            ).fetchall()
+            return [_row_to_profile(r) for r in rows]
         finally:
             c.close()

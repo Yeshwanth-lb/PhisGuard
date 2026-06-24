@@ -610,6 +610,98 @@ async def get_screenshot(scan_id: str):
     return FileResponse(path, media_type='image/png')
 
 
+# ---------------------------------------------------------------------------
+# ThreatLens endpoints
+# ---------------------------------------------------------------------------
+
+@app.get('/api/intel/profiles')
+async def list_intel_profiles(current_user: dict = Depends(require_permission('scan'))):
+    """List all adversary profiles, sorted by generated_at desc."""
+    from app.threatlens import store as tl_store
+    profiles = tl_store.get_profiles()
+    return [
+        {
+            "id":               p.id,
+            "cluster_id":       p.cluster_id,
+            "generated_at":     p.generated_at,
+            "assessed_identity": p.assessed_identity,
+            "suspected_apt":    p.suspected_apt,
+            "assessed_intent":  p.assessed_intent,
+            "severity":         p.severity,
+            "confidence":       p.confidence,
+            "ttp_count":        len(p.ttps),
+            "surface_zones":    p.surface_zones,
+            "segments":         p.segments,
+            "summary":          p.summary,
+        }
+        for p in profiles
+    ]
+
+
+@app.get('/api/intel/profiles/{profile_id}')
+async def get_intel_profile(
+    profile_id: str,
+    current_user: dict = Depends(require_permission('scan')),
+):
+    """Full profile with evidence chain. No raw email bodies."""
+    from app.threatlens import store as tl_store
+    profile = tl_store.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail='Profile not found')
+    cluster = tl_store.get_cluster(profile.cluster_id)
+    return {
+        "id":                profile.id,
+        "cluster_id":        profile.cluster_id,
+        "generated_at":      profile.generated_at,
+        "assessed_identity": profile.assessed_identity,
+        "suspected_apt":     profile.suspected_apt,
+        "assessed_intent":   profile.assessed_intent,
+        "severity":          profile.severity,
+        "confidence":        profile.confidence,
+        "ttps":              [t.model_dump() for t in profile.ttps],
+        "surface_zones":     profile.surface_zones,
+        "segments":          profile.segments,
+        "claims":            [c.model_dump() for c in profile.claims],
+        "evidence":          [
+            {k: v for k, v in e.model_dump().items() if k not in ("raw",)}
+            for e in profile.evidence
+        ],
+        "summary":           profile.summary,
+        "model":             profile.model,
+        "member_scan_count": len(cluster.member_scan_ids) if cluster else 0,
+        "member_scan_ids":   cluster.member_scan_ids[:50] if cluster else [],
+    }
+
+
+@app.post('/api/intel/run')
+async def run_intel_cycle(current_user: dict = Depends(require_permission('admin'))):
+    """Trigger a ThreatLens profiling cycle (admin only)."""
+    from app.threatlens.config import threatlens_settings
+    if not threatlens_settings.intel_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail='ThreatLens is disabled. Set INTEL_ENABLED=true to activate.',
+        )
+    from app.threatlens.orchestrator import run_cycle
+    result = await run_cycle()
+    return result
+
+
+@app.get('/api/intel/status')
+async def intel_status(current_user: dict = Depends(require_permission('scan'))):
+    """ThreatLens layer status."""
+    from app.threatlens.config import threatlens_settings
+    from app.threatlens import store as tl_store
+    clusters = tl_store.get_active_clusters()
+    profiles = tl_store.get_profiles()
+    return {
+        "enabled":         threatlens_settings.intel_enabled,
+        "active_clusters": len(clusters),
+        "profiles":        len(profiles),
+        "cadence":         threatlens_settings.intel_run_cadence,
+    }
+
+
 
 
 async def _run_soar_dryrun():

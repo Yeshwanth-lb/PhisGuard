@@ -179,6 +179,7 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     <a id="nav-pending" data-perm="quarantine" onclick="showSection('pending')">Pending Review <span id="pendingBadge" style="display:none;background:#fbbf24;color:#1a1a2e;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
     <a id="nav-ml" data-perm="ml_retrain" onclick="showSection('ml')">ML Ops</a>
     <a id="nav-campaigns" onclick="showSection('campaigns')">Campaigns <span id="campaignBadge" style="display:none;background:#f87171;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
+    <a id="nav-profiling" onclick="showSection('profiling')">Profiling <span id="profilingBadge" style="display:none;background:#8b5cf6;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
     <a id="nav-soar" data-perm="soar" onclick="showSection('soar')">SOAR</a>
     <a id="nav-audit" data-perm="audit" onclick="showSection('audit')">Audit Log</a>
     <a id="nav-gmail" data-perm="gmail_write" onclick="showSection('gmail')">Gmail</a>
@@ -336,6 +337,17 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
   <div class="card">
     <h2>Last Training Run</h2>
     <div id="mlMetrics"><div class="empty">No training run yet</div></div>
+  </div>
+</div>
+<div class="section" id="sec-profiling">
+  <div class="section-title">Threat Intelligence &amp; Adversary Profiling</div>
+  <div class="section-sub">Attacker clusters enriched with OSINT, ATT&CK mapping, and Claude synthesis</div>
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 style="margin:0">Adversary Profiles</h2>
+      <button class="bs" style="padding:5px 14px;font-size:12px;background:#8b5cf6" onclick="runIntelCycle()">▶ Run Analysis</button>
+    </div>
+    <div id="profilingBody" style="margin-top:14px"><div class="empty">Loading profiles…</div></div>
   </div>
 </div>
 <div class="section" id="sec-campaigns">
@@ -553,7 +565,7 @@ function showApp(){
 
 function showSection(name){
   currentSection = name;
-  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","soar","audit","gmail","settings"];
+  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","profiling","soar","audit","gmail","settings"];
   all.forEach(n => {
     const sec = document.getElementById("sec-" + n);
     const lnk = document.getElementById("nav-" + n);
@@ -566,6 +578,7 @@ function showSection(name){
   else if(name === "reports"){ loadReports(); }
   else if(name === "ml"){ loadML(); }
   else if(name === "campaigns"){ loadCampaigns(); }
+  else if(name === "profiling"){ loadProfiling(); }
   else if(name === "soar"){ loadSoar(); }
   else if(name === "audit"){ loadAudit(); }
   else if(name === "gmail"){ loadGmail(); }
@@ -1017,6 +1030,62 @@ async function addTrustedDomain(){
   else { const d=await r.json(); toast('Failed: '+(d.detail||r.status), 'error'); }
 }
 
+// ── ThreatLens Profiling ────────────────────────────────────────────────────
+const _CONF_COLORS = {confirmed:'#10b981',high:'#3b82f6',moderate:'#f59e0b',low:'#6b7280',speculative:'#4b5563'};
+const _SEV_COLORS  = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#6b7280'};
+
+async function loadProfiling(){
+  const body = document.getElementById('profilingBody');
+  if(!body) return;
+  body.innerHTML = '<div class="empty">Loading adversary profiles…</div>';
+  try {
+    const r = await api('/api/intel/profiles');
+    if(!r.ok){ body.innerHTML = `<div class="empty">Could not load profiles (${r.status})</div>`; return; }
+    const profiles = await r.json();
+    const badge = document.getElementById('profilingBadge');
+    if(badge){ badge.textContent = profiles.length; badge.style.display = profiles.length ? 'inline' : 'none'; }
+    if(!profiles.length){ body.innerHTML = '<div class="empty">No profiles yet — run an analysis cycle to generate them.</div>'; return; }
+    body.innerHTML = profiles.map(p => _renderProfileCard(p)).join('');
+  } catch(e){ body.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function _renderProfileCard(p){
+  const confColor = _CONF_COLORS[p.confidence] || '#6b7280';
+  const sevColor  = _SEV_COLORS[p.severity]    || '#6b7280';
+  const apt = p.suspected_apt ? `<div style="font-size:11px;color:#94a3b8;margin-top:4px">${p.suspected_apt}</div>` : '';
+  const zones = (p.surface_zones||[]).map(z=>`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:1px 7px;font-size:10px;color:#94a3b8">${z}</span>`).join(' ');
+  const ttps  = p.ttp_count > 0 ? `<span style="font-size:11px;color:#64748b">${p.ttp_count} ATT&amp;CK technique${p.ttp_count>1?'s':''}</span>` : '';
+  return `<div style="border:1px solid #2a3346;border-radius:8px;padding:14px;margin-bottom:10px;background:#141925">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <span style="font-weight:600;font-size:14px;color:#e2e8f0">${p.assessed_identity}</span>
+        ${apt}
+        <div style="margin-top:6px;font-size:12px;color:#94a3b8">${p.assessed_intent}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;margin-left:12px">
+        <span style="background:${sevColor}22;color:${sevColor};border:1px solid ${sevColor}44;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">${p.severity.toUpperCase()}</span>
+        <div style="margin-top:4px"><span style="background:${confColor}22;color:${confColor};border:1px solid ${confColor}44;border-radius:4px;padding:2px 8px;font-size:11px">${p.confidence}</span></div>
+      </div>
+    </div>
+    ${p.summary ? `<div style="margin-top:10px;font-size:12px;color:#cbd5e1;line-height:1.5">${p.summary}</div>` : ''}
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${zones}${ttps ? `<span style="margin-left:auto">${ttps}</span>` : ''}
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:#475569">
+      ${p.member_scan_count||0} scans &nbsp;·&nbsp; generated ${new Date(p.generated_at*1000).toLocaleString()}
+    </div>
+  </div>`;
+}
+
+async function runIntelCycle(){
+  toast('Starting analysis cycle…', 'info');
+  try {
+    const r = await api('/api/intel/run', {method:'POST'});
+    if(r.ok){ const d=await r.json(); toast(`✓ Cycle complete — ${d.profiles_written||0} profile(s) written`, 'success'); loadProfiling(); }
+    else { const d=await r.json(); toast('Failed: '+(d.detail||r.status), 'error'); }
+  } catch(e){ toast('Error: '+e.message, 'error'); }
+}
+
 async function removeTrustedDomain(domain, btn){
   if(!confirm(`Remove "${domain}" from trusted senders?`)) return;
   btn.disabled = true;
@@ -1125,7 +1194,7 @@ async function viewCampaignScans(scanIds){
 
   // Manually switch to Reports tab WITHOUT calling showSection() to avoid
   // triggering loadReports() which would overwrite our filtered _allReportItems.
-  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","soar","audit","gmail","settings"];
+  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","profiling","soar","audit","gmail","settings"];
   all.forEach(function(s){
     const sec = document.getElementById('sec-'+s);
     const nav = document.getElementById('nav-'+s);

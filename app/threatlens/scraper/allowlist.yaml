@@ -1,0 +1,124 @@
+# ThreatLens source allowlist — the legal boundary.
+# All external fetches must route through fetcher.py which enforces this list.
+# Editing this file is a reviewed action.
+
+sources:
+  - domain: attack.mitre.org
+    type: threat_intelligence
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: nvd.nist.gov
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: cisa.gov
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 2
+
+  - domain: www.cisa.gov
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 2
+
+  - domain: abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: bazaar.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: urlhaus-api.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: threatfox-api.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: feodotracker.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: otx.alienvault.com
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: pulsedive.com
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: xposedornot.com
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: www.sans.org
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: unit42.paloaltonetworks.com
+    type: threat_report
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: securelist.com
+    type: threat_report
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.mandiant.com
+    type: threat_report
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.3gpp.org
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.gsma.com
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: services.nvd.nist.gov
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: www.cisa.gov
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 2
+
+  - domain: epss.cyentia.com
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
