@@ -341,40 +341,95 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
 </div>
 <div class="section" id="sec-profiling">
   <div class="section-title">Threat Intelligence &amp; Adversary Profiling</div>
-  <div class="section-sub">Attacker clusters enriched with OSINT, ATT&CK mapping, and Claude synthesis</div>
+  <div class="section-sub">Attacker clusters enriched with OSINT, ATT&CK mapping, and Claude synthesis — Skylo NTN surface mapped</div>
 
-  <!-- 1. Strategic Org Assessment (prominent at top) -->
-  <div class="card" style="margin-bottom:14px;border-left:3px solid #8b5cf6">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <h2 style="margin:0;font-size:15px">Strategic Threat Assessment <span style="font-size:11px;font-weight:400;color:#64748b">— Skylo organization-wide</span></h2>
-      <div style="display:flex;gap:8px">
-        <button class="bs" style="padding:4px 12px;font-size:11px" onclick="exportOrgBrief()">📄 Leadership Brief</button>
-        <button class="bs" style="padding:4px 12px;font-size:11px;background:#8b5cf6" onclick="runIntelCycle()">▶ Run Analysis</button>
+  <!-- Strategic Assessment Banner -->
+  <div style="background:linear-gradient(135deg,#1e1b4b 0%,#0f172a 100%);border:1px solid #3730a3;border-radius:10px;padding:18px;margin-bottom:16px;position:relative;overflow:hidden">
+    <div style="position:absolute;top:0;right:0;width:200px;height:100%;background:radial-gradient(ellipse at right,#4c1d9522 0%,transparent 70%);pointer-events:none"></div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:18px">🛡</span>
+          <span style="font-size:14px;font-weight:700;color:#e2e8f0">Strategic Threat Assessment</span>
+          <span style="font-size:11px;color:#6366f1;background:#1e1b4b;border:1px solid #4338ca;border-radius:10px;padding:1px 8px">Skylo NTN</span>
+        </div>
+        <div id="orgAssessmentBody" style="font-size:12px;color:#94a3b8;line-height:1.6">
+          <div class="empty">No assessment yet — run an analysis cycle.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+        <button class="bs" style="padding:5px 14px;font-size:11px;background:#4f46e5;border:none;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="runIntelCycle()">▶ Run Analysis</button>
+        <button class="bs" style="padding:5px 14px;font-size:11px;background:transparent;border:1px solid #334155;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="exportOrgBrief()">📄 Brief</button>
       </div>
     </div>
-    <div id="orgAssessmentBody"><div class="empty">No assessment yet — run an analysis cycle.</div></div>
   </div>
 
-  <!-- 2. Three rollup panels -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
-    <div class="card" style="padding:12px">
-      <h3 style="margin:0 0 10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Sector Pressure</h3>
+  <!-- Stats Row -->
+  <div id="profilingStatsRow" style="display:none;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+      <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:12px;text-align:center">
+        <div id="statTotal" style="font-size:22px;font-weight:700;color:#e2e8f0">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Total</div>
+      </div>
+      <div style="background:#141925;border:1px solid #ef444422;border-radius:8px;padding:12px;text-align:center">
+        <div id="statCritical" style="font-size:22px;font-weight:700;color:#ef4444">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Critical</div>
+      </div>
+      <div style="background:#141925;border:1px solid #f9731622;border-radius:8px;padding:12px;text-align:center">
+        <div id="statHigh" style="font-size:22px;font-weight:700;color:#f97316">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">High</div>
+      </div>
+      <div style="background:#141925;border:1px solid #10b98122;border-radius:8px;padding:12px;text-align:center">
+        <div id="statConfirmed" style="font-size:22px;font-weight:700;color:#10b981">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Confirmed</div>
+      </div>
+      <div style="background:#141925;border:1px solid #3b82f622;border-radius:8px;padding:12px;text-align:center">
+        <div id="statSurface" style="font-size:22px;font-weight:700;color:#3b82f6">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Mapped</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rollup Panels -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+    <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <span style="font-size:14px">🌍</span>
+        <span style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Sector Pressure</span>
+      </div>
       <div id="sectorRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
     </div>
-    <div class="card" style="padding:12px">
-      <h3 style="margin:0 0 10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Org Targeting</h3>
+    <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <span style="font-size:14px">🏢</span>
+        <span style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Org Targeting</span>
+      </div>
       <div id="orgRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
     </div>
-    <div class="card" style="padding:12px">
-      <h3 style="margin:0 0 10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Network Surface</h3>
+    <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <span style="font-size:14px">📡</span>
+        <span style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Attack Surface</span>
+      </div>
       <div id="networkRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
     </div>
   </div>
 
-  <!-- 3. Adversary profiles list -->
-  <div class="card">
-    <h2 style="margin:0 0 14px">Adversary Profiles</h2>
-    <div id="profilingBody"><div class="empty">Loading profiles…</div></div>
+  <!-- Filter Bar + Profiles -->
+  <div style="background:#141925;border:1px solid #1e293b;border-radius:10px;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1e293b;background:#0f172a">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">🎯</span>
+        <span style="font-size:14px;font-weight:600;color:#e2e8f0">Adversary Profiles</span>
+      </div>
+      <div style="display:flex;gap:6px" id="profileFilterBtns">
+        <button onclick="_filterProfiles('all',this)" style="padding:3px 12px;font-size:11px;background:#1e293b;border:1px solid #334155;border-radius:20px;color:#94a3b8;cursor:pointer" class="pf-active">All</button>
+        <button onclick="_filterProfiles('critical',this)" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #ef444444;border-radius:20px;color:#ef4444;cursor:pointer">Critical</button>
+        <button onclick="_filterProfiles('high',this)" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #f9731644;border-radius:20px;color:#f97316;cursor:pointer">High</button>
+        <button onclick="_filterProfiles('confirmed',this)" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #10b98144;border-radius:20px;color:#10b981;cursor:pointer">Confirmed</button>
+      </div>
+    </div>
+    <div id="profilingBody" style="padding:14px"><div class="empty">Loading profiles…</div></div>
   </div>
 </div>
 <div class="section" id="sec-campaigns">
@@ -1058,10 +1113,13 @@ async function addTrustedDomain(){
 }
 
 // ── ThreatLens Profiling ────────────────────────────────────────────────────
-// ── ThreatLens Profiling ────────────────────────────────────────────────────
 const _CONF_COLORS = {confirmed:'#10b981',high:'#3b82f6',moderate:'#f59e0b',low:'#6b7280',speculative:'#4b5563'};
 const _SEV_COLORS  = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#6b7280'};
-let _openProfileId = null;  // tracks expanded card — survives re-render (gotcha #2)
+const _CONF_BG     = {confirmed:'#052e16',high:'#172554',moderate:'#431407',low:'#1c1917',speculative:'#18181b'};
+const _INTENT_ICON = {'bec_fraud':'💸','credential_harvest':'🔑','credential_harvesting':'🔑','fraud_payment':'💳','brand_impersonation':'🎭','executive_impersonation':'👤','generic_phish':'🎣'};
+let _openProfileId = null;
+let _allProfiles   = [];
+let _activeFilter  = 'all';
 
 async function loadProfiling(){
   await Promise.all([_loadProfiles(), _loadRollups(), _loadOrgAssessment()]);
@@ -1073,17 +1131,48 @@ async function _loadProfiles(){
   try {
     const r = await api('/api/intel/profiles');
     if(!r.ok){ body.innerHTML=`<div class="empty">Could not load (${r.status})</div>`; return; }
-    const profiles = await r.json();
+    _allProfiles = await r.json();
     const badge = document.getElementById('profilingBadge');
-    if(badge){ badge.textContent=profiles.length; badge.style.display=profiles.length?'inline':'none'; }
-    if(!profiles.length){ body.innerHTML='<div class="empty">No profiles yet — run an analysis cycle.</div>'; return; }
-    body.innerHTML = profiles.map(p=>_renderProfileCard(p)).join('');
-    // Restore expanded panel (gotcha #2 — panel survives re-render)
+    if(badge){ badge.textContent=_allProfiles.length; badge.style.display=_allProfiles.length?'inline':'none'; }
+    if(!_allProfiles.length){ body.innerHTML='<div class="empty" style="padding:30px;text-align:center">No profiles yet — click ▶ Run Analysis to generate your first adversary profiles.</div>'; return; }
+    _updateStats(_allProfiles);
+    _renderFilteredProfiles();
     if(_openProfileId){
       const btn = document.querySelector(`[data-profile-id="${_openProfileId}"]`);
       if(btn) _expandProfile(btn);
     }
   } catch(e){ body.innerHTML=`<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function _updateStats(profiles){
+  const statsRow = document.getElementById('profilingStatsRow');
+  if(statsRow) statsRow.style.display='block';
+  const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('statTotal', profiles.length);
+  set('statCritical', profiles.filter(p=>p.severity==='critical').length);
+  set('statHigh', profiles.filter(p=>p.severity==='high').length);
+  set('statConfirmed', profiles.filter(p=>p.confidence==='confirmed').length);
+  set('statSurface', profiles.filter(p=>(p.surface_zones||[]).length>0).length);
+}
+
+function _filterProfiles(filter, btn){
+  _activeFilter = filter;
+  document.querySelectorAll('#profileFilterBtns button').forEach(b=>{
+    b.style.background = 'transparent';
+    b.style.fontWeight = 'normal';
+  });
+  if(btn){ btn.style.background='#1e293b'; btn.style.fontWeight='600'; }
+  _renderFilteredProfiles();
+}
+
+function _renderFilteredProfiles(){
+  const body = document.getElementById('profilingBody'); if(!body) return;
+  let filtered = _allProfiles;
+  if(_activeFilter==='critical') filtered = _allProfiles.filter(p=>p.severity==='critical');
+  else if(_activeFilter==='high') filtered = _allProfiles.filter(p=>p.severity==='high');
+  else if(_activeFilter==='confirmed') filtered = _allProfiles.filter(p=>p.confidence==='confirmed');
+  if(!filtered.length){ body.innerHTML=`<div class="empty" style="padding:20px;text-align:center">No profiles match this filter.</div>`; return; }
+  body.innerHTML = filtered.map(p=>_renderProfileCard(p)).join('');
 }
 
 async function _loadRollups(){
@@ -1101,64 +1190,102 @@ async function _loadRollups(){
 
 function _renderRollup(elId, buckets){
   const el = document.getElementById(elId); if(!el) return;
-  if(!buckets.length){el.innerHTML='<div class="empty" style="font-size:11px">No data yet</div>';return;}
-  el.innerHTML = buckets.slice(0,5).map(b=>`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;font-size:12px">
-      <span style="color:#cbd5e1">${b.label}</span>
-      <span style="background:#1e293b;border-radius:10px;padding:1px 8px;color:#94a3b8;font-size:11px">${b.count}</span>
-    </div>`).join('');
+  if(!buckets.length){el.innerHTML='<div class="empty" style="font-size:11px;padding:8px 0">No data yet</div>';return;}
+  const max = Math.max(...buckets.map(b=>b.count),1);
+  el.innerHTML = buckets.slice(0,5).map(b=>{
+    const pct = Math.round((b.count/max)*100);
+    const score = b.severity_score||0;
+    const barColor = score>6?'#ef4444':score>3?'#f97316':'#3b82f6';
+    return `<div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-size:12px;color:#cbd5e1;text-transform:capitalize">${b.label}</span>
+        <span style="font-size:11px;font-weight:600;color:#e2e8f0">${b.count}</span>
+      </div>
+      <div style="height:4px;background:#1e293b;border-radius:2px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;transition:width .4s"></div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 async function _loadOrgAssessment(){
   const body = document.getElementById('orgAssessmentBody'); if(!body) return;
   try{
     const r = await api('/api/intel/assessment');
-    if(!r.ok){body.innerHTML='<div class="empty">No assessment yet.</div>';return;}
+    if(!r.ok){body.innerHTML='<div style="font-size:12px;color:#475569">No assessment yet. Run an analysis cycle to generate the strategic view.</div>';return;}
     const a = await r.json();
     const cc = _CONF_COLORS[a.confidence]||'#6b7280';
+    const intentIcon = {espionage:'🕵️',disruption:'💥',financial:'💰',hacktivism:'✊',mixed:'⚡',unknown:'❓'}[a.strategic_intent]||'❓';
     body.innerHTML=`
-      <div style="display:flex;gap:14px;align-items:flex-start">
-        <div style="flex:1">
-          <div style="font-size:12px;color:#cbd5e1;line-height:1.6">${a.summary||'No summary.'}</div>
-          ${a.adversary_landscape?`<div style="margin-top:8px;font-size:11px;color:#94a3b8">${a.adversary_landscape.slice(0,250)}…</div>`:''}
-        </div>
-        <div style="text-align:right;flex-shrink:0">
-          <span style="background:${cc}22;color:${cc};border:1px solid ${cc}44;border-radius:4px;padding:2px 8px;font-size:11px">${a.confidence}</span>
-          <div style="font-size:10px;color:#475569;margin-top:4px">${new Date(a.generated_at*1000).toLocaleDateString()}</div>
-        </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:13px;color:#e2e8f0;line-height:1.7;font-weight:500">${a.summary||'No summary.'}</div>
       </div>
-      ${a.strategic_intent&&a.strategic_intent!=='unknown'?`<div style="margin-top:8px;font-size:11px;color:#64748b">Strategic intent: <b style="color:#94a3b8">${a.strategic_intent}</b></div>`:''}`;
-  }catch(e){body.innerHTML='<div class="empty">No assessment yet.</div>';}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span style="background:${_CONF_BG[a.confidence]||'#1c1917'};color:${cc};border:1px solid ${cc}44;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600">${cc==='#10b981'?'✓ ':''} ${a.confidence.toUpperCase()}</span>
+        ${a.strategic_intent&&a.strategic_intent!=='unknown'?`<span style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:20px;padding:3px 12px;font-size:11px">${intentIcon} ${a.strategic_intent}</span>`:''}
+        <span style="background:#1e293b;color:#64748b;border:1px solid #334155;border-radius:20px;padding:3px 12px;font-size:11px">${new Date(a.generated_at*1000).toLocaleDateString()}</span>
+      </div>`;
+  }catch(e){body.innerHTML='<div style="font-size:12px;color:#475569">Assessment not available.</div>';}
 }
 
 function _renderProfileCard(p){
-  const cc=_CONF_COLORS[p.confidence]||'#6b7280', sc=_SEV_COLORS[p.severity]||'#6b7280';
-  const apt=p.suspected_apt?`<div style="font-size:11px;color:#94a3b8;margin-top:3px">${p.suspected_apt}</div>`:'';
-  const zones=(p.surface_zones||[]).map(z=>`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:1px 6px;font-size:10px;color:#94a3b8">${z}</span>`).join(' ');
-  const ttps=p.ttp_count>0?`<span style="font-size:11px;color:#64748b">${p.ttp_count} ATT&amp;CK technique${p.ttp_count>1?'s':''}</span>`:'';
-  // data-profile-id attribute — NOT inline JSON.stringify (gotcha #1)
-  return `<div style="border:1px solid #2a3346;border-radius:8px;padding:14px;margin-bottom:10px;background:#141925">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between">
-      <div style="flex:1">
-        <span style="font-weight:600;font-size:14px;color:#e2e8f0">${p.assessed_identity}</span>
-        ${apt}
-        <div style="margin-top:5px;font-size:12px;color:#94a3b8">${p.assessed_intent}</div>
+  const cc=_CONF_COLORS[p.confidence]||'#6b7280';
+  const sc=_SEV_COLORS[p.severity]||'#6b7280';
+  const intentKey=(p.assessed_intent||'').toLowerCase().replace(/\s+/g,'_').replace(/[^a-z_]/g,'');
+  const icon=_INTENT_ICON[intentKey]||'⚠️';
+  const zones=(p.surface_zones||[]);
+  const zoneHtml=zones.map(z=>`<span style="background:#0f172a;border:1px solid #3b82f644;border-radius:4px;padding:2px 8px;font-size:10px;color:#60a5fa;font-weight:500">${z.replace(/_/g,' ')}</span>`).join('');
+  const ttpHtml=p.ttp_count>0?`<span style="background:#0f172a;border:1px solid #f59e0b44;border-radius:4px;padding:2px 8px;font-size:10px;color:#f59e0b">⚡ ${p.ttp_count} ATT&CK</span>`:'';
+  const aptHtml=p.suspected_apt?`<div style="font-size:11px;color:#818cf8;margin-top:4px;font-style:italic">${p.suspected_apt}</div>`:'';
+
+  // Severity indicator bar
+  const sevPct = {critical:100,high:75,medium:50,low:25}[p.severity]||20;
+
+  return `<div data-severity="${p.severity}" data-confidence="${p.confidence}" style="border:1px solid #1e293b;border-left:3px solid ${sc};border-radius:8px;margin-bottom:10px;background:#0d1117;overflow:hidden">
+
+    <!-- Card Header -->
+    <div style="padding:14px 16px 0">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-size:16px">${icon}</span>
+            <span style="font-size:13px;font-weight:700;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.assessed_identity}</span>
+          </div>
+          ${aptHtml}
+          <div style="font-size:11px;color:#64748b;margin-top:4px;line-height:1.4">${p.assessed_intent}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+          <span style="background:${sc}20;color:${sc};border:1px solid ${sc}60;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.3px">${(p.severity||'').toUpperCase()}</span>
+          <span style="background:${cc}15;color:${cc};border:1px solid ${cc}40;border-radius:5px;padding:2px 10px;font-size:10px;font-weight:600">${p.confidence}</span>
+        </div>
       </div>
-      <div style="text-align:right;flex-shrink:0;margin-left:12px">
-        <span style="background:${sc}22;color:${sc};border:1px solid ${sc}44;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">${p.severity.toUpperCase()}</span>
-        <div style="margin-top:3px"><span style="background:${cc}22;color:${cc};border:1px solid ${cc}44;border-radius:4px;padding:2px 8px;font-size:11px">${p.confidence}</span></div>
+
+      <!-- Severity bar -->
+      <div style="height:2px;background:#1e293b;border-radius:1px;margin:10px 0 0;overflow:hidden">
+        <div style="width:${sevPct}%;height:100%;background:linear-gradient(90deg,${sc}88,${sc});border-radius:1px"></div>
       </div>
     </div>
-    ${p.summary?`<div style="margin-top:9px;font-size:12px;color:#cbd5e1;line-height:1.5">${p.summary}</div>`:''}
-    <div style="margin-top:7px;display:flex;gap:7px;flex-wrap:wrap;align-items:center">${zones}${ttps?`<span style="margin-left:auto">${ttps}</span>`:''}</div>
-    <div style="margin-top:9px;display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:11px;color:#475569">${p.member_scan_count||0} scans · ${new Date(p.generated_at*1000).toLocaleString()}</span>
+
+    <!-- Summary -->
+    ${p.summary?`<div style="padding:10px 16px;font-size:12px;color:#94a3b8;line-height:1.6;border-bottom:1px solid #1e293b">${p.summary}</div>`:''}
+
+    <!-- Tags Row -->
+    <div style="padding:10px 16px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      ${zoneHtml}${ttpHtml}
+      <span style="margin-left:auto;font-size:10px;color:#334155">${p.member_scan_count||0} scans</span>
+    </div>
+
+    <!-- Action Footer -->
+    <div style="padding:8px 16px 10px;display:flex;align-items:center;justify-content:space-between;background:#090e17">
+      <span style="font-size:10px;color:#334155">${new Date(p.generated_at*1000).toLocaleString()}</span>
       <div style="display:flex;gap:6px">
-        <button class="bs" style="padding:3px 10px;font-size:11px" data-profile-id='${p.id}' onclick="_toggleProfile(this)">📊 Evidence</button>
-        <button class="bs" style="padding:3px 10px;font-size:11px" data-profile-id='${p.id}' onclick="_exportProfilePDF(this)">📄 PDF</button>
+        <button data-profile-id='${p.id}' onclick="_toggleProfile(this)" style="padding:4px 12px;font-size:11px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#94a3b8;cursor:pointer;transition:all .2s" onmouseover="this.style.borderColor='#8b5cf6';this.style.color='#c4b5fd'" onmouseout="this.style.borderColor='#334155';this.style.color='#94a3b8'">🔍 Evidence</button>
+        <button data-profile-id='${p.id}' onclick="_exportProfilePDF(this)" style="padding:4px 12px;font-size:11px;background:transparent;border:1px solid #334155;border-radius:5px;color:#64748b;cursor:pointer" onmouseover="this.style.color='#94a3b8'" onmouseout="this.style.color='#64748b'">📄 PDF</button>
       </div>
     </div>
-    <div id="ev-${p.id}" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #1e293b"></div>
+
+    <!-- Evidence Panel (collapsed) -->
+    <div id="ev-${p.id}" style="display:none"></div>
   </div>`;
 }
 
@@ -1177,16 +1304,64 @@ async function _expandProfile(btn){
   const panel = document.getElementById('ev-'+pid);
   if(!panel) return;
   panel.style.display='block';
-  panel.innerHTML='<div class="empty">Loading evidence…</div>';
+  panel.innerHTML='<div style="padding:16px;text-align:center;font-size:12px;color:#475569">Loading intelligence…</div>';
   try{
     const r = await api('/api/intel/profiles/'+pid);
-    if(!r.ok){panel.innerHTML=`<div class="empty">Error ${r.status}</div>`;return;}
+    if(!r.ok){panel.innerHTML=`<div style="padding:12px;color:#ef4444;font-size:12px">Error loading profile (${r.status})</div>`;return;}
     const p = await r.json();
-    const ttps=(p.ttps||[]).map(t=>`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:11px;color:#94a3b8;margin:2px">${t.attack_id} ${t.name}</span>`).join('');
-    const ev=(p.evidence||[]).slice(0,5).map(e=>`<div style="margin-bottom:6px;font-size:12px;color:#cbd5e1">• ${e.claim} ${e.source_title?`<span style="color:#475569;font-size:10px">[${e.source_title.slice(0,40)}]</span>`:''}</div>`).join('');
+
+    const tacticsMap = {};
+    (p.ttps||[]).forEach(t=>{ if(!tacticsMap[t.tactic]) tacticsMap[t.tactic]=[]; tacticsMap[t.tactic].push(t); });
+    const ttpSections = Object.entries(tacticsMap).map(([tactic,ttps])=>`
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">${tactic}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px">
+          ${ttps.map(t=>`<span style="background:#172554;border:1px solid #1d4ed844;border-radius:5px;padding:3px 10px;font-size:11px;color:#93c5fd;font-weight:500">${t.attack_id} · ${t.name}</span>`).join('')}
+        </div>
+      </div>`).join('');
+
+    const confColor = _CONF_COLORS[p.confidence]||'#6b7280';
+    const evRows = (p.evidence||[]).slice(0,6).map(e=>`
+      <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #1e293b;align-items:flex-start">
+        <span style="color:${confColor};font-size:14px;flex-shrink:0;margin-top:1px">◆</span>
+        <div style="flex:1">
+          <div style="font-size:12px;color:#cbd5e1;line-height:1.5">${e.claim}</div>
+          ${e.source_title?`<div style="font-size:10px;color:#475569;margin-top:3px">📌 ${e.source_title.slice(0,60)}</div>`:''}
+        </div>
+      </div>`).join('');
+
+    const scanBadge = p.member_scan_count>0?`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:10px;color:#64748b">${p.member_scan_count} scans linked</span>`:'';
+    const zoneBadges=(p.surface_zones||[]).map(z=>`<span style="background:#172554;border:1px solid #1d4ed844;border-radius:4px;padding:2px 8px;font-size:10px;color:#60a5fa">${z.replace(/_/g,' ')}</span>`).join(' ');
+
     panel.innerHTML=`
-      ${ttps?`<div style="margin-bottom:10px"><div style="font-size:11px;color:#64748b;margin-bottom:5px">ATT&amp;CK TECHNIQUES</div>${ttps}</div>`:''}
-      ${ev?`<div><div style="font-size:11px;color:#64748b;margin-bottom:5px">EVIDENCE CHAIN</div>${ev}</div>`:'<div class="empty">No evidence chain available.</div>'}
+      <div style="background:#070d14;border-top:1px solid #1e293b;padding:16px">
+
+        <!-- Profile meta row -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+          ${scanBadge} ${zoneBadges}
+          <span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:10px;color:#64748b">model: ${p.model||'claude'}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+          <!-- ATT&CK Techniques -->
+          <div>
+            <div style="font-size:11px;font-weight:600;color:#f59e0b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">⚡ ATT&amp;CK Techniques</div>
+            ${ttpSections||'<div style="font-size:12px;color:#334155">No techniques mapped</div>'}
+          </div>
+
+          <!-- Evidence Chain -->
+          <div>
+            <div style="font-size:11px;font-weight:600;color:${confColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">◆ Evidence Chain</div>
+            ${evRows||'<div style="font-size:12px;color:#334155">No evidence available</div>'}
+          </div>
+        </div>
+
+        <!-- Footer actions -->
+        <div style="display:flex;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #1e293b">
+          <button data-profile-id='${pid}' onclick="_markWrongProfile(this)" style="padding:5px 14px;font-size:11px;background:transparent;border:1px solid #334155;border-radius:5px;color:#64748b;cursor:pointer">✗ Mark Incorrect</button>
+        </div>
+      </div>`;
       <div style="margin-top:10px;display:flex;gap:8px">
         <button class="bs" style="font-size:11px;padding:3px 10px" data-profile-id='${pid}' onclick="_markWrongProfile(this)">✗ Mark Wrong</button>
       </div>`;
