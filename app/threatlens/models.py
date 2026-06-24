@@ -95,6 +95,17 @@ class OrgThreatAssessment(BaseModel):
     model: str = ""
 
 
+class TTPObservation(BaseModel):
+    """A single observed technique mapped to a Skylo surface zone."""
+    id: str
+    cluster_id: str
+    attack_id: str
+    tactic: str
+    surface_zone: str     # from attack_surface.yaml zones or 'unmapped'
+    evidence_ref: str
+    observed_at: float
+
+
 class Rollup(BaseModel):
     """Aggregated view for sector / org / network-surface rollups."""
     dimension: str        # sector | org | network

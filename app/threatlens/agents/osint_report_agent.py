@@ -1,7 +1,9 @@
-"""OSINT Report Agent — reads public vendor/CERT reports and extracts findings.
+"""OSINT Report Agent — public vendor/CERT reports and advisories.
 
-Uses Crawl4AI (or httpx fallback) to fetch allowlisted pages, then Claude
-to extract structured Finding objects with source citations.
+Phase 3: uses proper scraper routing based on allowlist preferred_client:
+  - crawl4ai  → JS-heavy pages (CISA, Unit42 blogs)
+  - scrapling  → anti-bot / fragile sources
+  - httpx+trafilatura → static article pages (fast path)
 
 Prompt-injection hardening:
   - sanitize_text() strips common injection markers from scraped content
@@ -11,26 +13,31 @@ Prompt-injection hardening:
 from __future__ import annotations
 
 import json
+import urllib.parse
 
 import structlog
 
 from app.llm.client import get_llm_client
 from app.threatlens.agents.base_agent import BaseAgent
 from app.threatlens.models import ActorCluster, Finding
-from app.threatlens.scraper import fetcher as _fetcher
+from app.threatlens.scraper import (
+    crawl4ai_client,
+    fetcher as _fetcher,
+    scrapling_client,
+    text_extract,
+)
 
 logger = structlog.get_logger()
 
-# Static mapping: intent → one representative allowlisted URL likely to have
-# relevant advisory content.  In production these would be discovered via
-# search; for Phase 2 we use known-good static URLs.
 _INTENT_URLS: dict[str, str] = {
     "credential_harvesting": "https://www.cisa.gov/news-events/cybersecurity-advisories",
     "credential_harvest":    "https://www.cisa.gov/news-events/cybersecurity-advisories",
     "bec_fraud":             "https://www.cisa.gov/news-events/cybersecurity-advisories",
     "fraud_payment":         "https://www.cisa.gov/news-events/cybersecurity-advisories",
     "brand_impersonation":   "https://unit42.paloaltonetworks.com",
+    "executive_impersonation": "https://unit42.paloaltonetworks.com",
     "generic_phish":         "https://www.cisa.gov/news-events/cybersecurity-advisories",
+    "unclear":               "https://isc.sans.edu/diaryarchive.html",
 }
 
 _SYSTEM_PROMPT = """\
@@ -63,25 +70,28 @@ Rules:
 
 class OsintReportAgent(BaseAgent):
     name = "osint"
-    required_keys = []  # Uses existing LLM client — key already in env
+    required_keys = []
 
     async def _run_impl(self, cluster: ActorCluster) -> list[Finding]:
         intent = (cluster.dominant_intent or "unknown").lower()
         source_url = _INTENT_URLS.get(intent, "https://www.cisa.gov/news-events/cybersecurity-advisories")
 
-        # Fetch page (will raise DisallowedSourceError if not allowlisted)
+        # Determine preferred scraper from allowlist config
+        host = urllib.parse.urlparse(source_url).hostname or ""
+        config = _fetcher.get_source_config(host)
+        preferred = config.get("preferred_client", "httpx")
+
         try:
-            raw_text = await _fetcher.fetch(source_url)
+            raw_text = await self._fetch(source_url, preferred, intent)
         except Exception as exc:
             logger.warning("osint_fetch_failed", url=source_url, error=str(exc)[:100])
             return []
 
-        # Sanitize before LLM
-        clean_text = self.sanitize_text(raw_text)
-        # Truncate to keep tokens reasonable
-        clean_text = clean_text[:6000]
+        if not raw_text:
+            return []
 
-        # Build user prompt
+        clean_text = self.sanitize_text(raw_text)[:6000]
+
         top_domains = ", ".join(cluster.iocs.domains[:3]) or "unknown"
         user_prompt = (
             f"THREAT CONTEXT:\n"
@@ -94,14 +104,29 @@ class OsintReportAgent(BaseAgent):
 
         llm = get_llm_client()
         raw_response = await llm.complete(_SYSTEM_PROMPT, user_prompt, max_tokens=800)
-
         return self._parse_response(raw_response, source_url)
+
+    async def _fetch(self, url: str, preferred: str, query: str) -> str:
+        """Route to the right scraper based on allowlist config."""
+        if preferred == "crawl4ai":
+            try:
+                return await crawl4ai_client.get(url, query=query)
+            except Exception:
+                pass  # fall through to trafilatura
+        elif preferred == "scrapling":
+            try:
+                return await scrapling_client.get(url)
+            except Exception:
+                pass
+
+        # Default: httpx + trafilatura (fast path for static pages)
+        html = await _fetcher.fetch(url)
+        return text_extract.extract(html)
 
     def _parse_response(self, raw: str, source_url: str) -> list[Finding]:
         if not raw:
             return []
         try:
-            # Strip markdown fences if present
             text = raw.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -109,7 +134,6 @@ class OsintReportAgent(BaseAgent):
             findings = []
             for item in data.get("findings", []):
                 conf = item.get("confidence", "low")
-                # Cap at moderate — agents cannot produce 'high' or 'confirmed'
                 if conf in ("high", "confirmed"):
                     conf = "moderate"
                 findings.append(Finding(

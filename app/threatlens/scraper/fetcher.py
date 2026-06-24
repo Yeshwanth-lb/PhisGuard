@@ -70,6 +70,30 @@ def is_allowed(url: str) -> bool:
     return host in _allowed_hosts
 
 
+def is_allowed_or_raise(url: str) -> None:
+    """Raise DisallowedSourceError if the URL's host is not on the allowlist."""
+    if not is_allowed(url):
+        raise DisallowedSourceError(
+            f"Host '{_extract_host(url)}' is not on the ThreatLens allowlist."
+        )
+
+
+_source_configs: dict[str, dict] = {}
+
+
+def get_source_config(host: str) -> dict:
+    """Return the allowlist config dict for a host (preferred_client, polite_delay, etc.)."""
+    if not _source_configs:
+        try:
+            with open(_ALLOWLIST_PATH) as f:
+                data = yaml.safe_load(f)
+            for s in data.get("sources", []):
+                _source_configs[s["domain"]] = s
+        except Exception:
+            pass
+    return _source_configs.get(host, {})
+
+
 def _extract_host(url: str) -> str:
     try:
         return urllib.parse.urlparse(url).hostname or ""
@@ -189,6 +213,7 @@ def _reset() -> None:
     _allowed_hosts.clear()
     _robots_cache.clear()
     _rate_state.clear()
+    _source_configs.clear()
 
 
 # Load allowlist at import time

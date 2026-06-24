@@ -187,3 +187,174 @@ async def test_agents_run_concurrently_one_failure_isolated():
     assert failing_result == []
     assert len(ok_result) == 1
     assert ok_result[0].claim == "healthy finding"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 agents
+# ---------------------------------------------------------------------------
+
+from app.threatlens.agents.misp_opencti_agent import MispOpenCTIAgent
+from app.threatlens.agents.ioc_reputation_agent import IoCReputationAgent
+from app.threatlens.agents.cve_agent import CVEAgent
+from app.threatlens.agents.compromise_intel_agent import CompromiseIntelAgent
+from app.threatlens.agents.telecom_ntn_agent import TelecomNTNAgent
+
+
+@pytest.mark.asyncio
+async def test_misp_agent_hard_match_is_confirmed(mocker):
+    """MISP attribute match on cluster IoC → Finding with confidence='confirmed'."""
+    mocker.patch.object(
+        MispOpenCTIAgent, "_misp_lookup",
+        return_value={"attribute_count": 3, "sample": []},
+    )
+    import app.config as _cfg
+    mocker.patch.object(_cfg.settings, "misp_url", "https://misp", create=True)
+    mocker.patch.object(_cfg.settings, "misp_api_key", "testkey", create=True)
+
+    agent = MispOpenCTIAgent()
+    cluster = _make_cluster()
+    cluster.iocs.domains = ["paypa1-verify.com"]
+    findings = await agent._run_impl(cluster)
+
+    assert len(findings) > 0
+    assert all(f.confidence == "confirmed" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_misp_agent_no_match_returns_empty(mocker):
+    """No MISP match → [], nothing fabricated."""
+    mocker.patch.object(MispOpenCTIAgent, "_misp_lookup", return_value=None)
+    import app.config as _cfg
+    mocker.patch.object(_cfg.settings, "misp_url", "https://misp", create=True)
+    mocker.patch.object(_cfg.settings, "misp_api_key", "testkey", create=True)
+
+    agent = MispOpenCTIAgent()
+    findings = await agent._run_impl(_make_cluster())
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_misp_agent_down_returns_empty_not_raise(mocker):
+    """MISP client error → [], logged, cycle unaffected."""
+    mocker.patch.object(
+        MispOpenCTIAgent, "_misp_lookup",
+        side_effect=Exception("connection refused"),
+    )
+    agent = MispOpenCTIAgent()
+    result = await agent.run(_make_cluster())
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_ioc_reputation_agent_abuse_ch_hit(mocker):
+    """URLhaus domain match → Finding with source_url and confidence=high."""
+    from app.threatlens.scraper.feeds_client import URLhausEntry
+    mocker.patch(
+        "app.threatlens.scraper.feeds_client.urlhaus_host_lookup",
+        return_value=URLhausEntry(host="evil.com", urls_on_this_host=3),
+    )
+    mocker.patch("app.threatlens.scraper.feeds_client.threatfox_ioc_lookup", return_value=[])
+    mocker.patch("app.threatlens.scraper.feeds_client.otx_domain_lookup", return_value=[])
+
+    agent = IoCReputationAgent()
+    findings = await agent.run(_make_cluster())
+
+    assert len(findings) > 0
+    assert any(f.source_url is not None for f in findings)
+    assert any(f.confidence == "high" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_ioc_reputation_agent_no_match_returns_empty(mocker):
+    """No abuse.ch/OTX/Pulsedive match → []."""
+    mocker.patch("app.threatlens.scraper.feeds_client.urlhaus_host_lookup", return_value=None)
+    mocker.patch("app.threatlens.scraper.feeds_client.threatfox_ioc_lookup", return_value=[])
+    mocker.patch("app.threatlens.scraper.feeds_client.otx_domain_lookup", return_value=[])
+
+    agent = IoCReputationAgent()
+    findings = await agent.run(_make_cluster())
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_ioc_reputation_agent_all_feeds_down_returns_empty(mocker):
+    """All feeds return errors → [], logged, cycle unaffected."""
+    mocker.patch("app.threatlens.scraper.feeds_client.urlhaus_host_lookup", side_effect=Exception("timeout"))
+    mocker.patch("app.threatlens.scraper.feeds_client.threatfox_ioc_lookup", side_effect=Exception("timeout"))
+    mocker.patch("app.threatlens.scraper.feeds_client.otx_domain_lookup", side_effect=Exception("timeout"))
+
+    agent = IoCReputationAgent()
+    result = await agent.run(_make_cluster())
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_cve_agent_filters_to_relevant_domains(mocker):
+    """NVD returns mixed CVEs → only NTN/5G/telecom/cloud ones returned, wordpress dropped."""
+    from app.threatlens.scraper.feeds_client import CVEEntry
+    mocker.patch(
+        "app.threatlens.scraper.feeds_client.nvd_cve_search",
+        return_value=[
+            CVEEntry(cve_id="CVE-2026-1111", description="5G core AMF RCE", keywords_matched=["5g"]),
+        ],
+    )
+    mocker.patch("app.threatlens.scraper.feeds_client.cisa_kev", return_value=[])
+    mocker.patch("app.threatlens.scraper.feeds_client.epss_scores", return_value={})
+
+    agent = CVEAgent()
+    findings = await agent.run(_make_cluster())
+
+    cve_ids = [f.raw.get("cve_id") for f in findings]
+    assert "CVE-2026-1111" in cve_ids
+
+
+@pytest.mark.asyncio
+async def test_compromise_agent_stores_signal_not_record(mocker):
+    """Leak-site signal reported → Finding states exposure exists, no PII/credential fields."""
+    from app.threatlens.scraper.feeds_client import VictimListing
+    mocker.patch(
+        "app.threatlens.scraper.feeds_client.ransomwarelive_victims",
+        return_value=[VictimListing(group="BlackCat", victim="AcmeMaritime", date="2026-01", sector="maritime", source="ransomware.live")],
+    )
+    mocker.patch("app.threatlens.scraper.feeds_client.ransomlook_victims", return_value=[])
+
+    agent = CompromiseIntelAgent()
+    findings = await agent.run(_make_cluster())
+
+    assert len(findings) > 0
+    for f in findings:
+        raw_keys = set(f.raw.keys())
+        # must NOT contain any credential or raw record data
+        assert "password" not in raw_keys
+        assert "hash" not in raw_keys
+        assert "email" not in raw_keys
+        assert "credential" not in raw_keys
+
+
+@pytest.mark.asyncio
+async def test_compromise_agent_clean_domain_no_finding(mocker):
+    """No breach/leak-site match for monitored domains → []."""
+    mocker.patch("app.threatlens.scraper.feeds_client.ransomwarelive_victims", return_value=[])
+    mocker.patch("app.threatlens.scraper.feeds_client.ransomlook_victims", return_value=[])
+
+    agent = CompromiseIntelAgent()
+    findings = await agent.run(_make_cluster())
+    assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_telecom_agent_uses_scraper_chokepoint(mocker):
+    """Non-allowlisted telecom URL → DisallowedSourceError caught → [], flagged for review."""
+    from app.threatlens.scraper.fetcher import DisallowedSourceError
+    mocker.patch(
+        "app.threatlens.agents.telecom_ntn_agent.crawl4ai_client.get",
+        side_effect=DisallowedSourceError("not on allowlist"),
+    )
+    mocker.patch(
+        "app.threatlens.agents.telecom_ntn_agent._fetcher.fetch",
+        side_effect=DisallowedSourceError("not on allowlist"),
+    )
+
+    agent = TelecomNTNAgent()
+    result = await agent.run(_make_cluster())
+    assert result == []

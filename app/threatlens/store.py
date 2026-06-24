@@ -9,7 +9,7 @@ import os
 import sqlite3
 import threading
 
-from app.threatlens.models import ActorCluster, AdversaryProfile, Finding, IoCSet, TTP, CorroboratedClaim
+from app.threatlens.models import ActorCluster, AdversaryProfile, Finding, IoCSet, TTP, CorroboratedClaim, TTPObservation
 
 _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 _lock = threading.Lock()
@@ -295,5 +295,55 @@ def get_profiles(db_path: str = _DB_PATH) -> list[AdversaryProfile]:
                 "SELECT * FROM actor_profiles ORDER BY generated_at DESC"
             ).fetchall()
             return [_row_to_profile(r) for r in rows]
+        finally:
+            c.close()
+
+
+# ---------------------------------------------------------------------------
+# TTP Observations CRUD
+# ---------------------------------------------------------------------------
+
+def upsert_ttp_observation(obs: TTPObservation, db_path: str = _DB_PATH) -> None:
+    with _lock:
+        c = _conn(db_path)
+        try:
+            c.execute("""
+                INSERT OR REPLACE INTO ttp_observations
+                    (id, cluster_id, attack_id, tactic, surface_zone, evidence_ref, observed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                obs.id,
+                obs.cluster_id,
+                obs.attack_id,
+                obs.tactic,
+                obs.surface_zone,
+                obs.evidence_ref,
+                obs.observed_at,
+            ))
+            c.commit()
+        finally:
+            c.close()
+
+
+def get_ttp_observations(cluster_id: str, db_path: str = _DB_PATH) -> list[TTPObservation]:
+    with _lock:
+        c = _conn(db_path)
+        try:
+            rows = c.execute(
+                "SELECT * FROM ttp_observations WHERE cluster_id = ? ORDER BY observed_at DESC",
+                (cluster_id,)
+            ).fetchall()
+            return [
+                TTPObservation(
+                    id=r["id"],
+                    cluster_id=r["cluster_id"],
+                    attack_id=r["attack_id"],
+                    tactic=r["tactic"],
+                    surface_zone=r["surface_zone"],
+                    evidence_ref=r["evidence_ref"],
+                    observed_at=r["observed_at"],
+                )
+                for r in rows
+            ]
         finally:
             c.close()

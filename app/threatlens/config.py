@@ -51,6 +51,17 @@ class ThreatLensSettings(BaseSettings):
     pulsedive_api_key: str = Field(default="")
     nvd_api_key: str = Field(default="")
 
+    # Free-with-signup keys
+    greynoise_api_key: str = Field(default="")
+    urlscan_api_key: str = Field(default="")
+    ipinfo_api_key: str = Field(default="")
+    securitytrails_api_key: str = Field(default="")
+    emailrep_api_key: str = Field(default="")
+    virustotal_api_key: str = Field(default="")  # reuse from L1 if set
+
+    # Truly free, no key required (Shodan InternetDB, BGPView, RIPE, crt.sh)
+    # These agents are always configured — no key check needed
+
     # Optional commercial connectors — blank by default, activate by supplying key
     hibp_api_key: str = Field(default="")
     dehashed_api_key: str = Field(default="")

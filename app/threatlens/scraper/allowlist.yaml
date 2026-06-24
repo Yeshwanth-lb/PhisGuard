@@ -122,3 +122,97 @@ sources:
     type: vulnerability
     preferred_client: httpx
     polite_delay_secs: 1
+
+  - domain: api.first.org
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  # No-key free sources
+  - domain: internetdb.shodan.io
+    type: network_intel
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: api.bgpview.io
+    type: network_intel
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: ipinfo.io
+    type: network_intel
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: crt.sh
+    type: certificate
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  # Free-key sources
+  - domain: api.greynoise.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: urlscan.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.urlscan.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: emailrep.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  # Ransomware / breach intel
+  - domain: api.ransomlook.io
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: xposedornot.com
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: haveibeenpwned.com
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  # Telecom / NTN
+  - domain: portal.3gpp.org
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.gsma.com
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: ncsc.gov.uk
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.ncsc.gov.uk
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: isc.sans.edu
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
