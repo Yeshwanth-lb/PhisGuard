@@ -276,11 +276,28 @@ services:
       - MISP_DATETIME_ATTRIBUTE=timestamp
       - MISP_IMPORT_FROM_DATE=2020-01-01
       - MISP_INTERVAL=60
+      - MISP_CREATE_REPORTS=true
+      - MISP_CREATE_INDICATORS=true
+      - MISP_CREATE_OBSERVABLES=true
     volumes:
       - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
     depends_on:
       - opencti
       - misp
+    mem_limit: 512m
+    networks: [phishguard]
+
+  # OpenCTI worker — consumes connector push queues and writes STIX objects into OpenCTI
+  opencti-worker:
+    image: opencti/worker:6.2.18
+    container_name: phishguard-opencti-worker
+    restart: unless-stopped
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - WORKER_LOG_LEVEL=error
+    depends_on:
+      - opencti
     mem_limit: 512m
     networks: [phishguard]
 
