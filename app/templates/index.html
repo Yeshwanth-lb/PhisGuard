@@ -342,12 +342,39 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
 <div class="section" id="sec-profiling">
   <div class="section-title">Threat Intelligence &amp; Adversary Profiling</div>
   <div class="section-sub">Attacker clusters enriched with OSINT, ATT&CK mapping, and Claude synthesis</div>
-  <div class="card" style="margin-bottom:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between">
-      <h2 style="margin:0">Adversary Profiles</h2>
-      <button class="bs" style="padding:5px 14px;font-size:12px;background:#8b5cf6" onclick="runIntelCycle()">▶ Run Analysis</button>
+
+  <!-- 1. Strategic Org Assessment (prominent at top) -->
+  <div class="card" style="margin-bottom:14px;border-left:3px solid #8b5cf6">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0;font-size:15px">Strategic Threat Assessment <span style="font-size:11px;font-weight:400;color:#64748b">— Skylo organization-wide</span></h2>
+      <div style="display:flex;gap:8px">
+        <button class="bs" style="padding:4px 12px;font-size:11px" onclick="exportOrgBrief()">📄 Leadership Brief</button>
+        <button class="bs" style="padding:4px 12px;font-size:11px;background:#8b5cf6" onclick="runIntelCycle()">▶ Run Analysis</button>
+      </div>
     </div>
-    <div id="profilingBody" style="margin-top:14px"><div class="empty">Loading profiles…</div></div>
+    <div id="orgAssessmentBody"><div class="empty">No assessment yet — run an analysis cycle.</div></div>
+  </div>
+
+  <!-- 2. Three rollup panels -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:12px">
+      <h3 style="margin:0 0 10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Sector Pressure</h3>
+      <div id="sectorRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <h3 style="margin:0 0 10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Org Targeting</h3>
+      <div id="orgRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <h3 style="margin:0 0 10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Network Surface</h3>
+      <div id="networkRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
+    </div>
+  </div>
+
+  <!-- 3. Adversary profiles list -->
+  <div class="card">
+    <h2 style="margin:0 0 14px">Adversary Profiles</h2>
+    <div id="profilingBody"><div class="empty">Loading profiles…</div></div>
   </div>
 </div>
 <div class="section" id="sec-campaigns">
@@ -1031,59 +1058,184 @@ async function addTrustedDomain(){
 }
 
 // ── ThreatLens Profiling ────────────────────────────────────────────────────
+// ── ThreatLens Profiling ────────────────────────────────────────────────────
 const _CONF_COLORS = {confirmed:'#10b981',high:'#3b82f6',moderate:'#f59e0b',low:'#6b7280',speculative:'#4b5563'};
 const _SEV_COLORS  = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#6b7280'};
+let _openProfileId = null;  // tracks expanded card — survives re-render (gotcha #2)
 
 async function loadProfiling(){
+  await Promise.all([_loadProfiles(), _loadRollups(), _loadOrgAssessment()]);
+}
+
+async function _loadProfiles(){
   const body = document.getElementById('profilingBody');
   if(!body) return;
-  body.innerHTML = '<div class="empty">Loading adversary profiles…</div>';
   try {
     const r = await api('/api/intel/profiles');
-    if(!r.ok){ body.innerHTML = `<div class="empty">Could not load profiles (${r.status})</div>`; return; }
+    if(!r.ok){ body.innerHTML=`<div class="empty">Could not load (${r.status})</div>`; return; }
     const profiles = await r.json();
     const badge = document.getElementById('profilingBadge');
-    if(badge){ badge.textContent = profiles.length; badge.style.display = profiles.length ? 'inline' : 'none'; }
-    if(!profiles.length){ body.innerHTML = '<div class="empty">No profiles yet — run an analysis cycle to generate them.</div>'; return; }
-    body.innerHTML = profiles.map(p => _renderProfileCard(p)).join('');
-  } catch(e){ body.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+    if(badge){ badge.textContent=profiles.length; badge.style.display=profiles.length?'inline':'none'; }
+    if(!profiles.length){ body.innerHTML='<div class="empty">No profiles yet — run an analysis cycle.</div>'; return; }
+    body.innerHTML = profiles.map(p=>_renderProfileCard(p)).join('');
+    // Restore expanded panel (gotcha #2 — panel survives re-render)
+    if(_openProfileId){
+      const btn = document.querySelector(`[data-profile-id="${_openProfileId}"]`);
+      if(btn) _expandProfile(btn);
+    }
+  } catch(e){ body.innerHTML=`<div class="empty">Error: ${e.message}</div>`; }
+}
+
+async function _loadRollups(){
+  try{
+    const [sR,oR,nR] = await Promise.all([
+      api('/api/intel/rollup/sectors').then(r=>r.ok?r.json():{buckets:[]}),
+      api('/api/intel/rollup/org').then(r=>r.ok?r.json():{buckets:[]}),
+      api('/api/intel/rollup/network').then(r=>r.ok?r.json():{buckets:[]}),
+    ]);
+    _renderRollup('sectorRollupBody', sR.buckets||[]);
+    _renderRollup('orgRollupBody',    oR.buckets||[]);
+    _renderRollup('networkRollupBody',nR.buckets||[]);
+  }catch(e){}
+}
+
+function _renderRollup(elId, buckets){
+  const el = document.getElementById(elId); if(!el) return;
+  if(!buckets.length){el.innerHTML='<div class="empty" style="font-size:11px">No data yet</div>';return;}
+  el.innerHTML = buckets.slice(0,5).map(b=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;font-size:12px">
+      <span style="color:#cbd5e1">${b.label}</span>
+      <span style="background:#1e293b;border-radius:10px;padding:1px 8px;color:#94a3b8;font-size:11px">${b.count}</span>
+    </div>`).join('');
+}
+
+async function _loadOrgAssessment(){
+  const body = document.getElementById('orgAssessmentBody'); if(!body) return;
+  try{
+    const r = await api('/api/intel/assessment');
+    if(!r.ok){body.innerHTML='<div class="empty">No assessment yet.</div>';return;}
+    const a = await r.json();
+    const cc = _CONF_COLORS[a.confidence]||'#6b7280';
+    body.innerHTML=`
+      <div style="display:flex;gap:14px;align-items:flex-start">
+        <div style="flex:1">
+          <div style="font-size:12px;color:#cbd5e1;line-height:1.6">${a.summary||'No summary.'}</div>
+          ${a.adversary_landscape?`<div style="margin-top:8px;font-size:11px;color:#94a3b8">${a.adversary_landscape.slice(0,250)}…</div>`:''}
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <span style="background:${cc}22;color:${cc};border:1px solid ${cc}44;border-radius:4px;padding:2px 8px;font-size:11px">${a.confidence}</span>
+          <div style="font-size:10px;color:#475569;margin-top:4px">${new Date(a.generated_at*1000).toLocaleDateString()}</div>
+        </div>
+      </div>
+      ${a.strategic_intent&&a.strategic_intent!=='unknown'?`<div style="margin-top:8px;font-size:11px;color:#64748b">Strategic intent: <b style="color:#94a3b8">${a.strategic_intent}</b></div>`:''}`;
+  }catch(e){body.innerHTML='<div class="empty">No assessment yet.</div>';}
 }
 
 function _renderProfileCard(p){
-  const confColor = _CONF_COLORS[p.confidence] || '#6b7280';
-  const sevColor  = _SEV_COLORS[p.severity]    || '#6b7280';
-  const apt = p.suspected_apt ? `<div style="font-size:11px;color:#94a3b8;margin-top:4px">${p.suspected_apt}</div>` : '';
-  const zones = (p.surface_zones||[]).map(z=>`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:1px 7px;font-size:10px;color:#94a3b8">${z}</span>`).join(' ');
-  const ttps  = p.ttp_count > 0 ? `<span style="font-size:11px;color:#64748b">${p.ttp_count} ATT&amp;CK technique${p.ttp_count>1?'s':''}</span>` : '';
+  const cc=_CONF_COLORS[p.confidence]||'#6b7280', sc=_SEV_COLORS[p.severity]||'#6b7280';
+  const apt=p.suspected_apt?`<div style="font-size:11px;color:#94a3b8;margin-top:3px">${p.suspected_apt}</div>`:'';
+  const zones=(p.surface_zones||[]).map(z=>`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:1px 6px;font-size:10px;color:#94a3b8">${z}</span>`).join(' ');
+  const ttps=p.ttp_count>0?`<span style="font-size:11px;color:#64748b">${p.ttp_count} ATT&amp;CK technique${p.ttp_count>1?'s':''}</span>`:'';
+  // data-profile-id attribute — NOT inline JSON.stringify (gotcha #1)
   return `<div style="border:1px solid #2a3346;border-radius:8px;padding:14px;margin-bottom:10px;background:#141925">
     <div style="display:flex;align-items:flex-start;justify-content:space-between">
-      <div>
+      <div style="flex:1">
         <span style="font-weight:600;font-size:14px;color:#e2e8f0">${p.assessed_identity}</span>
         ${apt}
-        <div style="margin-top:6px;font-size:12px;color:#94a3b8">${p.assessed_intent}</div>
+        <div style="margin-top:5px;font-size:12px;color:#94a3b8">${p.assessed_intent}</div>
       </div>
       <div style="text-align:right;flex-shrink:0;margin-left:12px">
-        <span style="background:${sevColor}22;color:${sevColor};border:1px solid ${sevColor}44;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">${p.severity.toUpperCase()}</span>
-        <div style="margin-top:4px"><span style="background:${confColor}22;color:${confColor};border:1px solid ${confColor}44;border-radius:4px;padding:2px 8px;font-size:11px">${p.confidence}</span></div>
+        <span style="background:${sc}22;color:${sc};border:1px solid ${sc}44;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">${p.severity.toUpperCase()}</span>
+        <div style="margin-top:3px"><span style="background:${cc}22;color:${cc};border:1px solid ${cc}44;border-radius:4px;padding:2px 8px;font-size:11px">${p.confidence}</span></div>
       </div>
     </div>
-    ${p.summary ? `<div style="margin-top:10px;font-size:12px;color:#cbd5e1;line-height:1.5">${p.summary}</div>` : ''}
-    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      ${zones}${ttps ? `<span style="margin-left:auto">${ttps}</span>` : ''}
+    ${p.summary?`<div style="margin-top:9px;font-size:12px;color:#cbd5e1;line-height:1.5">${p.summary}</div>`:''}
+    <div style="margin-top:7px;display:flex;gap:7px;flex-wrap:wrap;align-items:center">${zones}${ttps?`<span style="margin-left:auto">${ttps}</span>`:''}</div>
+    <div style="margin-top:9px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:11px;color:#475569">${p.member_scan_count||0} scans · ${new Date(p.generated_at*1000).toLocaleString()}</span>
+      <div style="display:flex;gap:6px">
+        <button class="bs" style="padding:3px 10px;font-size:11px" data-profile-id='${p.id}' onclick="_toggleProfile(this)">📊 Evidence</button>
+        <button class="bs" style="padding:3px 10px;font-size:11px" data-profile-id='${p.id}' onclick="_exportProfilePDF(this)">📄 PDF</button>
+      </div>
     </div>
-    <div style="margin-top:10px;font-size:11px;color:#475569">
-      ${p.member_scan_count||0} scans &nbsp;·&nbsp; generated ${new Date(p.generated_at*1000).toLocaleString()}
-    </div>
+    <div id="ev-${p.id}" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #1e293b"></div>
   </div>`;
 }
 
+function _toggleProfile(btn){
+  // data-profile-id — no JSON.stringify in onclick (gotcha #1)
+  const pid = btn.dataset.profileId;
+  const panel = document.getElementById('ev-'+pid);
+  if(!panel) return;
+  if(panel.style.display!=='none'){ panel.style.display='none'; _openProfileId=null; return; }
+  _openProfileId = pid;
+  _expandProfile(btn);
+}
+
+async function _expandProfile(btn){
+  const pid = btn.dataset.profileId;
+  const panel = document.getElementById('ev-'+pid);
+  if(!panel) return;
+  panel.style.display='block';
+  panel.innerHTML='<div class="empty">Loading evidence…</div>';
+  try{
+    const r = await api('/api/intel/profiles/'+pid);
+    if(!r.ok){panel.innerHTML=`<div class="empty">Error ${r.status}</div>`;return;}
+    const p = await r.json();
+    const ttps=(p.ttps||[]).map(t=>`<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:11px;color:#94a3b8;margin:2px">${t.attack_id} ${t.name}</span>`).join('');
+    const ev=(p.evidence||[]).slice(0,5).map(e=>`<div style="margin-bottom:6px;font-size:12px;color:#cbd5e1">• ${e.claim} ${e.source_title?`<span style="color:#475569;font-size:10px">[${e.source_title.slice(0,40)}]</span>`:''}</div>`).join('');
+    panel.innerHTML=`
+      ${ttps?`<div style="margin-bottom:10px"><div style="font-size:11px;color:#64748b;margin-bottom:5px">ATT&amp;CK TECHNIQUES</div>${ttps}</div>`:''}
+      ${ev?`<div><div style="font-size:11px;color:#64748b;margin-bottom:5px">EVIDENCE CHAIN</div>${ev}</div>`:'<div class="empty">No evidence chain available.</div>'}
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="bs" style="font-size:11px;padding:3px 10px" data-profile-id='${pid}' onclick="_markWrongProfile(this)">✗ Mark Wrong</button>
+      </div>`;
+  }catch(e){panel.innerHTML=`<div class="empty">Error: ${e.message}</div>`;}
+}
+
+async function _exportProfilePDF(btn){
+  const pid=btn.dataset.profileId;
+  const r=await api('/api/intel/profiles/'+pid);
+  if(!r.ok){toast('Could not load profile','error');return;}
+  const p=await r.json();
+  const w=window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><style>body{font-family:Arial;margin:40px;color:#111}h1{color:#1e293b}ul{font-size:13px}</style></head><body>
+    <h1>Adversary Profile — ${p.assessed_identity}</h1>
+    <p><b>Intent:</b> ${p.assessed_intent} &nbsp;|&nbsp; <b>Severity:</b> ${p.severity} &nbsp;|&nbsp; <b>Confidence:</b> ${p.confidence}</p>
+    ${p.suspected_apt?`<p>${p.suspected_apt}</p>`:''}
+    <p style="line-height:1.6">${p.summary}</p>
+    <h2>Surface Zones</h2><p>${(p.surface_zones||[]).join(', ')||'none'}</p>
+    <h2>ATT&CK Techniques</h2><ul>${(p.ttps||[]).map(t=>`<li>${t.attack_id} ${t.name} (${t.tactic})</li>`).join('')||'<li>none</li>'}</ul>
+    <h2>Evidence Chain</h2><ul>${(p.evidence||[]).map(e=>`<li>${e.claim}</li>`).join('')||'<li>none</li>'}</ul>
+    <p style="font-size:10px;color:#999;border-top:1px solid #ddd;margin-top:30px;padding-top:8px">PhishGuard ThreatLens — no email body content</p>
+  </body></html>`);
+  w.document.close(); w.print();
+}
+
+async function _markWrongProfile(btn){
+  const pid=btn.dataset.profileId;
+  const r=await api('/api/intel/profiles/'+pid+'/feedback',{method:'POST',body:JSON.stringify({rating:'incorrect',notes:'Marked wrong by analyst'})});
+  if(r.ok) toast('Feedback saved','success');
+  else toast('Feedback failed','error');
+}
+
+async function exportOrgBrief(){
+  toast('Generating leadership brief…','info');
+  try{
+    const r=await api('/api/intel/assessment/export',{method:'POST'});
+    if(!r.ok){toast('No assessment yet','error');return;}
+    const html=await r.text();
+    const w=window.open('','_blank'); w.document.write(html); w.document.close(); w.print();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
 async function runIntelCycle(){
-  toast('Starting analysis cycle…', 'info');
-  try {
-    const r = await api('/api/intel/run', {method:'POST'});
-    if(r.ok){ const d=await r.json(); toast(`✓ Cycle complete — ${d.profiles_written||0} profile(s) written`, 'success'); loadProfiling(); }
-    else { const d=await r.json(); toast('Failed: '+(d.detail||r.status), 'error'); }
-  } catch(e){ toast('Error: '+e.message, 'error'); }
+  toast('Starting analysis cycle…','info');
+  try{
+    const r=await api('/api/intel/run',{method:'POST'});
+    if(r.ok){const d=await r.json(); toast(`✓ Cycle complete — ${d.profiles_written||0} profile(s) written`,'success'); loadProfiling();}
+    else{const d=await r.json(); toast('Failed: '+(d.detail||r.status),'error');}
+  }catch(e){toast('Error: '+e.message,'error');}
 }
 
 async function removeTrustedDomain(domain, btn){

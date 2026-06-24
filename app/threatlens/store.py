@@ -9,7 +9,7 @@ import os
 import sqlite3
 import threading
 
-from app.threatlens.models import ActorCluster, AdversaryProfile, Finding, IoCSet, TTP, CorroboratedClaim, TTPObservation
+from app.threatlens.models import ActorCluster, AdversaryProfile, Finding, IoCSet, OrgThreatAssessment, TTP, CorroboratedClaim, TTPObservation
 
 _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 _lock = threading.Lock()
@@ -345,5 +345,136 @@ def get_ttp_observations(cluster_id: str, db_path: str = _DB_PATH) -> list[TTPOb
                 )
                 for r in rows
             ]
+        finally:
+            c.close()
+
+
+def get_all_ttp_observations(db_path: str = _DB_PATH) -> list[TTPObservation]:
+    """Return all TTP observations across all clusters."""
+    with _lock:
+        c = _conn(db_path)
+        try:
+            rows = c.execute(
+                "SELECT * FROM ttp_observations ORDER BY observed_at DESC"
+            ).fetchall()
+            return [
+                TTPObservation(
+                    id=r["id"],
+                    cluster_id=r["cluster_id"],
+                    attack_id=r["attack_id"],
+                    tactic=r["tactic"],
+                    surface_zone=r["surface_zone"],
+                    evidence_ref=r["evidence_ref"],
+                    observed_at=r["observed_at"],
+                )
+                for r in rows
+            ]
+        finally:
+            c.close()
+
+
+# ---------------------------------------------------------------------------
+# Org Threat Assessment CRUD
+# ---------------------------------------------------------------------------
+
+def upsert_org_assessment(assessment: OrgThreatAssessment, db_path: str = _DB_PATH) -> None:
+    """Persist assessment. Keeps only the latest 12 rows."""
+    with _lock:
+        c = _conn(db_path)
+        try:
+            c.execute("""
+                INSERT OR REPLACE INTO org_threat_assessment
+                    (id, generated_at, adversary_landscape, surface_pressure_json,
+                     sector_pressure_json, strategic_intent, top_campaigns_json,
+                     source_profile_ids, confidence, evidence_json, summary, model)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                assessment.id,
+                assessment.generated_at,
+                assessment.adversary_landscape,
+                json.dumps(assessment.surface_pressure),
+                json.dumps(assessment.sector_pressure),
+                assessment.strategic_intent,
+                json.dumps(assessment.top_campaigns),
+                json.dumps(assessment.source_profile_ids),
+                assessment.confidence,
+                json.dumps([e.model_dump() for e in assessment.evidence]),
+                assessment.summary,
+                assessment.model,
+            ))
+            # Prune to latest 12
+            c.execute("""
+                DELETE FROM org_threat_assessment WHERE id NOT IN (
+                    SELECT id FROM org_threat_assessment ORDER BY generated_at DESC LIMIT 12
+                )
+            """)
+            c.commit()
+        finally:
+            c.close()
+
+
+def get_latest_org_assessment(db_path: str = _DB_PATH) -> OrgThreatAssessment | None:
+    with _lock:
+        c = _conn(db_path)
+        try:
+            row = c.execute(
+                "SELECT * FROM org_threat_assessment ORDER BY generated_at DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+            return OrgThreatAssessment(
+                id=row["id"],
+                generated_at=row["generated_at"],
+                adversary_landscape=row["adversary_landscape"] or "",
+                surface_pressure=json.loads(row["surface_pressure_json"] or "{}"),
+                sector_pressure=json.loads(row["sector_pressure_json"] or "{}"),
+                strategic_intent=row["strategic_intent"] or "unknown",
+                top_campaigns=json.loads(row["top_campaigns_json"] or "[]"),
+                source_profile_ids=json.loads(row["source_profile_ids"] or "[]"),
+                confidence=row["confidence"] or "speculative",
+                evidence=[],
+                summary=row["summary"] or "",
+                model=row["model"] or "",
+            )
+        finally:
+            c.close()
+
+
+# ---------------------------------------------------------------------------
+# Profile feedback
+# ---------------------------------------------------------------------------
+
+def save_profile_feedback(
+    profile_id: str,
+    rating: str,
+    notes: str = "",
+    submitted_by: str = "soc",
+    db_path: str = _DB_PATH,
+) -> bool:
+    """Save analyst rating for an adversary profile."""
+    import uuid as _uuid
+    with _lock:
+        c = _conn(db_path)
+        try:
+            import time as _time
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS profile_feedback (
+                    id TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL,
+                    rating TEXT NOT NULL,
+                    notes TEXT DEFAULT '',
+                    submitted_at REAL NOT NULL,
+                    submitted_by TEXT DEFAULT 'soc'
+                )
+            """)
+            c.execute("""
+                INSERT INTO profile_feedback
+                    (id, profile_id, rating, notes, submitted_at, submitted_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (_uuid.uuid4().hex, profile_id, rating, notes, _time.time(), submitted_by))
+            c.commit()
+            return True
+        except Exception:
+            return False
         finally:
             c.close()

@@ -15,7 +15,7 @@ from app.pipeline import analyze_email as run_pipeline
 from app.security.audit import AuditMiddleware, read_audit_log
 from app.security.auth import create_token_pair, require_auth
 from app.security.rate_limiter import get_rate_limiter
-from app.security.rbac import require_permission
+from app.security.rbac import require_permission, require_admin
 
 structlog.configure(
     processors=[
@@ -55,6 +55,12 @@ async def _lifespan(app):
         start_digest_scheduler(settings)
     except Exception as _e:
         logger.warning("digest_scheduler_start_failed", error=str(_e))
+    # Start ThreatLens scheduler (no-op when INTEL_ENABLED=false)
+    try:
+        from app.threatlens.scheduler import start_scheduler as _start_tl
+        _start_tl()
+    except Exception as _e:
+        logger.warning("threatlens_scheduler_start_failed", error=str(_e))
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:
@@ -674,7 +680,7 @@ async def get_intel_profile(
 
 
 @app.post('/api/intel/run')
-async def run_intel_cycle(current_user: dict = Depends(require_permission('admin'))):
+async def run_intel_cycle(current_user: dict = Depends(require_admin())):
     """Trigger a ThreatLens profiling cycle (admin only)."""
     from app.threatlens.config import threatlens_settings
     if not threatlens_settings.intel_enabled:
@@ -689,7 +695,6 @@ async def run_intel_cycle(current_user: dict = Depends(require_permission('admin
 
 @app.get('/api/intel/status')
 async def intel_status(current_user: dict = Depends(require_permission('scan'))):
-    """ThreatLens layer status."""
     from app.threatlens.config import threatlens_settings
     from app.threatlens import store as tl_store
     clusters = tl_store.get_active_clusters()
@@ -700,6 +705,146 @@ async def intel_status(current_user: dict = Depends(require_permission('scan')))
         "profiles":        len(profiles),
         "cadence":         threatlens_settings.intel_run_cadence,
     }
+
+
+@app.get('/api/intel/clusters')
+async def list_intel_clusters(current_user: dict = Depends(require_permission('scan'))):
+    """List all active adversary clusters."""
+    from app.threatlens import store as tl_store
+    clusters = tl_store.get_active_clusters()
+    return [
+        {
+            "id":             c.id,
+            "first_seen":     c.first_seen,
+            "last_seen":      c.last_seen,
+            "member_count":   len(c.member_scan_ids),
+            "dominant_intent": c.dominant_intent,
+            "status":         c.status,
+            "domains":        c.iocs.domains[:5],
+        }
+        for c in clusters
+    ]
+
+
+@app.get('/api/intel/rollup/sectors')
+async def intel_rollup_sectors(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.sector_rollup import sector_rollup
+    return sector_rollup().model_dump()
+
+
+@app.get('/api/intel/rollup/org')
+async def intel_rollup_org(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.sector_rollup import org_rollup
+    return org_rollup().model_dump()
+
+
+@app.get('/api/intel/rollup/network')
+async def intel_rollup_network(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.sector_rollup import network_rollup
+    return network_rollup().model_dump()
+
+
+@app.get('/api/intel/assessment')
+async def get_intel_assessment(current_user: dict = Depends(require_permission('scan'))):
+    """Return the latest org-level strategic threat assessment."""
+    from app.threatlens import store as tl_store
+    assessment = tl_store.get_latest_org_assessment()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="No assessment yet — run a cycle first.")
+    return {
+        "id":                   assessment.id,
+        "generated_at":         assessment.generated_at,
+        "adversary_landscape":  assessment.adversary_landscape,
+        "surface_pressure":     assessment.surface_pressure,
+        "sector_pressure":      assessment.sector_pressure,
+        "strategic_intent":     assessment.strategic_intent,
+        "top_campaigns":        assessment.top_campaigns[:5],
+        "source_profile_ids":   assessment.source_profile_ids,
+        "confidence":           assessment.confidence,
+        "summary":              assessment.summary,
+    }
+
+
+@app.post('/api/intel/assessment/export')
+async def export_intel_assessment(current_user: dict = Depends(require_permission('scan'))):
+    """Return a PDF-ready HTML leadership brief for the latest assessment."""
+    from fastapi.responses import HTMLResponse
+    from app.threatlens import store as tl_store
+    from app.threatlens.org_assessor import build_brief_html
+    assessment = tl_store.get_latest_org_assessment()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="No assessment yet.")
+    html = build_brief_html(assessment)
+    return HTMLResponse(content=html)
+
+
+@app.post('/api/intel/profiles/{profile_id}/export')
+async def export_intel_profile(
+    profile_id: str,
+    current_user: dict = Depends(require_admin()),
+):
+    """Export a profile to MISP as an intrusion-set object."""
+    from app.threatlens import store as tl_store
+    profile = tl_store.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    cluster = tl_store.get_cluster(profile.cluster_id)
+
+    # Construct intrusion-set shaped verdict_doc for the existing L4 MISP exporter
+    verdict_doc = {
+        "verdict":    "phishing",
+        "confidence": 0.9,
+        "sender":     cluster.iocs.domains[0] if cluster and cluster.iocs.domains else "",
+        "blocked_at": "threatlens",
+        "l1": {
+            "hits":      cluster.iocs.domains[:5] if cluster else [],
+            "sender_ip": cluster.iocs.ips[0] if cluster and cluster.iocs.ips else "",
+        },
+        "l2": {
+            "engines": {
+                "nlp": {
+                    "intent":  profile.assessed_intent,
+                    "tactics": [t.attack_id for t in profile.ttps[:3]],
+                }
+            }
+        },
+        "intel_profile": {
+            "assessed_identity": profile.assessed_identity,
+            "suspected_apt":     profile.suspected_apt,
+            "confidence":        profile.confidence,
+            "surface_zones":     profile.surface_zones,
+            "summary":           profile.summary,
+        },
+    }
+
+    try:
+        from app.layer4_soar.misp_exporter import export_to_misp
+        result = await export_to_misp(verdict_doc, settings)
+        return {"status": "exported", "misp": result}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MISP export failed: {exc}")
+
+
+@app.post('/api/intel/profiles/{profile_id}/feedback')
+async def submit_profile_feedback(
+    profile_id: str,
+    request: Request,
+    current_user: dict = Depends(require_permission('scan')),
+):
+    """Save analyst rating for a profile (actionable / not actionable / incorrect)."""
+    from app.threatlens import store as tl_store
+    body = await request.json()
+    rating = body.get("rating", "")
+    notes  = body.get("notes", "")
+    if not rating:
+        raise HTTPException(status_code=422, detail="rating is required")
+    tl_store.save_profile_feedback(
+        profile_id=profile_id,
+        rating=rating,
+        notes=notes,
+        submitted_by=current_user.get("sub", "soc"),
+    )
+    return {"status": "saved"}
 
 
 
