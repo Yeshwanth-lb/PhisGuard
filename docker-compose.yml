@@ -264,10 +264,11 @@ services:
       - CONNECTOR_NAME=MISP PhishGuard
       - CONNECTOR_SCOPE=misp-galaxy,misp-attack-pattern,misp-course-of-action,misp-intrusion-set,misp-malware,misp-tool,misp-vulnerability
       - CONNECTOR_LOG_LEVEL=error
-      - MISP_URL=http://misp
+      - MISP_URL=https://misp
       - MISP_REFERENCE_URL=http://localhost:8888
       - MISP_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
       - MISP_SSL=false
+      - MISP_SSL_VERIFY=false
       - MISP_VERIFYCERT=false
       - REQUESTS_CA_BUNDLE=/etc/ssl/misp-ca.pem
       - CURL_CA_BUNDLE=/etc/ssl/misp-ca.pem
