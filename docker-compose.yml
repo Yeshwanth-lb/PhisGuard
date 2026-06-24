@@ -168,6 +168,7 @@ services:
       - ./docker/misp-key.pem:/etc/nginx/certs/key.pem:ro
       - ./docker/misp-nginx-http.conf:/etc/nginx/sites-enabled/misp80:ro
       - ./docker/misp-nginx-https.conf:/etc/nginx/sites-enabled/misp443:ro
+      - ./docker/misp-nginx-php.conf:/etc/nginx/includes/misp:ro
       - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
     depends_on:
       misp-db:

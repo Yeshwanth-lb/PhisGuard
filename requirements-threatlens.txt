@@ -1,0 +1,17 @@
+# ThreatLens (Layer 8) dependencies — install separately from the main requirements.
+# These packages have version requirements that conflict with the pinned core stack.
+# They are installed in your local Python environment but NOT in the Docker image.
+#
+# Install: pip install -r requirements-threatlens.txt
+# Required only when INTEL_ENABLED=true
+#
+# Post-install browser setup:
+#   python -m playwright install chromium
+#   python -m camoufox fetch
+
+crawl4ai>=0.4.0                 # LLM-facing extractor: Markdown output, BM25 filter, JS via Playwright
+scrapling>=0.2.0                # Adaptive resilient fetcher: self-healing selectors, --ai-targeted hardening
+trafilatura>=1.12.0             # Fast boilerplate-free text extraction for plain article/static pages
+mitreattack-python>=3.0.0       # MITRE ATT&CK Python library — local STIX technique lookup
+stix2>=3.0.0                    # STIX2 parsing (required by mitreattack-python)
+lxml_html_clean>=0.4.0          # Required by trafilatura (lxml.html.clean moved to separate package)
