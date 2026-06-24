@@ -1,7 +1,10 @@
 """ThreatLens orchestrator — runs one full profiling cycle.
 
-Phase 3: all 10 agents run in parallel per cluster, TTP mapper adds
-Skylo surface zone mapping, profiler receives full context.
+Phase 5 hardening:
+  - Only processes DIRTY clusters (updated since last profile) — skips unchanged
+  - Logs provenance for every agent finding that has a source URL
+  - Tracks per-run cost metrics (LLM calls, clusters skipped)
+  - Bounded concurrency via semaphore (INTEL_MAX_CLUSTER_CONCURRENCY)
 
 Agent fleet (10 total):
   Phase 2: osint_report, attack_mapper
@@ -11,6 +14,7 @@ Agent fleet (10 total):
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import structlog
@@ -52,28 +56,65 @@ def _bootstrap_registry() -> None:
             registry.register(agent)
 
 
+def _log_provenance(
+    cluster_id: str,
+    findings: list[Finding],
+    db_path: str | None,
+) -> None:
+    """Write one intel_sources row per finding that has a source URL."""
+    kwargs = {"db_path": db_path} if db_path else {}
+    for f in findings:
+        if f.source_url:
+            store.log_intel_source(
+                cluster_id=cluster_id,
+                agent=f.agent,
+                source_url=f.source_url,
+                source_title=f.source_title or f.source_url,
+                finding_json=json.dumps({"claim": f.claim, "confidence": f.confidence}),
+                confidence=f.confidence,
+                **kwargs,
+            )
+
+
 async def run_cycle(db_path: str | None = None) -> dict:
-    """Run one profiling cycle. Returns a summary dict."""
+    """Run one profiling cycle. Returns a summary dict.
+
+    Phase 5: only processes dirty clusters (skips unchanged ones).
+    """
     if not threatlens_settings.intel_enabled:
         return {"skipped": True, "reason": "INTEL_ENABLED=false"}
 
     _bootstrap_registry()
 
     kwargs = {"db_path": db_path} if db_path else {}
-    clusters = store.get_active_clusters(**kwargs)
 
-    if not clusters:
-        return {"clusters_processed": 0, "profiles_written": 0}
+    # Phase 5: use dirty clusters instead of all active clusters
+    all_active = store.get_active_clusters(**kwargs)
+    dirty_clusters = store.get_dirty_clusters(**kwargs)
+    clusters_skipped = len(all_active) - len(dirty_clusters)
 
-    # Phase 3: all active clusters, bounded by max concurrency
+    if not dirty_clusters:
+        logger.info(
+            "threatlens_cycle_nothing_dirty",
+            active=len(all_active),
+            skipped=clusters_skipped,
+        )
+        return {
+            "clusters_processed": 0,
+            "clusters_skipped": clusters_skipped,
+            "profiles_written": 0,
+            "llm_calls": 0,
+        }
+
     sem = asyncio.Semaphore(threatlens_settings.intel_max_cluster_concurrency)
     started = time.time()
     profiles_written = 0
+    llm_calls = 0
 
     async def _process_one(cluster):
-        nonlocal profiles_written
+        nonlocal profiles_written, llm_calls
         async with sem:
-            # 1. Run all 10 agents in parallel
+            # 1. Run all agents in parallel
             agent_tasks = [agent.run(cluster) for agent in registry.active()]
             raw_results = await asyncio.gather(*agent_tasks, return_exceptions=True)
 
@@ -82,21 +123,26 @@ async def run_cycle(db_path: str | None = None) -> dict:
                 if isinstance(result, list):
                     all_findings.extend(result)
 
-            # 2. Fusion — confidence math in Python
+            # 2. Log provenance for every finding with a source URL
+            _log_provenance(cluster.id, all_findings, db_path)
+
+            # 3. Fusion
             claims, _, max_conf = fusion_engine.run(cluster, all_findings)
 
-            # 3. TTP mapper — dedupe + Skylo surface zones
+            # 4. TTP mapper
             ttps, surface_zones, segments = ttp_mapper.map_cluster(
                 cluster, all_findings, **kwargs
             )
 
-            # 4. Claude synthesizes the full profile
+            # 5. Claude synthesizes — counts as 1 LLM call
             profile = await profiler.synthesize(
                 cluster, claims, ttps, max_conf, surface_zones, segments
             )
+            llm_calls += 1
 
-            # 5. Persist
+            # 6. Persist profile + mark cluster as clean
             store.upsert_profile(profile, **kwargs)
+            store.mark_cluster_profiled(cluster.id, **kwargs)
             profiles_written += 1
 
             logger.info(
@@ -109,17 +155,15 @@ async def run_cycle(db_path: str | None = None) -> dict:
                 profile=profile.id[:8],
             )
 
-    await asyncio.gather(*[_process_one(c) for c in clusters])
+    await asyncio.gather(*[_process_one(c) for c in dirty_clusters])
 
     duration = time.time() - started
-    logger.info(
-        "threatlens_cycle_done",
-        clusters=len(clusters),
-        profiles=profiles_written,
-        duration_secs=round(duration, 2),
-    )
-    return {
-        "clusters_processed": len(clusters),
-        "profiles_written": profiles_written,
-        "duration_secs": round(duration, 2),
+    summary = {
+        "clusters_processed": len(dirty_clusters),
+        "clusters_skipped":   clusters_skipped,
+        "profiles_written":   profiles_written,
+        "llm_calls":          llm_calls,
+        "duration_secs":      round(duration, 2),
     }
+    logger.info("threatlens_cycle_done", **summary)
+    return summary

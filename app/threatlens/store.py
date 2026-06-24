@@ -30,19 +30,26 @@ def init_db(db_path: str = _DB_PATH) -> None:
         try:
             c.execute("""
                 CREATE TABLE IF NOT EXISTS actor_clusters (
-                    id              TEXT PRIMARY KEY,
-                    created_at      REAL NOT NULL,
-                    updated_at      REAL NOT NULL,
-                    first_seen      REAL NOT NULL,
-                    last_seen       REAL NOT NULL,
-                    member_scan_ids TEXT NOT NULL DEFAULT '[]',
-                    dominant_intent TEXT,
-                    ioc_json        TEXT NOT NULL DEFAULT '{}',
-                    target_json     TEXT NOT NULL DEFAULT '{}',
-                    signature_json  TEXT NOT NULL DEFAULT '{}',
-                    status          TEXT NOT NULL DEFAULT 'active'
+                    id                TEXT PRIMARY KEY,
+                    created_at        REAL NOT NULL,
+                    updated_at        REAL NOT NULL,
+                    first_seen        REAL NOT NULL,
+                    last_seen         REAL NOT NULL,
+                    member_scan_ids   TEXT NOT NULL DEFAULT '[]',
+                    dominant_intent   TEXT,
+                    ioc_json          TEXT NOT NULL DEFAULT '{}',
+                    target_json       TEXT NOT NULL DEFAULT '{}',
+                    signature_json    TEXT NOT NULL DEFAULT '{}',
+                    status            TEXT NOT NULL DEFAULT 'active',
+                    last_profiled_at  REAL DEFAULT NULL
                 )
             """)
+            # Phase 5 migration: add last_profiled_at to existing tables
+            try:
+                c.execute("ALTER TABLE actor_clusters ADD COLUMN last_profiled_at REAL DEFAULT NULL")
+                c.commit()
+            except Exception:
+                pass  # column already exists
             c.execute("""
                 CREATE TABLE IF NOT EXISTS actor_profiles (
                     id                  TEXT PRIMARY KEY,
@@ -476,5 +483,106 @@ def save_profile_feedback(
             return True
         except Exception:
             return False
+        finally:
+            c.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Dirty flag, provenance, retention
+# ---------------------------------------------------------------------------
+
+def get_dirty_clusters(db_path: str = _DB_PATH) -> list[ActorCluster]:
+    """Clusters that need re-profiling: never profiled OR updated since last profile."""
+    with _lock:
+        c = _conn(db_path)
+        try:
+            rows = c.execute("""
+                SELECT * FROM actor_clusters
+                WHERE status = 'active'
+                AND (last_profiled_at IS NULL OR updated_at > last_profiled_at)
+                ORDER BY last_seen DESC
+            """).fetchall()
+            return [_row_to_cluster(r) for r in rows]
+        finally:
+            c.close()
+
+
+def mark_cluster_profiled(cluster_id: str, db_path: str = _DB_PATH) -> None:
+    """Record that this cluster was just profiled — clears the dirty flag."""
+    import time as _time
+    with _lock:
+        c = _conn(db_path)
+        try:
+            c.execute(
+                "UPDATE actor_clusters SET last_profiled_at = ? WHERE id = ?",
+                (_time.time(), cluster_id)
+            )
+            c.commit()
+        finally:
+            c.close()
+
+
+def log_intel_source(
+    cluster_id: str,
+    agent: str,
+    source_url: str | None,
+    source_title: str | None,
+    finding_json: str,
+    confidence: str,
+    db_path: str = _DB_PATH,
+    fetched_at: float | None = None,
+) -> None:
+    """Write one provenance row to intel_sources."""
+    import time as _time, uuid as _uuid
+    with _lock:
+        c = _conn(db_path)
+        try:
+            c.execute("""
+                INSERT INTO intel_sources
+                    (id, cluster_id, agent, source_url, source_title,
+                     fetched_at, finding_json, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(_uuid.uuid4()),
+                cluster_id,
+                agent,
+                source_url,
+                source_title,
+                fetched_at or _time.time(),
+                finding_json,
+                confidence,
+            ))
+            c.commit()
+        finally:
+            c.close()
+
+
+def get_intel_sources(cluster_id: str, db_path: str = _DB_PATH) -> list[dict]:
+    """Return all intel_sources rows for a cluster (for tests + audit)."""
+    with _lock:
+        c = _conn(db_path)
+        try:
+            rows = c.execute(
+                "SELECT * FROM intel_sources WHERE cluster_id = ? ORDER BY fetched_at DESC",
+                (cluster_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
+
+
+def prune_old_intel_sources(retention_days: int = 90, db_path: str = _DB_PATH) -> int:
+    """Delete intel_sources rows older than retention_days. Returns count deleted."""
+    import time as _time
+    cutoff = _time.time() - retention_days * 86400
+    with _lock:
+        c = _conn(db_path)
+        try:
+            result = c.execute(
+                "DELETE FROM intel_sources WHERE fetched_at < ?", (cutoff,)
+            )
+            count = result.rowcount
+            c.commit()
+            return count
         finally:
             c.close()
