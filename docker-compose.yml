@@ -158,6 +158,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - MISP_BASEURL=https://localhost:8443
+      - BASE_URL=https://localhost:8443
       - MISP_ORG=PhishGuard
     ports:
       - "8888:80"    # MISP HTTP → redirects to https://localhost:8443
@@ -170,6 +171,8 @@ services:
       - ./docker/misp-nginx-https.conf:/etc/nginx/sites-enabled/misp443:ro
       - ./docker/misp-nginx-php.conf:/etc/nginx/includes/misp:ro
       - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
+      - ./docker/misp-init-settings.sh:/usr/local/bin/misp-init-settings.sh:ro
+      - ./docker/misp-supervisor-init.conf:/etc/supervisor/conf.d/60-init-settings.conf:ro
     depends_on:
       misp-db:
         condition: service_healthy
