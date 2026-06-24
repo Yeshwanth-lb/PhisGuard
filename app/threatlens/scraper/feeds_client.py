@@ -366,6 +366,149 @@ async def shodan_internetdb(ip: str) -> ShodanInternetDBEntry | None:
 # BGPView (no key required)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# IntelligenceX — dark/deep web search (free key: intelx.io/signup)
+# ---------------------------------------------------------------------------
+
+class IntelXResult(BaseModel):
+    name: str = ""
+    date: str = ""
+    media: int = 0          # media type (1=Pastes, 9=Dark Web, 4=Tor, etc.)
+    bucket: str = ""        # source bucket name
+    storageid: str = ""
+
+
+_INTELX_MEDIA = {1:"Pastes",3:"Documents",4:"Tor",5:"I2P",6:"ZeroNet",7:"IRC",8:"Dark Web Forum",9:"Dark Web",14:"Leaks",26:"Telegram"}
+
+async def intelx_search(query: str, api_key: str, max_results: int = 10) -> list[IntelXResult]:
+    """Search IntelligenceX for mentions of a query across dark/deep web sources."""
+    if not api_key:
+        return []
+    base = "https://2.intelx.io"
+    try:
+        is_allowed_or_raise(f"{base}/intelligent/search")
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Step 1: create search
+            init = await client.post(
+                f"{base}/intelligent/search",
+                json={"term": query, "maxresults": max_results, "media": 0, "sort": 2, "terminate": []},
+                headers={**_HEADERS, "x-key": api_key},
+            )
+            if init.status_code != 200:
+                return []
+            search_id = init.json().get("id", "")
+            if not search_id:
+                return []
+            # Step 2: fetch results
+            import asyncio as _asyncio
+            await _asyncio.sleep(2)  # give IntelX time to process
+            res = await client.get(
+                f"{base}/intelligent/search/result",
+                params={"id": search_id, "limit": max_results},
+                headers={**_HEADERS, "x-key": api_key},
+            )
+            if res.status_code != 200:
+                return []
+            records = res.json().get("records", []) or []
+            return [
+                IntelXResult(
+                    name=r.get("name", ""),
+                    date=r.get("date", "")[:10],
+                    media=r.get("media", 0),
+                    bucket=_INTELX_MEDIA.get(r.get("media", 0), f"source-{r.get('media',0)}"),
+                    storageid=r.get("storageid", ""),
+                )
+                for r in records[:max_results]
+            ]
+    except Exception as exc:
+        logger.debug("intelx_error", query=query[:30], error=str(exc)[:80])
+    return []
+
+
+# ---------------------------------------------------------------------------
+# CIRCL.lu PassiveDNS — free, no key (Luxembourg CERT)
+# ---------------------------------------------------------------------------
+
+class PassiveDNSRecord(BaseModel):
+    rrname: str = ""    # queried name
+    rrtype: str = ""    # record type (A, AAAA, MX, etc.)
+    rdata: str = ""     # resolved value
+    time_first: str = ""
+    time_last: str = ""
+    count: int = 0
+
+
+async def circl_passivedns(query: str) -> list[PassiveDNSRecord]:
+    """Query CIRCL.lu passive DNS for historical DNS records of a domain or IP."""
+    url = f"https://www.circl.lu/pdns/query/{query}"
+    try:
+        is_allowed_or_raise(url)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=_HEADERS)
+            if resp.status_code == 200:
+                records = []
+                for line in resp.text.strip().splitlines():
+                    try:
+                        r = __import__("json").loads(line)
+                        records.append(PassiveDNSRecord(
+                            rrname=r.get("rrname", "").rstrip("."),
+                            rrtype=r.get("rrtype", ""),
+                            rdata=r.get("rdata", "").rstrip("."),
+                            time_first=r.get("time_first", "")[:10],
+                            time_last=r.get("time_last", "")[:10],
+                            count=int(r.get("count", 0)),
+                        ))
+                    except Exception:
+                        pass
+                return records[:20]
+    except Exception as exc:
+        logger.debug("circl_passivedns_error", query=query, error=str(exc)[:80])
+    return []
+
+
+# ---------------------------------------------------------------------------
+# LeakIX — exposed service search (free key: leakix.net)
+# ---------------------------------------------------------------------------
+
+class LeakIXResult(BaseModel):
+    host: str = ""
+    ip: str = ""
+    port: int = 0
+    protocol: str = ""
+    summary: str = ""
+    leak_type: str = ""
+    time: str = ""
+
+
+async def leakix_host(host: str, api_key: str) -> list[LeakIXResult]:
+    """Search LeakIX for exposed services or leaked data associated with a host."""
+    if not api_key:
+        return []
+    url = f"https://leakix.net/host/{host}"
+    try:
+        is_allowed_or_raise(url)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers={**_HEADERS, "api-key": api_key, "Accept": "application/json"})
+            if resp.status_code == 200:
+                data = resp.json()
+                events = data if isinstance(data, list) else data.get("Events", [])
+                return [
+                    LeakIXResult(
+                        host=host,
+                        ip=e.get("ip", ""),
+                        port=e.get("port", 0),
+                        protocol=e.get("protocol", ""),
+                        summary=e.get("summary", "")[:200],
+                        leak_type=e.get("plugin", ""),
+                        time=e.get("time", "")[:10],
+                    )
+                    for e in events[:5]
+                ]
+    except Exception as exc:
+        logger.debug("leakix_error", host=host, error=str(exc)[:80])
+    return []
+
+
 async def bgpview_ip(ip: str) -> BGPViewEntry | None:
     url = f"https://api.bgpview.io/ip/{ip}"
     try:

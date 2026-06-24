@@ -216,3 +216,34 @@ sources:
     type: advisory
     preferred_client: crawl4ai
     polite_delay_secs: 3
+
+  # Dark / deep web intelligence (via clearnet APIs — no Tor access)
+  - domain: 2.intelx.io
+    type: darkweb_intel
+    preferred_client: httpx
+    polite_delay_secs: 3
+
+  - domain: www.circl.lu
+    type: passive_dns
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: rdap.circl.lu
+    type: passive_dns
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: leakix.net
+    type: darkweb_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: breachdirectory.org
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.breachdirectory.org
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2

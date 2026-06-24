@@ -31,6 +31,7 @@ from app.threatlens.agents.network_intel_agent import NetworkIntelAgent
 from app.threatlens.agents.osint_report_agent import OsintReportAgent
 from app.threatlens.agents.telecom_ntn_agent import TelecomNTNAgent
 from app.threatlens.agents.urlscan_agent import URLScanAgent
+from app.threatlens.agents.darkweb_agent import DarkWebAgent
 from app.threatlens.config import threatlens_settings
 from app.threatlens.models import Finding
 
@@ -47,6 +48,7 @@ _ALL_AGENTS = [
     NetworkIntelAgent(),
     GreyNoiseAgent(),
     URLScanAgent(),
+    DarkWebAgent(),        # IntelligenceX + CIRCL PassiveDNS + LeakIX
 ]
 
 

@@ -1230,18 +1230,19 @@ async function _loadOrgAssessment(){
 
 // Agent metadata registry
 const _AGENTS = {
-  osint:     {icon:'🔍', name:'OSINT Report',    color:'#3b82f6', sources:'CISA · Unit42 · SANS ISC',        scrapes:true},
-  attack:    {icon:'⚡', name:'ATT&CK Mapper',   color:'#f59e0b', sources:'MITRE ATT&CK (local)',            scrapes:false},
-  misp:      {icon:'🛡', name:'MISP / OpenCTI',  color:'#10b981', sources:'MISP threat feeds',               scrapes:false},
-  ioc:       {icon:'🦠', name:'IoC Reputation',  color:'#ef4444', sources:'abuse.ch · AlienVault OTX · Pulsedive', scrapes:false},
-  cve:       {icon:'🔓', name:'CVE Agent',        color:'#8b5cf6', sources:'NVD · CISA KEV · EPSS',          scrapes:false},
-  compromise:{icon:'🔐', name:'Compromise Intel', color:'#f97316', sources:'ransomware.live · RansomLook',   scrapes:false},
-  telecom:   {icon:'📡', name:'Telecom / NTN',   color:'#06b6d4', sources:'NCSC UK · SANS ISC',              scrapes:true},
-  network:   {icon:'🖥', name:'Network Intel',   color:'#a3a3a3', sources:'Shodan InternetDB · BGPView',     scrapes:false},
-  greynoise: {icon:'🌐', name:'GreyNoise',        color:'#84cc16', sources:'GreyNoise community',            scrapes:false},
-  urlscan:   {icon:'🔎', name:'URLScan',          color:'#ec4899', sources:'urlscan.io community',           scrapes:false},
+  osint:     {icon:'🔍', name:'OSINT Report',    color:'#3b82f6', sources:'CISA · Unit42 · SANS ISC',                    scrapes:true},
+  attack:    {icon:'⚡', name:'ATT&CK Mapper',   color:'#f59e0b', sources:'MITRE ATT&CK (local)',                        scrapes:false},
+  misp:      {icon:'🛡', name:'MISP / OpenCTI',  color:'#10b981', sources:'MISP threat feeds',                           scrapes:false},
+  ioc:       {icon:'🦠', name:'IoC Reputation',  color:'#ef4444', sources:'abuse.ch · AlienVault OTX · Pulsedive',       scrapes:false},
+  cve:       {icon:'🔓', name:'CVE Agent',        color:'#8b5cf6', sources:'NVD · CISA KEV · EPSS',                      scrapes:false},
+  compromise:{icon:'🔐', name:'Compromise Intel', color:'#f97316', sources:'ransomware.live · RansomLook · HIBP',        scrapes:false},
+  telecom:   {icon:'📡', name:'Telecom / NTN',   color:'#06b6d4', sources:'NCSC UK · SANS ISC',                          scrapes:true},
+  network:   {icon:'🖥', name:'Network Intel',   color:'#a3a3a3', sources:'Shodan InternetDB · BGPView',                 scrapes:false},
+  greynoise: {icon:'🌐', name:'GreyNoise',        color:'#84cc16', sources:'GreyNoise community',                        scrapes:false},
+  urlscan:   {icon:'🔎', name:'URLScan',          color:'#ec4899', sources:'urlscan.io community',                       scrapes:false},
+  darkweb:   {icon:'🕳', name:'Dark Web Intel',  color:'#a78bfa', sources:'IntelligenceX · CIRCL PassiveDNS · LeakIX',  scrapes:false},
 };
-const _AGENT_ORDER = ['misp','osint','ioc','attack','network','cve','compromise','telecom','greynoise','urlscan'];
+const _AGENT_ORDER = ['misp','osint','ioc','attack','network','cve','compromise','telecom','greynoise','urlscan','darkweb'];
 const _SCRAPED_DOMAINS = ['cisa.gov','ncsc.gov.uk','isc.sans.edu','unit42.paloaltonetworks.com','securelist.com','mandiant.com','sans.org'];
 
 function _renderProfileCard(p){

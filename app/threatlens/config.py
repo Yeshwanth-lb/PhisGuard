@@ -55,6 +55,8 @@ class ThreatLensSettings(BaseSettings):
     greynoise_api_key: str = Field(default="")
     urlscan_api_key: str = Field(default="")
     ipinfo_api_key: str = Field(default="")
+    intelx_api_key: str = Field(default="")    # intelx.io — dark/deep web search
+    leakix_api_key: str = Field(default="")    # leakix.net — exposed service search
     securitytrails_api_key: str = Field(default="")
     emailrep_api_key: str = Field(default="")
     virustotal_api_key: str = Field(default="")  # reuse from L1 if set
