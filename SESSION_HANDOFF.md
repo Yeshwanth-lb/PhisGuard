@@ -1,5 +1,5 @@
 # PhishGuard — Session Handoff Document
-**Last updated:** 2026-06-24 (session 7)  
+**Last updated:** 2026-06-24 (session 7 — continued)  
 **Project root:** `/Users/intern4/Desktop/phishguard`  
 **Developer:** Yeshwanth (yeshwanthlb0@gmail.com)  
 **Purpose:** End-to-end email security gateway with 8-layer AI detection + ThreatLens threat intelligence layer
@@ -332,4 +332,80 @@ phishguard/
 
 ---
 
-*Resume: read this file → `docker compose ps` (verify 14 containers healthy) → check `http://localhost:8000` Profiling tab → `python3 scripts/test_smtp_gateway.py` → press F5.*
+---
+
+## 12. Session 7 Continued — Additional Work After Initial Docs Update
+
+### What was added after the SESSION_HANDOFF was first written
+
+**Phase 5 — Hardening (completed)**
+- `actor_clusters.last_profiled_at` column — dirty-flag skip (unchanged clusters not re-profiled)
+- `get_dirty_clusters()` — only clusters with `updated_at > last_profiled_at` processed
+- `mark_cluster_profiled()` — clears dirty flag after profiling
+- `log_intel_source()` / `prune_old_intel_sources()` — provenance + 90-day retention
+- Orchestrator: `clusters_skipped` + `llm_calls` in cycle summary
+- 6 new tests in `tests/test_threatlens_hardening.py`
+
+**Scrapers fixed in Docker**
+- Crawl4AI, Scrapling, trafilatura were in `requirements-threatlens.txt` but NOT in the Docker image
+- Added separate `pip install` step in Dockerfile with `|| true`
+- All three now in the image permanently — no fallback to plain httpx
+
+**MISP baseurl permanently fixed**
+- Root cause: `entrypoint.sh` uses `BASE_URL` not `MISP_BASEURL`
+- Fix: `BASE_URL=https://localhost:8443` added to docker-compose MISP env
+- On every container start now logs: "Enforcing MISP.baseurl to https://localhost:8443"
+
+**API keys added**
+```
+ABUSECH_AUTH_KEY=f55483...   ✅ abuse.ch IoC feeds
+OTX_API_KEY=6fb2b4...        ✅ AlienVault community pulses
+PULSEDIVE_API_KEY=f590a2...  ✅ IP/domain reputation
+INTEL_ENABLED=true           ✅ ThreatLens live
+```
+
+**First ThreatLens cycle completed**
+- 126 clusters profiled — all with `confirmed` confidence (MISP IoC matches)
+- 132 TTP observations written
+- Profiling tab live at `http://localhost:8000` → Profiling
+
+**Dark Web Intelligence Agent (11th agent)**
+- `app/threatlens/agents/darkweb_agent.py`
+- Three clearnet providers (no Tor access):
+  1. **IntelligenceX** (`2.intelx.io`) — paste sites, Tor forums, dark web, data leaks — `INTELX_API_KEY`
+  2. **CIRCL.lu PassiveDNS** — free, no key — full DNS history for any domain/IP
+  3. **LeakIX** (`leakix.net`) — exposed services + leaked data — `LEAKIX_API_KEY`
+- CIRCL PassiveDNS always active (no key). IntelX + LeakIX dormant until keys added.
+
+**Profiling tab complete redesign**
+- Stats bar: Total / Critical / High / Confirmed / Surface-mapped counters
+- Filter buttons: All / Critical / High / Confirmed
+- Profile cards: colored left border, intent icon, severity progress bar, agent mini-dots
+- Click 🔍 Intelligence → 3-tab panel:
+  - **Intelligence Sources**: 11 agent cards (icon, name, data source, findings, scraped URLs)
+  - **ATT&CK & Surface**: techniques grouped by tactic, Skylo surface zone cards
+  - **Profile Info**: structured metadata grid
+
+### API keys still needed
+| Key | Where | Impact |
+|---|---|---|
+| `GREYNOISE_API_KEY` | greynoise.io/plans/community | GreyNoise agent active |
+| `URLSCAN_API_KEY` | urlscan.io/user/signup | URLScan agent active |
+| `INTELX_API_KEY` | intelx.io/signup | Dark web search active |
+| `LEAKIX_API_KEY` | leakix.net | Exposed service search active |
+
+### Latest git commits
+```
+18d7c10 feat: Dark Web Intelligence Agent
+6c590ca redesign: full Profiling tab rebuild
+1376dc0 redesign: Profiling tab — stats bar, filters
+ecd2d7c docs: update SESSION_HANDOFF.md for session 7
+53ace44 fix: scrapers in Docker image
+f18a586 feat: ThreatLens Phase 5 — hardening
+4d2dc19 fix: MISP baseurl permanent fix
+b5e0349 fix: MISP/OpenCTI/Docker stability
+```
+
+---
+
+*Resume: read this file → `docker compose ps` (verify 14 containers healthy) → check `http://localhost:8000` Profiling tab (126 profiles live) → `python3 scripts/test_smtp_gateway.py` → press F5.*
