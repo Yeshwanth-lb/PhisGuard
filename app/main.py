@@ -15,7 +15,7 @@ from app.pipeline import analyze_email as run_pipeline
 from app.security.audit import AuditMiddleware, read_audit_log
 from app.security.auth import create_token_pair, require_auth
 from app.security.rate_limiter import get_rate_limiter
-from app.security.rbac import require_permission
+from app.security.rbac import require_permission, require_admin
 
 structlog.configure(
     processors=[
@@ -55,6 +55,18 @@ async def _lifespan(app):
         start_digest_scheduler(settings)
     except Exception as _e:
         logger.warning("digest_scheduler_start_failed", error=str(_e))
+    # Initialise ThreatLens tables (idempotent — safe on every startup)
+    try:
+        from app.threatlens.store import init_db as _tl_init_db
+        _tl_init_db()
+    except Exception as _e:
+        logger.warning("threatlens_init_db_failed", error=str(_e))
+    # Start ThreatLens scheduler (no-op when INTEL_ENABLED=false)
+    try:
+        from app.threatlens.scheduler import start_scheduler as _start_tl
+        _start_tl()
+    except Exception as _e:
+        logger.warning("threatlens_scheduler_start_failed", error=str(_e))
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:
@@ -608,6 +620,376 @@ async def get_screenshot(scan_id: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail='No screenshot available')
     return FileResponse(path, media_type='image/png')
+
+
+# ---------------------------------------------------------------------------
+# ThreatLens endpoints
+# ---------------------------------------------------------------------------
+
+@app.get('/api/intel/profiles')
+async def list_intel_profiles(current_user: dict = Depends(require_permission('scan'))):
+    """List all adversary profiles, sorted by generated_at desc."""
+    from app.threatlens import store as tl_store
+    profiles = tl_store.get_profiles()
+    return [
+        {
+            "id":               p.id,
+            "cluster_id":       p.cluster_id,
+            "generated_at":     p.generated_at,
+            "assessed_identity": p.assessed_identity,
+            "suspected_apt":    p.suspected_apt,
+            "assessed_intent":  p.assessed_intent,
+            "severity":         p.severity,
+            "confidence":       p.confidence,
+            "ttp_count":        len(p.ttps),
+            "surface_zones":    p.surface_zones,
+            "segments":         p.segments,
+            "summary":          p.summary,
+        }
+        for p in profiles
+    ]
+
+
+@app.get('/api/intel/profiles/{profile_id}')
+async def get_intel_profile(
+    profile_id: str,
+    current_user: dict = Depends(require_permission('scan')),
+):
+    """Full profile with evidence chain. No raw email bodies."""
+    from app.threatlens import store as tl_store
+    profile = tl_store.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail='Profile not found')
+    cluster = tl_store.get_cluster(profile.cluster_id)
+    return {
+        "id":                profile.id,
+        "cluster_id":        profile.cluster_id,
+        "generated_at":      profile.generated_at,
+        "assessed_identity": profile.assessed_identity,
+        "suspected_apt":     profile.suspected_apt,
+        "assessed_intent":   profile.assessed_intent,
+        "severity":          profile.severity,
+        "confidence":        profile.confidence,
+        "ttps":              [t.model_dump() for t in profile.ttps],
+        "surface_zones":     profile.surface_zones,
+        "segments":          profile.segments,
+        "claims":            [c.model_dump() for c in profile.claims],
+        "evidence":          [
+            {k: v for k, v in e.model_dump().items() if k not in ("raw",)}
+            for e in profile.evidence
+        ],
+        "summary":           profile.summary,
+        "model":             profile.model,
+        "member_scan_count": len(cluster.member_scan_ids) if cluster else 0,
+        "member_scan_ids":   cluster.member_scan_ids[:50] if cluster else [],
+    }
+
+
+@app.post('/api/intel/run')
+async def run_intel_cycle(current_user: dict = Depends(require_admin())):
+    """Trigger a ThreatLens profiling cycle (admin only)."""
+    from app.threatlens.config import threatlens_settings
+    if not threatlens_settings.intel_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail='ThreatLens is disabled. Set INTEL_ENABLED=true to activate.',
+        )
+    from app.threatlens.orchestrator import run_cycle
+    result = await run_cycle()
+    return result
+
+
+@app.get('/api/intel/graph')
+async def intel_graph(
+    current_user: dict = Depends(require_permission('scan')),
+):
+    """Threat actor relationship graph — intent-grouped nodes with infrastructure edges."""
+    from app.threatlens import store as tl_store
+
+    clusters = tl_store.get_active_clusters()
+    profiles_list = tl_store.get_profiles()
+    profiles = {p.cluster_id: p for p in profiles_list}
+
+    # Only meaningful threat clusters — filter out noise
+    NOISE = {"unknown", "legitimate", "clean", "unclear", "generic_phish", "", None}
+    threat_clusters = [
+        c for c in clusters
+        if c.dominant_intent not in NOISE and len(c.member_scan_ids) >= 2
+    ]
+
+    # Sort by member count, take top 30
+    threat_clusters.sort(key=lambda c: len(c.member_scan_ids), reverse=True)
+    top = threat_clusters[:30]
+
+    # Intent group metadata for coloring and grouping
+    INTENT_META = {
+        "credential_harvest":     {"color": "#3b82f6", "group": "Credential Theft"},
+        "credential_harvesting":  {"color": "#3b82f6", "group": "Credential Theft"},
+        "bec_fraud":              {"color": "#ef4444", "group": "BEC Fraud"},
+        "fraud_payment":          {"color": "#f97316", "group": "Financial Fraud"},
+        "fraud_scam":             {"color": "#f97316", "group": "Financial Fraud"},
+        "brand_impersonation":    {"color": "#8b5cf6", "group": "Impersonation"},
+        "executive_impersonation":{"color": "#a855f7", "group": "Impersonation"},
+        "malware_delivery":       {"color": "#10b981", "group": "Malware"},
+    }
+
+    nodes = []
+    for c in top:
+        p = profiles.get(c.id)
+        intent = c.dominant_intent or "other"
+        meta = INTENT_META.get(intent, {"color": "#64748b", "group": "Other"})
+        nodes.append({
+            "id":           c.id[:12],
+            "full_id":      c.id,
+            "intent":       intent,
+            "group":        meta["group"],
+            "group_color":  meta["color"],
+            "label":        intent.replace("_", " ").title(),
+            "short_label":  intent.replace("credential_harvest", "Cred Theft")
+                                  .replace("credential_harvesting", "Cred Theft")
+                                  .replace("bec_fraud", "BEC Fraud")
+                                  .replace("fraud_payment", "Fin. Fraud")
+                                  .replace("brand_impersonation", "Brand Imp.")
+                                  .replace("executive_impersonation", "Exec. Imp.")
+                                  .replace("_", " ").title(),
+            "member_count": len(c.member_scan_ids),
+            "severity":     p.severity if p else "low",
+            "confidence":   p.confidence if p else "speculative",
+            "surface_zones": p.surface_zones if p else [],
+            "ttp_ids":      [t.attack_id for t in p.ttps][:4] if p else [],
+            "summary":      (p.summary or "")[:150] if p else "",
+            "domains":      c.iocs.domains[:2],
+        })
+
+    # Build edges — only strong infrastructure/tradecraft overlaps
+    edges = []
+    for i, c1 in enumerate(top):
+        for c2 in top[i+1:]:
+            p1, p2 = profiles.get(c1.id), profiles.get(c2.id)
+
+            # Shared IPs — strongest (same physical infrastructure)
+            shared_ips = set(c1.iocs.ips) & set(c2.iocs.ips) - {""}
+            if shared_ips:
+                edges.append({
+                    "from": c1.id[:12], "to": c2.id[:12],
+                    "type": "shared_ip",
+                    "label": f"Shared IP: {list(shared_ips)[0]}",
+                    "weight": 1.0,
+                })
+                continue
+
+            # Shared sending domain — same actor different campaigns
+            shared_domains = set(c1.iocs.domains) & set(c2.iocs.domains) - {""}
+            if shared_domains:
+                edges.append({
+                    "from": c1.id[:12], "to": c2.id[:12],
+                    "type": "shared_domain",
+                    "label": f"Domain: {list(shared_domains)[0]}",
+                    "weight": 0.9,
+                })
+                continue
+
+            # Shared ATT&CK techniques ≥ 3 — very similar tradecraft
+            if p1 and p2:
+                t1 = {t.attack_id for t in p1.ttps}
+                t2 = {t.attack_id for t in p2.ttps}
+                shared = t1 & t2
+                if len(shared) >= 3:
+                    edges.append({
+                        "from": c1.id[:12], "to": c2.id[:12],
+                        "type": "shared_ttps",
+                        "label": f"{len(shared)} shared TTPs",
+                        "weight": 0.7,
+                    })
+
+    # Group summary for the UI
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for n in nodes:
+        groups[n["group"]].append(n)
+
+    group_list = [
+        {"name": g, "count": len(ns), "color": ns[0]["group_color"]}
+        for g, ns in sorted(groups.items(), key=lambda x: -len(x[1]))
+    ]
+
+    connected_ids = {e["from"] for e in edges} | {e["to"] for e in edges}
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "groups": group_list,
+        "stats": {
+            "total_clusters": len(clusters),
+            "threat_clusters": len(threat_clusters),
+            "shown":  len(nodes),
+            "edges":  len(edges),
+            "connected": len(connected_ids),
+            "isolated": len(nodes) - len(connected_ids),
+        },
+    }
+
+
+@app.post('/api/intel/graph/sync')
+async def sync_intel_graph(current_user: dict = Depends(require_admin())):
+    """Push current ThreatLens graph data to Neo4j."""
+    from app.threatlens.orchestrator import _push_to_neo4j
+    result = await _push_to_neo4j()
+    return result
+
+
+@app.get('/api/intel/status')
+async def intel_status(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.config import threatlens_settings
+    from app.threatlens import store as tl_store
+    clusters = tl_store.get_active_clusters()
+    profiles = tl_store.get_profiles()
+    return {
+        "enabled":         threatlens_settings.intel_enabled,
+        "active_clusters": len(clusters),
+        "profiles":        len(profiles),
+        "cadence":         threatlens_settings.intel_run_cadence,
+    }
+
+
+@app.get('/api/intel/clusters')
+async def list_intel_clusters(current_user: dict = Depends(require_permission('scan'))):
+    """List all active adversary clusters."""
+    from app.threatlens import store as tl_store
+    clusters = tl_store.get_active_clusters()
+    return [
+        {
+            "id":             c.id,
+            "first_seen":     c.first_seen,
+            "last_seen":      c.last_seen,
+            "member_count":   len(c.member_scan_ids),
+            "dominant_intent": c.dominant_intent,
+            "status":         c.status,
+            "domains":        c.iocs.domains[:5],
+        }
+        for c in clusters
+    ]
+
+
+@app.get('/api/intel/rollup/sectors')
+async def intel_rollup_sectors(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.sector_rollup import sector_rollup
+    return sector_rollup().model_dump()
+
+
+@app.get('/api/intel/rollup/org')
+async def intel_rollup_org(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.sector_rollup import org_rollup
+    return org_rollup().model_dump()
+
+
+@app.get('/api/intel/rollup/network')
+async def intel_rollup_network(current_user: dict = Depends(require_permission('scan'))):
+    from app.threatlens.sector_rollup import network_rollup
+    return network_rollup().model_dump()
+
+
+@app.get('/api/intel/assessment')
+async def get_intel_assessment(current_user: dict = Depends(require_permission('scan'))):
+    """Return the latest org-level strategic threat assessment."""
+    from app.threatlens import store as tl_store
+    assessment = tl_store.get_latest_org_assessment()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="No assessment yet — run a cycle first.")
+    return {
+        "id":                   assessment.id,
+        "generated_at":         assessment.generated_at,
+        "adversary_landscape":  assessment.adversary_landscape,
+        "surface_pressure":     assessment.surface_pressure,
+        "sector_pressure":      assessment.sector_pressure,
+        "strategic_intent":     assessment.strategic_intent,
+        "top_campaigns":        assessment.top_campaigns[:5],
+        "source_profile_ids":   assessment.source_profile_ids,
+        "confidence":           assessment.confidence,
+        "summary":              assessment.summary,
+    }
+
+
+@app.post('/api/intel/assessment/export')
+async def export_intel_assessment(current_user: dict = Depends(require_permission('scan'))):
+    """Return a PDF-ready HTML leadership brief for the latest assessment."""
+    from fastapi.responses import HTMLResponse
+    from app.threatlens import store as tl_store
+    from app.threatlens.org_assessor import build_brief_html
+    assessment = tl_store.get_latest_org_assessment()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="No assessment yet.")
+    html = build_brief_html(assessment)
+    return HTMLResponse(content=html)
+
+
+@app.post('/api/intel/profiles/{profile_id}/export')
+async def export_intel_profile(
+    profile_id: str,
+    current_user: dict = Depends(require_admin()),
+):
+    """Export a profile to MISP as an intrusion-set object."""
+    from app.threatlens import store as tl_store
+    profile = tl_store.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    cluster = tl_store.get_cluster(profile.cluster_id)
+
+    # Construct intrusion-set shaped verdict_doc for the existing L4 MISP exporter
+    verdict_doc = {
+        "verdict":    "phishing",
+        "confidence": 0.9,
+        "sender":     cluster.iocs.domains[0] if cluster and cluster.iocs.domains else "",
+        "blocked_at": "threatlens",
+        "l1": {
+            "hits":      cluster.iocs.domains[:5] if cluster else [],
+            "sender_ip": cluster.iocs.ips[0] if cluster and cluster.iocs.ips else "",
+        },
+        "l2": {
+            "engines": {
+                "nlp": {
+                    "intent":  profile.assessed_intent,
+                    "tactics": [t.attack_id for t in profile.ttps[:3]],
+                }
+            }
+        },
+        "intel_profile": {
+            "assessed_identity": profile.assessed_identity,
+            "suspected_apt":     profile.suspected_apt,
+            "confidence":        profile.confidence,
+            "surface_zones":     profile.surface_zones,
+            "summary":           profile.summary,
+        },
+    }
+
+    try:
+        from app.layer4_soar.misp_exporter import export_to_misp
+        result = await export_to_misp(verdict_doc, settings)
+        return {"status": "exported", "misp": result}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MISP export failed: {exc}")
+
+
+@app.post('/api/intel/profiles/{profile_id}/feedback')
+async def submit_profile_feedback(
+    profile_id: str,
+    request: Request,
+    current_user: dict = Depends(require_permission('scan')),
+):
+    """Save analyst rating for a profile (actionable / not actionable / incorrect)."""
+    from app.threatlens import store as tl_store
+    body = await request.json()
+    rating = body.get("rating", "")
+    notes  = body.get("notes", "")
+    if not rating:
+        raise HTTPException(status_code=422, detail="rating is required")
+    tl_store.save_profile_feedback(
+        profile_id=profile_id,
+        rating=rating,
+        notes=notes,
+        submitted_by=current_user.get("sub", "soc"),
+    )
+    return {"status": "saved"}
 
 
 

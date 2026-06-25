@@ -158,6 +158,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - MISP_BASEURL=https://localhost:8443
+      - BASE_URL=https://localhost:8443
       - MISP_ORG=PhishGuard
     ports:
       - "8888:80"    # MISP HTTP → redirects to https://localhost:8443
@@ -168,7 +169,10 @@ services:
       - ./docker/misp-key.pem:/etc/nginx/certs/key.pem:ro
       - ./docker/misp-nginx-http.conf:/etc/nginx/sites-enabled/misp80:ro
       - ./docker/misp-nginx-https.conf:/etc/nginx/sites-enabled/misp443:ro
+      - ./docker/misp-nginx-php.conf:/etc/nginx/includes/misp:ro
       - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
+      - ./docker/misp-init-settings.sh:/usr/local/bin/misp-init-settings.sh:ro
+      - ./docker/misp-supervisor-init.conf:/etc/supervisor/conf.d/60-init-settings.conf:ro
     depends_on:
       misp-db:
         condition: service_healthy
@@ -264,10 +268,11 @@ services:
       - CONNECTOR_NAME=MISP PhishGuard
       - CONNECTOR_SCOPE=misp-galaxy,misp-attack-pattern,misp-course-of-action,misp-intrusion-set,misp-malware,misp-tool,misp-vulnerability
       - CONNECTOR_LOG_LEVEL=error
-      - MISP_URL=http://misp
+      - MISP_URL=https://misp
       - MISP_REFERENCE_URL=http://localhost:8888
       - MISP_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
       - MISP_SSL=false
+      - MISP_SSL_VERIFY=false
       - MISP_VERIFYCERT=false
       - REQUESTS_CA_BUNDLE=/etc/ssl/misp-ca.pem
       - CURL_CA_BUNDLE=/etc/ssl/misp-ca.pem
@@ -275,11 +280,28 @@ services:
       - MISP_DATETIME_ATTRIBUTE=timestamp
       - MISP_IMPORT_FROM_DATE=2020-01-01
       - MISP_INTERVAL=60
+      - MISP_CREATE_REPORTS=true
+      - MISP_CREATE_INDICATORS=true
+      - MISP_CREATE_OBSERVABLES=true
     volumes:
       - ./docker/misp-ca.pem:/etc/ssl/misp-ca.pem:ro
     depends_on:
       - opencti
       - misp
+    mem_limit: 512m
+    networks: [phishguard]
+
+  # OpenCTI worker — consumes connector push queues and writes STIX objects into OpenCTI
+  opencti-worker:
+    image: opencti/worker:6.2.18
+    container_name: phishguard-opencti-worker
+    restart: unless-stopped
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - WORKER_LOG_LEVEL=error
+    depends_on:
+      - opencti
     mem_limit: 512m
     networks: [phishguard]
 
@@ -340,6 +362,27 @@ services:
     mem_limit: 256m
     networks: [phishguard]
 
+  # Neo4j — graph database for threat actor relationship visualization
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: phishguard-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # Neo4j Browser (HTTP)
+      - "7687:7687"   # Bolt protocol (used by Neovis.js + Python driver)
+    environment:
+      - NEO4J_AUTH=neo4j/changeme123
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=128m
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_connector_bolt_listen__address=0.0.0.0:7687
+      - NEO4J_dbms_connector_http_listen__address=0.0.0.0:7474
+    volumes:
+      - neo4j_data:/data
+    mem_limit: 1g
+    networks: [phishguard]
+
 networks:
   phishguard: { driver: bridge }
 
@@ -355,3 +398,4 @@ volumes:
   misp_data: {}
   misp_db_data: {}
   rabbitmq_data: {}
+  neo4j_data: {}

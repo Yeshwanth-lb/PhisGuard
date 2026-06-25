@@ -1,0 +1,249 @@
+# ThreatLens source allowlist — the legal boundary.
+# All external fetches must route through fetcher.py which enforces this list.
+# Editing this file is a reviewed action.
+
+sources:
+  - domain: attack.mitre.org
+    type: threat_intelligence
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: nvd.nist.gov
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: cisa.gov
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 2
+
+  - domain: www.cisa.gov
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 2
+
+  - domain: abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: bazaar.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: urlhaus-api.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: threatfox-api.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: feodotracker.abuse.ch
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: otx.alienvault.com
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: pulsedive.com
+    type: ioc_feed
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: xposedornot.com
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: www.sans.org
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: unit42.paloaltonetworks.com
+    type: threat_report
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: securelist.com
+    type: threat_report
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.mandiant.com
+    type: threat_report
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.3gpp.org
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.gsma.com
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: services.nvd.nist.gov
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: www.cisa.gov
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 2
+
+  - domain: epss.cyentia.com
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: api.first.org
+    type: vulnerability
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  # No-key free sources
+  - domain: internetdb.shodan.io
+    type: network_intel
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: api.bgpview.io
+    type: network_intel
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: ipinfo.io
+    type: network_intel
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: crt.sh
+    type: certificate
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  # Free-key sources
+  - domain: api.greynoise.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  - domain: urlscan.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.urlscan.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: emailrep.io
+    type: ioc_reputation
+    preferred_client: httpx
+    polite_delay_secs: 1
+
+  # Ransomware / breach intel
+  - domain: api.ransomlook.io
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.ransomware.live
+    type: compromise_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: xposedornot.com
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: haveibeenpwned.com
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  # Telecom / NTN
+  - domain: portal.3gpp.org
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.gsma.com
+    type: telecom_advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: ncsc.gov.uk
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: www.ncsc.gov.uk
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  - domain: isc.sans.edu
+    type: advisory
+    preferred_client: crawl4ai
+    polite_delay_secs: 3
+
+  # Dark / deep web intelligence (via clearnet APIs — no Tor access)
+  - domain: 2.intelx.io
+    type: darkweb_intel
+    preferred_client: httpx
+    polite_delay_secs: 3
+
+  - domain: www.circl.lu
+    type: passive_dns
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: rdap.circl.lu
+    type: passive_dns
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: leakix.net
+    type: darkweb_intel
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: breachdirectory.org
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2
+
+  - domain: api.breachdirectory.org
+    type: breach_exposure
+    preferred_client: httpx
+    polite_delay_secs: 2

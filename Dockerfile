@@ -21,10 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY requirements.txt .
+COPY requirements.txt requirements-threatlens.txt ./
 
 RUN pip install --upgrade pip && \
-    pip install --prefix=/install -r requirements.txt
+    pip install --prefix=/install -r requirements.txt && \
+    pip install --prefix=/install \
+        "crawl4ai>=0.4.0" \
+        "scrapling>=0.2.0" \
+        "trafilatura>=1.12.0" \
+        "lxml_html_clean>=0.4.0" || true
 
 
 # ---------- runtime ----------

@@ -179,6 +179,7 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     <a id="nav-pending" data-perm="quarantine" onclick="showSection('pending')">Pending Review <span id="pendingBadge" style="display:none;background:#fbbf24;color:#1a1a2e;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
     <a id="nav-ml" data-perm="ml_retrain" onclick="showSection('ml')">ML Ops</a>
     <a id="nav-campaigns" onclick="showSection('campaigns')">Campaigns <span id="campaignBadge" style="display:none;background:#f87171;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
+    <a id="nav-profiling" onclick="showSection('profiling')">Profiling <span id="profilingBadge" style="display:none;background:#8b5cf6;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px">0</span></a>
     <a id="nav-soar" data-perm="soar" onclick="showSection('soar')">SOAR</a>
     <a id="nav-audit" data-perm="audit" onclick="showSection('audit')">Audit Log</a>
     <a id="nav-gmail" data-perm="gmail_write" onclick="showSection('gmail')">Gmail</a>
@@ -336,6 +337,154 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
   <div class="card">
     <h2>Last Training Run</h2>
     <div id="mlMetrics"><div class="empty">No training run yet</div></div>
+  </div>
+</div>
+<div class="section" id="sec-profiling">
+  <div class="section-title">Threat Intelligence &amp; Adversary Profiling</div>
+  <div class="section-sub">Attacker clusters enriched with OSINT, ATT&CK mapping, and Claude synthesis — Skylo NTN surface mapped</div>
+
+  <!-- Strategic Assessment Banner -->
+  <div style="background:linear-gradient(135deg,#1e1b4b 0%,#0f172a 100%);border:1px solid #3730a3;border-radius:10px;padding:18px;margin-bottom:16px;position:relative;overflow:hidden">
+    <div style="position:absolute;top:0;right:0;width:200px;height:100%;background:radial-gradient(ellipse at right,#4c1d9522 0%,transparent 70%);pointer-events:none"></div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:18px">🛡</span>
+          <span style="font-size:14px;font-weight:700;color:#e2e8f0">Strategic Threat Assessment</span>
+          <span style="font-size:11px;color:#6366f1;background:#1e1b4b;border:1px solid #4338ca;border-radius:10px;padding:1px 8px">Skylo NTN</span>
+        </div>
+        <div id="orgAssessmentBody" style="font-size:12px;color:#94a3b8;line-height:1.6">
+          <div class="empty">No assessment yet — run an analysis cycle.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+        <button class="bs" style="padding:5px 14px;font-size:11px;background:#4f46e5;border:none;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="runIntelCycle()">▶ Run Analysis</button>
+        <button class="bs" style="padding:5px 14px;font-size:11px;background:transparent;border:1px solid #334155;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="exportOrgBrief()">📄 Brief</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats Row -->
+  <div id="profilingStatsRow" style="display:none;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+      <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:12px;text-align:center">
+        <div id="statTotal" style="font-size:22px;font-weight:700;color:#e2e8f0">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Total</div>
+      </div>
+      <div style="background:#141925;border:1px solid #ef444422;border-radius:8px;padding:12px;text-align:center">
+        <div id="statCritical" style="font-size:22px;font-weight:700;color:#ef4444">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Critical</div>
+      </div>
+      <div style="background:#141925;border:1px solid #f9731622;border-radius:8px;padding:12px;text-align:center">
+        <div id="statHigh" style="font-size:22px;font-weight:700;color:#f97316">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">High</div>
+      </div>
+      <div style="background:#141925;border:1px solid #10b98122;border-radius:8px;padding:12px;text-align:center">
+        <div id="statConfirmed" style="font-size:22px;font-weight:700;color:#10b981">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Confirmed</div>
+      </div>
+      <div style="background:#141925;border:1px solid #3b82f622;border-radius:8px;padding:12px;text-align:center">
+        <div id="statSurface" style="font-size:22px;font-weight:700;color:#3b82f6">—</div>
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Mapped</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rollup Panels -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+    <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <span style="font-size:14px">🌍</span>
+        <span style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Sector Pressure</span>
+      </div>
+      <div id="sectorRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
+    </div>
+    <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <span style="font-size:14px">🏢</span>
+        <span style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Org Targeting</span>
+      </div>
+      <div id="orgRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
+    </div>
+    <div style="background:#141925;border:1px solid #1e293b;border-radius:8px;padding:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+        <span style="font-size:14px">📡</span>
+        <span style="font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px">Attack Surface</span>
+      </div>
+      <div id="networkRollupBody"><div class="empty" style="font-size:11px">No data</div></div>
+    </div>
+  </div>
+
+  <!-- Relationship Graph — powered by Neo4j + Neovis.js -->
+  <div style="background:#080d14;border:1px solid #1a2332;border-radius:10px;margin-bottom:16px;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer" onclick="_toggleGraph(this)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">🕸</span>
+        <span style="font-size:13px;font-weight:600;color:#e2e8f0">Threat Actor Relationship Graph</span>
+        <span style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:1px 10px;font-size:10px;color:#64748b">Neo4j</span>
+        <span id="graphEdgeBadge" style="display:none;background:#0f1f35;border:1px solid #1d4ed844;border-radius:10px;padding:1px 10px;font-size:10px;color:#60a5fa"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <a href="http://localhost:7474" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#3b82f6;text-decoration:none;padding:3px 10px;border:1px solid #1d4ed844;border-radius:5px">Open Neo4j Browser ↗</a>
+        <span id="graphToggleIcon" style="color:#334155;font-size:12px">▶ Show</span>
+      </div>
+    </div>
+    <div id="graphContainer" style="display:none">
+
+      <!-- Cypher query bar -->
+      <div style="padding:10px 16px;background:#050a0f;border-bottom:1px solid #111827;display:flex;gap:8px;align-items:center">
+        <span style="font-size:10px;color:#475569;font-weight:600;white-space:nowrap">CYPHER</span>
+        <input id="cipherInput" value="MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b"
+          style="flex:1;background:#0d1117;border:1px solid #1e293b;border-radius:5px;padding:5px 10px;font-size:11px;color:#94a3b8;font-family:monospace"
+          onkeydown="if(event.key==='Enter') _runCypher()">
+        <button onclick="_runCypher()" style="padding:4px 14px;font-size:11px;background:#1d4ed8;border:none;border-radius:5px;color:#fff;cursor:pointer">Run</button>
+        <select onchange="document.getElementById('cipherInput').value=this.value;_runCypher()"
+          style="padding:4px 8px;font-size:11px;background:#0d1117;border:1px solid #1e293b;border-radius:5px;color:#64748b">
+          <option value="">Quick queries…</option>
+          <option value="MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b">All connections</option>
+          <option value="MATCH (a)-[r:SHARED_IP|SHARED_DOMAIN]->(b) RETURN a,r,b">Shared infrastructure</option>
+          <option value="MATCH (a:ThreatCluster) WHERE a.severity IN ['critical','high'] RETURN a">High severity only</option>
+          <option value="MATCH (a:ThreatCluster {confidence:'confirmed'})-[r]->(b) RETURN a,r,b">Confirmed clusters</option>
+          <option value="MATCH (a:ThreatCluster)-[r:SHARED_TTPS]->(b) RETURN a,r,b">Same tradecraft</option>
+        </select>
+      </div>
+
+      <!-- Neovis.js render container -->
+      <div id="neovisContainer" style="width:100%;height:540px;background:#040810"></div>
+
+      <!-- Legend + status -->
+      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid #111827;background:#050a0f;align-items:center">
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>Critical</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f97316;display:inline-block"></span>High</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Medium</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#475569;display:inline-block"></span>Low</div>
+        <div style="width:1px;background:#1e293b;align-self:stretch"></div>
+        <div style="font-size:10px;color:#10b981">━ Shared IP</div>
+        <div style="font-size:10px;color:#06b6d4">━ Shared Domain</div>
+        <div style="font-size:10px;color:#f59e0b">━ Shared TTPs</div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <span id="graphStatus" style="font-size:10px;color:#334155"></span>
+          <button onclick="_syncNeo4j()" style="padding:3px 10px;font-size:10px;background:transparent;border:1px solid #1e293b;border-radius:5px;color:#475569;cursor:pointer">↻ Sync</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter Bar + Profiles -->
+  <div style="background:#141925;border:1px solid #1e293b;border-radius:10px;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1e293b;background:#0f172a">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">🎯</span>
+        <span style="font-size:14px;font-weight:600;color:#e2e8f0">Adversary Profiles</span>
+      </div>
+      <div style="display:flex;gap:6px" id="profileFilterBtns">
+        <button onclick="_filterProfiles('all',this)" style="padding:3px 12px;font-size:11px;background:#1e293b;border:1px solid #334155;border-radius:20px;color:#94a3b8;cursor:pointer" class="pf-active">All</button>
+        <button onclick="_filterProfiles('critical',this)" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #ef444444;border-radius:20px;color:#ef4444;cursor:pointer">Critical</button>
+        <button onclick="_filterProfiles('high',this)" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #f9731644;border-radius:20px;color:#f97316;cursor:pointer">High</button>
+        <button onclick="_filterProfiles('confirmed',this)" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #10b98144;border-radius:20px;color:#10b981;cursor:pointer">Confirmed</button>
+      </div>
+    </div>
+    <div id="profilingBody" style="padding:14px"><div class="empty">Loading profiles…</div></div>
   </div>
 </div>
 <div class="section" id="sec-campaigns">
@@ -553,7 +702,7 @@ function showApp(){
 
 function showSection(name){
   currentSection = name;
-  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","soar","audit","gmail","settings"];
+  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","profiling","soar","audit","gmail","settings"];
   all.forEach(n => {
     const sec = document.getElementById("sec-" + n);
     const lnk = document.getElementById("nav-" + n);
@@ -566,6 +715,7 @@ function showSection(name){
   else if(name === "reports"){ loadReports(); }
   else if(name === "ml"){ loadML(); }
   else if(name === "campaigns"){ loadCampaigns(); }
+  else if(name === "profiling"){ loadProfiling(); }
   else if(name === "soar"){ loadSoar(); }
   else if(name === "audit"){ loadAudit(); }
   else if(name === "gmail"){ loadGmail(); }
@@ -1017,6 +1167,549 @@ async function addTrustedDomain(){
   else { const d=await r.json(); toast('Failed: '+(d.detail||r.status), 'error'); }
 }
 
+// ── ThreatLens Profiling ────────────────────────────────────────────────────
+const _CONF_COLORS = {confirmed:'#10b981',high:'#3b82f6',moderate:'#f59e0b',low:'#6b7280',speculative:'#4b5563'};
+const _SEV_COLORS  = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#6b7280'};
+const _CONF_BG     = {confirmed:'#052e16',high:'#172554',moderate:'#431407',low:'#1c1917',speculative:'#18181b'};
+const _INTENT_ICON = {'bec_fraud':'💸','credential_harvest':'🔑','credential_harvesting':'🔑','fraud_payment':'💳','brand_impersonation':'🎭','executive_impersonation':'👤','generic_phish':'🎣'};
+let _openProfileId = null;
+let _allProfiles   = [];
+let _activeFilter  = 'all';
+
+async function loadProfiling(){
+  await Promise.all([_loadProfiles(), _loadRollups(), _loadOrgAssessment()]);
+}
+
+async function _loadProfiles(){
+  const body = document.getElementById('profilingBody');
+  if(!body) return;
+  try {
+    const r = await api('/api/intel/profiles');
+    if(!r.ok){ body.innerHTML=`<div class="empty">Could not load (${r.status})</div>`; return; }
+    _allProfiles = await r.json();
+    const badge = document.getElementById('profilingBadge');
+    if(badge){ badge.textContent=_allProfiles.length; badge.style.display=_allProfiles.length?'inline':'none'; }
+    if(!_allProfiles.length){ body.innerHTML='<div class="empty" style="padding:30px;text-align:center">No profiles yet — click ▶ Run Analysis to generate your first adversary profiles.</div>'; return; }
+    _updateStats(_allProfiles);
+    _renderFilteredProfiles();
+    if(_openProfileId){
+      const btn = document.querySelector(`[data-profile-id="${_openProfileId}"]`);
+      if(btn) _expandProfile(btn);
+    }
+  } catch(e){ body.innerHTML=`<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function _updateStats(profiles){
+  const statsRow = document.getElementById('profilingStatsRow');
+  if(statsRow) statsRow.style.display='block';
+  const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('statTotal', profiles.length);
+  set('statCritical', profiles.filter(p=>p.severity==='critical').length);
+  set('statHigh', profiles.filter(p=>p.severity==='high').length);
+  set('statConfirmed', profiles.filter(p=>p.confidence==='confirmed').length);
+  set('statSurface', profiles.filter(p=>(p.surface_zones||[]).length>0).length);
+}
+
+function _filterProfiles(filter, btn){
+  _activeFilter = filter;
+  document.querySelectorAll('#profileFilterBtns button').forEach(b=>{
+    b.style.background = 'transparent';
+    b.style.fontWeight = 'normal';
+  });
+  if(btn){ btn.style.background='#1e293b'; btn.style.fontWeight='600'; }
+  _renderFilteredProfiles();
+}
+
+function _renderFilteredProfiles(){
+  const body = document.getElementById('profilingBody'); if(!body) return;
+  let filtered = _allProfiles;
+  if(_activeFilter==='critical') filtered = _allProfiles.filter(p=>p.severity==='critical');
+  else if(_activeFilter==='high') filtered = _allProfiles.filter(p=>p.severity==='high');
+  else if(_activeFilter==='confirmed') filtered = _allProfiles.filter(p=>p.confidence==='confirmed');
+  if(!filtered.length){ body.innerHTML=`<div class="empty" style="padding:20px;text-align:center">No profiles match this filter.</div>`; return; }
+  body.innerHTML = filtered.map(p=>_renderProfileCard(p)).join('');
+}
+
+async function _loadRollups(){
+  try{
+    const [sR,oR,nR] = await Promise.all([
+      api('/api/intel/rollup/sectors').then(r=>r.ok?r.json():{buckets:[]}),
+      api('/api/intel/rollup/org').then(r=>r.ok?r.json():{buckets:[]}),
+      api('/api/intel/rollup/network').then(r=>r.ok?r.json():{buckets:[]}),
+    ]);
+    _renderRollup('sectorRollupBody', sR.buckets||[]);
+    _renderRollup('orgRollupBody',    oR.buckets||[]);
+    _renderRollup('networkRollupBody',nR.buckets||[]);
+  }catch(e){}
+}
+
+function _renderRollup(elId, buckets){
+  const el = document.getElementById(elId); if(!el) return;
+  if(!buckets.length){el.innerHTML='<div class="empty" style="font-size:11px;padding:8px 0">No data yet</div>';return;}
+  const max = Math.max(...buckets.map(b=>b.count),1);
+  el.innerHTML = buckets.slice(0,5).map(b=>{
+    const pct = Math.round((b.count/max)*100);
+    const score = b.severity_score||0;
+    const barColor = score>6?'#ef4444':score>3?'#f97316':'#3b82f6';
+    return `<div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-size:12px;color:#cbd5e1;text-transform:capitalize">${b.label}</span>
+        <span style="font-size:11px;font-weight:600;color:#e2e8f0">${b.count}</span>
+      </div>
+      <div style="height:4px;background:#1e293b;border-radius:2px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;transition:width .4s"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function _loadOrgAssessment(){
+  const body = document.getElementById('orgAssessmentBody'); if(!body) return;
+  try{
+    const r = await api('/api/intel/assessment');
+    if(!r.ok){body.innerHTML='<div style="font-size:12px;color:#475569">No assessment yet. Run an analysis cycle to generate the strategic view.</div>';return;}
+    const a = await r.json();
+    const cc = _CONF_COLORS[a.confidence]||'#6b7280';
+    const intentIcon = {espionage:'🕵️',disruption:'💥',financial:'💰',hacktivism:'✊',mixed:'⚡',unknown:'❓'}[a.strategic_intent]||'❓';
+    body.innerHTML=`
+      <div style="margin-bottom:10px">
+        <div style="font-size:13px;color:#e2e8f0;line-height:1.7;font-weight:500">${a.summary||'No summary.'}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span style="background:${_CONF_BG[a.confidence]||'#1c1917'};color:${cc};border:1px solid ${cc}44;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:600">${cc==='#10b981'?'✓ ':''} ${a.confidence.toUpperCase()}</span>
+        ${a.strategic_intent&&a.strategic_intent!=='unknown'?`<span style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:20px;padding:3px 12px;font-size:11px">${intentIcon} ${a.strategic_intent}</span>`:''}
+        <span style="background:#1e293b;color:#64748b;border:1px solid #334155;border-radius:20px;padding:3px 12px;font-size:11px">${new Date(a.generated_at*1000).toLocaleDateString()}</span>
+      </div>`;
+  }catch(e){body.innerHTML='<div style="font-size:12px;color:#475569">Assessment not available.</div>';}
+}
+
+// Agent metadata registry
+const _AGENTS = {
+  osint:     {icon:'🔍', name:'OSINT Report',    color:'#3b82f6', sources:'CISA · Unit42 · SANS ISC',                    scrapes:true},
+  attack:    {icon:'⚡', name:'ATT&CK Mapper',   color:'#f59e0b', sources:'MITRE ATT&CK (local)',                        scrapes:false},
+  misp:      {icon:'🛡', name:'MISP / OpenCTI',  color:'#10b981', sources:'MISP threat feeds',                           scrapes:false},
+  ioc:       {icon:'🦠', name:'IoC Reputation',  color:'#ef4444', sources:'abuse.ch · AlienVault OTX · Pulsedive',       scrapes:false},
+  cve:       {icon:'🔓', name:'CVE Agent',        color:'#8b5cf6', sources:'NVD · CISA KEV · EPSS',                      scrapes:false},
+  compromise:{icon:'🔐', name:'Compromise Intel', color:'#f97316', sources:'ransomware.live · RansomLook · HIBP',        scrapes:false},
+  telecom:   {icon:'📡', name:'Telecom / NTN',   color:'#06b6d4', sources:'NCSC UK · SANS ISC',                          scrapes:true},
+  network:   {icon:'🖥', name:'Network Intel',   color:'#a3a3a3', sources:'Shodan InternetDB · BGPView',                 scrapes:false},
+  greynoise: {icon:'🌐', name:'GreyNoise',        color:'#84cc16', sources:'GreyNoise community',                        scrapes:false},
+  urlscan:   {icon:'🔎', name:'URLScan',          color:'#ec4899', sources:'urlscan.io community',                       scrapes:false},
+  darkweb:   {icon:'🕳', name:'Dark Web Intel',  color:'#a78bfa', sources:'IntelligenceX · CIRCL PassiveDNS · LeakIX',  scrapes:false},
+};
+const _AGENT_ORDER = ['misp','osint','ioc','attack','network','cve','compromise','telecom','greynoise','urlscan','darkweb'];
+const _SCRAPED_DOMAINS = ['cisa.gov','ncsc.gov.uk','isc.sans.edu','unit42.paloaltonetworks.com','securelist.com','mandiant.com','sans.org'];
+
+function _renderProfileCard(p){
+  const cc=_CONF_COLORS[p.confidence]||'#6b7280';
+  const sc=_SEV_COLORS[p.severity]||'#6b7280';
+  const intentKey=(p.assessed_intent||'').toLowerCase().replace(/\s+/g,'_').replace(/[^a-z_]/g,'');
+  const icon=_INTENT_ICON[intentKey]||'⚠️';
+  const zones=(p.surface_zones||[]);
+  const zoneHtml=zones.map(z=>`<span style="background:#0c1929;border:1px solid #1d4ed844;border-radius:4px;padding:2px 8px;font-size:10px;color:#60a5fa">${z.replace(/_/g,' ')}</span>`).join('');
+  const ttpHtml=p.ttp_count>0?`<span style="background:#1c1007;border:1px solid #f59e0b44;border-radius:4px;padding:2px 8px;font-size:10px;color:#f59e0b">⚡ ${p.ttp_count} TTPs</span>`:'';
+  const aptHtml=p.suspected_apt?`<div style="font-size:10px;color:#818cf8;margin-top:3px;font-style:italic">${p.suspected_apt}</div>`:'';
+  const sevPct={critical:100,high:75,medium:50,low:25}[p.severity]||20;
+
+  // Agent mini-dots: green=has findings in evidence, gray=no findings
+  // We can't tell without the detail call — show placeholder dots
+  const agentDots=_AGENT_ORDER.map(a=>{
+    const meta=_AGENTS[a]||{};
+    return `<span title="${meta.name}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#1e293b;border:1px solid #334155;margin-right:3px" id="dot-${p.id}-${a}"></span>`;
+  }).join('');
+
+  return `<div data-severity="${p.severity}" data-confidence="${p.confidence}" style="border:1px solid #1a2332;border-left:3px solid ${sc};border-radius:8px;margin-bottom:10px;background:#080d14;overflow:hidden">
+
+    <div style="padding:14px 16px 0">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-size:15px">${icon}</span>
+            <span style="font-size:13px;font-weight:700;color:#f1f5f9">${p.assessed_identity}</span>
+          </div>
+          ${aptHtml}
+          <div style="font-size:11px;color:#475569;margin-top:3px">${p.assessed_intent}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+          <span style="background:${sc}18;color:${sc};border:1px solid ${sc}55;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:700">${(p.severity||'').toUpperCase()}</span>
+          <span style="background:${cc}12;color:${cc};border:1px solid ${cc}40;border-radius:5px;padding:2px 10px;font-size:10px;font-weight:600">${p.confidence}</span>
+        </div>
+      </div>
+      <div style="height:2px;background:#111827;border-radius:1px;margin:10px 0 0;overflow:hidden">
+        <div style="width:${sevPct}%;height:100%;background:linear-gradient(90deg,${sc}66,${sc});border-radius:1px"></div>
+      </div>
+    </div>
+
+    ${p.summary?`<div style="padding:9px 16px 0;font-size:12px;color:#6b7280;line-height:1.55">${p.summary.slice(0,160)}${p.summary.length>160?'…':''}</div>`:''}
+
+    <div style="padding:8px 16px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+      ${zoneHtml}${ttpHtml}
+    </div>
+
+    <div style="padding:0 16px 10px;display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:10px;color:#1e293b">INTEL:</span>
+        ${agentDots}
+      </div>
+      <span style="font-size:10px;color:#1e293b">${p.member_scan_count||0} scans · ${new Date(p.generated_at*1000).toLocaleDateString()}</span>
+    </div>
+
+    <div style="padding:8px 16px 10px;display:flex;align-items:center;justify-content:space-between;background:#050a0f;border-top:1px solid #111827">
+      <span style="font-size:10px;color:#1e293b">${new Date(p.generated_at*1000).toLocaleTimeString()}</span>
+      <div style="display:flex;gap:6px">
+        <button data-profile-id='${p.id}' onclick="_toggleProfile(this)" style="padding:4px 14px;font-size:11px;background:#0f1f35;border:1px solid #1d4ed855;border-radius:5px;color:#60a5fa;cursor:pointer;font-weight:500">🔍 Intelligence</button>
+        <button data-profile-id='${p.id}' onclick="_exportProfilePDF(this)" style="padding:4px 10px;font-size:11px;background:transparent;border:1px solid #1e293b;border-radius:5px;color:#334155;cursor:pointer">PDF</button>
+      </div>
+    </div>
+
+    <div id="ev-${p.id}" style="display:none"></div>
+  </div>`;
+}
+
+function _toggleProfile(btn){
+  const pid = btn.dataset.profileId;
+  const panel = document.getElementById('ev-'+pid);
+  if(!panel) return;
+  if(panel.style.display!=='none'){ panel.style.display='none'; _openProfileId=null; return; }
+  _openProfileId = pid;
+  _expandProfile(btn);
+}
+
+function _switchTab(pid, tab){
+  ['intel','attack','meta'].forEach(t=>{
+    const el=document.getElementById('tab-'+pid+'-'+t);
+    const btn=document.getElementById('tbtn-'+pid+'-'+t);
+    if(el) el.style.display = t===tab?'block':'none';
+    if(btn){ btn.style.background=t===tab?'#1e293b':'transparent'; btn.style.color=t===tab?'#e2e8f0':'#64748b'; btn.style.borderColor=t===tab?'#334155':'transparent'; }
+  });
+}
+
+async function _expandProfile(btn){
+  const pid = btn.dataset.profileId;
+  const panel = document.getElementById('ev-'+pid);
+  if(!panel) return;
+  panel.style.display='block';
+  panel.innerHTML=`<div style="background:#040810;border-top:1px solid #111827;padding:20px;text-align:center">
+    <div style="display:inline-block;width:20px;height:20px;border:2px solid #1d4ed8;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>
+    <div style="font-size:12px;color:#334155;margin-top:8px">Loading intelligence data…</div>
+  </div>`;
+  try{
+    const r = await api('/api/intel/profiles/'+pid);
+    if(!r.ok){panel.innerHTML=`<div style="padding:14px;color:#ef4444;font-size:12px;background:#040810;border-top:1px solid #111827">Failed to load intelligence (${r.status})</div>`;return;}
+    const p = await r.json();
+
+    // Group evidence by agent
+    const byAgent = {};
+    (p.evidence||[]).forEach(e=>{ if(!byAgent[e.agent]) byAgent[e.agent]=[]; byAgent[e.agent].push(e); });
+
+    // Update agent dots on the card
+    _AGENT_ORDER.forEach(a=>{
+      const dot = document.getElementById('dot-'+pid+'-'+a);
+      if(!dot) return;
+      const hasFinding = !!byAgent[a];
+      const meta = _AGENTS[a]||{};
+      dot.style.background = hasFinding ? meta.color||'#10b981' : '#1e293b';
+      dot.style.borderColor = hasFinding ? (meta.color||'#10b981')+'66' : '#334155';
+      dot.title = (meta.name||a) + ': ' + (hasFinding ? byAgent[a].length+' findings' : 'no findings');
+    });
+
+    // Build agent intelligence cards
+    const agentCards = _AGENT_ORDER.map(agentKey=>{
+      const meta = _AGENTS[agentKey]||{icon:'?',name:agentKey,color:'#6b7280',sources:agentKey};
+      const findings = byAgent[agentKey]||[];
+      const hasFindings = findings.length > 0;
+      const borderColor = hasFindings ? meta.color+'44' : '#1e293b';
+      const bgColor = hasFindings ? meta.color+'08' : '#070c14';
+      const statusBadge = hasFindings
+        ? `<span style="background:${meta.color}18;color:${meta.color};border:1px solid ${meta.color}44;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:600">${findings.length} finding${findings.length>1?'s':''}</span>`
+        : `<span style="background:#111827;color:#374151;border:1px solid #1f2937;border-radius:10px;padding:1px 8px;font-size:10px">no data</span>`;
+
+      const findingRows = findings.map(f=>{
+        const isScraped = f.source_url && _SCRAPED_DOMAINS.some(d=>f.source_url.includes(d));
+        const sourceLabel = f.source_url ? `<a href="${f.source_url}" target="_blank" style="color:#3b82f6;font-size:10px;text-decoration:none;display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px">${isScraped?'🕷 ':''}<span style="color:#60a5fa">${f.source_url.replace('https://','').replace('http://','').split('/')[0]}</span>${isScraped?`<span style="background:#172554;color:#60a5fa;border-radius:3px;padding:0 4px;font-size:9px;margin-left:4px">scraped</span>`:''}</a>` : '';
+        return `<div style="padding:6px 0;border-bottom:1px solid #111827">
+          <div style="font-size:11px;color:#94a3b8;line-height:1.5">${f.claim}</div>
+          ${sourceLabel}
+        </div>`;
+      }).join('');
+
+      return `<div style="background:${bgColor};border:1px solid ${borderColor};border-radius:7px;padding:12px;display:flex;flex-direction:column;gap:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="display:flex;align-items:center;gap:7px">
+            <span style="font-size:16px">${meta.icon}</span>
+            <div>
+              <div style="font-size:12px;font-weight:600;color:${hasFindings?meta.color:'#374151'}">${meta.name}</div>
+              <div style="font-size:10px;color:#374151">${meta.sources}</div>
+            </div>
+          </div>
+          ${statusBadge}
+        </div>
+        ${findingRows||`<div style="font-size:11px;color:#1f2937;padding:4px 0">${meta.scrapes?'Nothing scraped from this source':'Agent ran — no matching indicators'}</div>`}
+      </div>`;
+    }).join('');
+
+    // ATT&CK by tactic
+    const tacticsMap = {};
+    (p.ttps||[]).forEach(t=>{ const k=t.tactic||'other'; if(!tacticsMap[k]) tacticsMap[k]=[]; tacticsMap[k].push(t); });
+    const attackSection = Object.keys(tacticsMap).length ? Object.entries(tacticsMap).map(([tactic,ttps])=>`
+      <div style="margin-bottom:14px">
+        <div style="font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px;display:flex;align-items:center;gap:6px">
+          <div style="flex:1;height:1px;background:#111827"></div>${tactic}<div style="flex:1;height:1px;background:#111827"></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${ttps.map(t=>`<div style="background:#0c1d2e;border:1px solid #1d4ed855;border-radius:6px;padding:6px 12px">
+            <div style="font-size:11px;color:#93c5fd;font-weight:700">${t.attack_id}</div>
+            <div style="font-size:10px;color:#60a5fa;margin-top:1px">${t.name}</div>
+          </div>`).join('')}
+        </div>
+      </div>`).join('')
+    : '<div style="font-size:12px;color:#1f2937;padding:12px 0">No ATT&CK techniques mapped for this cluster</div>';
+
+    // Surface zones
+    const zoneCards = (p.surface_zones||[]).map(z=>`
+      <div style="background:#0c1d2e;border:1px solid #1d4ed844;border-radius:6px;padding:8px 14px;text-align:center">
+        <div style="font-size:11px;color:#60a5fa;font-weight:600">${z.replace(/_/g,' ')}</div>
+      </div>`).join('');
+
+    // Profile meta
+    const confColor = _CONF_COLORS[p.confidence]||'#6b7280';
+    const metaSection = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${[
+          ['Assessed Identity',  p.assessed_identity],
+          ['Assessed Intent',    p.assessed_intent],
+          ['Severity',          (p.severity||'').toUpperCase()],
+          ['Confidence',        p.confidence],
+          ['APT Association',   p.suspected_apt||'None attributed'],
+          ['Scans Linked',      p.member_scan_count||0],
+          ['Surface Zones',     (p.surface_zones||[]).join(', ')||'unmapped'],
+          ['Model',             p.model||'claude'],
+        ].map(([k,v])=>`<div style="background:#070c14;border:1px solid #111827;border-radius:6px;padding:8px 12px">
+          <div style="font-size:10px;color:#374151;text-transform:uppercase;letter-spacing:.4px">${k}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:3px;font-weight:500">${v}</div>
+        </div>`).join('')}
+      </div>`;
+
+    panel.innerHTML=`
+      <div style="background:#040810;border-top:1px solid #111827">
+
+        <!-- Tab bar -->
+        <div style="display:flex;gap:2px;padding:12px 16px 0;border-bottom:1px solid #111827">
+          <button id="tbtn-${pid}-intel" onclick="_switchTab('${pid}','intel')" style="padding:6px 16px;font-size:11px;font-weight:600;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px 6px 0 0;cursor:pointer">🔍 Intelligence Sources</button>
+          <button id="tbtn-${pid}-attack" onclick="_switchTab('${pid}','attack')" style="padding:6px 16px;font-size:11px;background:transparent;color:#64748b;border:1px solid transparent;border-radius:6px 6px 0 0;cursor:pointer">⚡ ATT&amp;CK &amp; Surface</button>
+          <button id="tbtn-${pid}-meta" onclick="_switchTab('${pid}','meta')" style="padding:6px 16px;font-size:11px;background:transparent;color:#64748b;border:1px solid transparent;border-radius:6px 6px 0 0;cursor:pointer">ℹ Profile Info</button>
+        </div>
+
+        <!-- Tab 1: Intelligence Sources -->
+        <div id="tab-${pid}-intel" style="padding:16px">
+          <div style="font-size:11px;color:#1f2937;margin-bottom:12px">Each card shows what that agent found and which sources were queried or scraped (🕷 = web crawled)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${agentCards}</div>
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid #111827;display:flex;gap:8px">
+            <button data-profile-id='${pid}' onclick="_markWrongProfile(this)" style="padding:5px 14px;font-size:11px;background:transparent;border:1px solid #1f2937;border-radius:5px;color:#374151;cursor:pointer">✗ Mark Incorrect</button>
+          </div>
+        </div>
+
+        <!-- Tab 2: ATT&CK & Surface -->
+        <div id="tab-${pid}-attack" style="display:none;padding:16px">
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:#f59e0b;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px">⚡ ATT&CK Techniques by Tactic</div>
+            ${attackSection}
+          </div>
+          ${zoneCards?`<div>
+            <div style="font-size:11px;font-weight:600;color:#60a5fa;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">📡 Skylo NTN Surface Zones</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">${zoneCards}</div>
+          </div>`:''}
+        </div>
+
+        <!-- Tab 3: Profile Info -->
+        <div id="tab-${pid}-meta" style="display:none;padding:16px">
+          ${metaSection}
+        </div>
+
+      </div>`;
+  }catch(e){panel.innerHTML=`<div style="padding:14px;color:#ef4444;font-size:12px;background:#040810;border-top:1px solid #111827">Error: ${e.message}</div>`;}
+}
+
+async function _exportProfilePDF(btn){
+  const pid=btn.dataset.profileId;
+  const r=await api('/api/intel/profiles/'+pid);
+  if(!r.ok){toast('Could not load profile','error');return;}
+  const p=await r.json();
+  const w=window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><style>body{font-family:Arial;margin:40px;color:#111}h1{color:#1e293b}ul{font-size:13px}</style></head><body>
+    <h1>Adversary Profile — ${p.assessed_identity}</h1>
+    <p><b>Intent:</b> ${p.assessed_intent} &nbsp;|&nbsp; <b>Severity:</b> ${p.severity} &nbsp;|&nbsp; <b>Confidence:</b> ${p.confidence}</p>
+    ${p.suspected_apt?`<p>${p.suspected_apt}</p>`:''}
+    <p style="line-height:1.6">${p.summary}</p>
+    <h2>Surface Zones</h2><p>${(p.surface_zones||[]).join(', ')||'none'}</p>
+    <h2>ATT&CK Techniques</h2><ul>${(p.ttps||[]).map(t=>`<li>${t.attack_id} ${t.name} (${t.tactic})</li>`).join('')||'<li>none</li>'}</ul>
+    <h2>Evidence Chain</h2><ul>${(p.evidence||[]).map(e=>`<li>${e.claim}</li>`).join('')||'<li>none</li>'}</ul>
+    <p style="font-size:10px;color:#999;border-top:1px solid #ddd;margin-top:30px;padding-top:8px">PhishGuard ThreatLens — no email body content</p>
+  </body></html>`);
+  w.document.close(); w.print();
+}
+
+async function _markWrongProfile(btn){
+  const pid=btn.dataset.profileId;
+  const r=await api('/api/intel/profiles/'+pid+'/feedback',{method:'POST',body:JSON.stringify({rating:'incorrect',notes:'Marked wrong by analyst'})});
+  if(r.ok) toast('Feedback saved','success');
+  else toast('Feedback failed','error');
+}
+
+// ── Threat Actor Relationship Graph — Neo4j + Neovis.js ─────────────────────
+let _viz = null;
+let _graphInitialized = false;
+
+async function _toggleGraph(header){
+  const container = document.getElementById('graphContainer');
+  const icon = document.getElementById('graphToggleIcon');
+  const isOpen = container.style.display !== 'none';
+  container.style.display = isOpen ? 'none' : 'block';
+  icon.textContent = isOpen ? '▶ Show' : '▼ Hide';
+  if(!isOpen && !_graphInitialized) {
+    await _syncNeo4j();
+    _initNeovis();
+  }
+}
+
+async function _syncNeo4j(){
+  const status = document.getElementById('graphStatus');
+  if(status) status.textContent = 'Syncing to Neo4j…';
+  try {
+    const TOKEN = (await api('/api/auth/whoami').catch(()=>null));
+    const r = await api('/api/intel/graph/sync', {method:'POST'});
+    if(r.ok){
+      const d = await r.json();
+      const badge = document.getElementById('graphEdgeBadge');
+      if(badge && !d.skipped){
+        badge.textContent = `${d.nodes||0} nodes · ${d.edges||0} edges`;
+        badge.style.display='inline';
+      }
+      if(status) status.textContent = d.skipped ? 'Neo4j not available' : `${d.nodes||0} nodes synced`;
+    }
+  } catch(e){ if(status) status.textContent = 'Sync failed'; }
+}
+
+function _initNeovis(){
+  const container = document.getElementById('neovisContainer');
+  if(!container) return;
+  container.innerHTML = '<div style="padding:40px;text-align:center;color:#334155;font-size:12px">Connecting to Neo4j graph database…</div>';
+
+  // Load Neovis.js from CDN
+  if(!window.NeoVis){
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/neovis.js@2.0.2/dist/neovis.js';
+    script.onload = () => _renderNeovis();
+    script.onerror = () => {
+      container.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b;font-size:12px">Neovis.js unavailable offline.<br><br><a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser instead ↗</a></div>';
+    };
+    document.head.appendChild(script);
+  } else {
+    _renderNeovis();
+  }
+  _graphInitialized = true;
+}
+
+function _renderNeovis(cypher){
+  const q = cypher || document.getElementById('cipherInput')?.value ||
+    'MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b';
+
+  const config = {
+    containerId: 'neovisContainer',
+    neo4j: {
+      serverUrl:      'bolt://localhost:7687',
+      serverUser:     'neo4j',
+      serverPassword: 'changeme123',
+    },
+    visConfig: {
+      nodes: {
+        shape: 'dot',
+        font: { color: '#e2e8f0', size: 13, face: 'system-ui' },
+        borderWidth: 2,
+        borderWidthSelected: 3,
+      },
+      edges: {
+        arrows: { to: { enabled: false } },
+        smooth: { type: 'curvedCW', roundness: 0.2 },
+        font: { color: '#64748b', size: 10, align: 'middle' },
+      },
+      physics: {
+        barnesHut: { gravitationalConstant: -8000, springLength: 120, springConstant: 0.04 },
+        stabilization: { iterations: 200, updateInterval: 25 },
+      },
+      interaction: { hover: true, tooltipDelay: 200 },
+      background: { color: '#040810' },
+    },
+    labels: {
+      ThreatCluster: {
+        label:     'short_label',
+        color:     { background: 'severity',
+                     mapping: { critical:'#ef4444', high:'#f97316', medium:'#f59e0b', low:'#475569', unknown:'#334155' } },
+        size:      'member_count',
+        sizeCypher: 'MATCH (n) WHERE id(n) = id(n) RETURN n.member_count * 2',
+        [NeoVis.NEOVIS_ADVANCED_CONFIG]: {
+          function: {
+            title: n => `<b>${n.properties.label}</b><br>Severity: ${n.properties.severity}<br>Confidence: ${n.properties.confidence}<br>Members: ${n.properties.member_count} scans<br>${n.properties.summary||''}`,
+            color: { background: n => {
+              const m = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#334155'};
+              return m[n.properties.severity] || '#334155';
+            }, border: n => {
+              const gc = n.properties.group_color || '#475569';
+              return gc;
+            }},
+          },
+        },
+      },
+    },
+    relationships: {
+      SHARED_IP:     { color: '#10b981', caption: true },
+      SHARED_DOMAIN: { color: '#06b6d4', caption: true },
+      SHARED_TTPS:   { color: '#f59e0b', caption: false, [NeoVis.NEOVIS_ADVANCED_CONFIG]: { static: { width: 1 } } },
+    },
+    initialCypher: q,
+  };
+
+  try {
+    if(_viz) { _viz.clearNetwork(); }
+    _viz = new NeoVis.default(config);
+    _viz.render();
+  } catch(e) {
+    document.getElementById('neovisContainer').innerHTML =
+      `<div style="padding:30px;text-align:center;font-size:12px;color:#64748b">
+        Could not connect to Neo4j at localhost:7687.<br>
+        Make sure Neo4j is running: <code style="color:#3b82f6">docker compose up -d neo4j</code><br><br>
+        <a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser ↗</a>
+      </div>`;
+  }
+}
+
+function _runCypher(){
+  const q = document.getElementById('cipherInput')?.value;
+  if(!q) return;
+  if(!_graphInitialized){ _initNeovis(); return; }
+  _renderNeovis(q);
+}
+
+
+async function exportOrgBrief(){
+  toast('Generating leadership brief…','info');
+  try{
+    const r=await api('/api/intel/assessment/export',{method:'POST'});
+    if(!r.ok){toast('No assessment yet','error');return;}
+    const html=await r.text();
+    const w=window.open('','_blank'); w.document.write(html); w.document.close(); w.print();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function runIntelCycle(){
+  toast('Starting analysis cycle…','info');
+  try{
+    const r=await api('/api/intel/run',{method:'POST'});
+    if(r.ok){const d=await r.json(); toast(`✓ Cycle complete — ${d.profiles_written||0} profile(s) written`,'success'); loadProfiling();}
+    else{const d=await r.json(); toast('Failed: '+(d.detail||r.status),'error');}
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
 async function removeTrustedDomain(domain, btn){
   if(!confirm(`Remove "${domain}" from trusted senders?`)) return;
   btn.disabled = true;
@@ -1125,7 +1818,7 @@ async function viewCampaignScans(scanIds){
 
   // Manually switch to Reports tab WITHOUT calling showSection() to avoid
   // triggering loadReports() which would overwrite our filtered _allReportItems.
-  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","soar","audit","gmail","settings"];
+  const all = ["overview","scan","quarantine","reports","pending","ml","campaigns","profiling","soar","audit","gmail","settings"];
   all.forEach(function(s){
     const sec = document.getElementById('sec-'+s);
     const nav = document.getElementById('nav-'+s);

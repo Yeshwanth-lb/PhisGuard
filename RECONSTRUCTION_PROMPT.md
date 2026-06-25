@@ -703,3 +703,121 @@ connector-misp `MISP_URL` changed from `https://misp` to `http://misp` — port 
 `.env` has `SMTP_RATE_PER_IP=200` and `SMTP_RATE_GLOBAL=200` for the email bombing demo (prevents per-IP limit from firing before bombing detector). Revert these for production.
 
 *This prompt fully specifies PhishGuard v1.5 as it exists after sessions 1-6 (2026-06-21 to 2026-06-23).*
+
+---
+
+# Session 7 (2026-06-24/25) — ThreatLens: Layer 8 Threat Intelligence & Adversary Profiling
+
+PhishGuard v1.5 → v1.6. A new offline, read-only, cadence-driven intelligence
+layer (`app/threatlens/`) that consumes the `scans` table, clusters scans into
+candidate adversaries, enriches each cluster via 11 parallel agents, maps to
+MITRE ATT&CK + the Skylo NTN attack surface, and synthesizes structured
+`AdversaryProfile` records surfaced in a new Profiling dashboard tab.
+
+Behind `INTEL_ENABLED` (default false). Never touches the email-delivery path.
+
+## Module layout — `app/threatlens/`
+```
+config.py            # ThreatLensSettings — all env vars + API keys
+models.py            # IoCSet, ActorCluster, Finding, TTP, CorroboratedClaim,
+                     #   AdversaryProfile, OrgThreatAssessment, TTPObservation, Rollup
+store.py             # SQLite DAO — 5 tables + profile_feedback
+actor_clusterer.py   # scans → candidate clusters (composite signature, stable hash id)
+fusion_engine.py     # deterministic confidence math (Python, NOT the LLM)
+profiler.py          # Claude synthesis → AdversaryProfile + feedback application
+org_assessor.py      # leadership-facing OrgThreatAssessment (Skylo-contextualized)
+ttp_mapper.py        # ATT&CK dedup + Skylo surface-zone keyword mapping
+sector_rollup.py     # sector / org-team / network-surface aggregations
+scheduler.py         # daemon-thread cadence runner (daily, overlap-guarded)
+orchestrator.py      # run_cycle: dirty clusters → agents → fusion → profile → neo4j → slack
+neo4j_writer.py      # pushes cluster graph to Neo4j after each cycle
+slack_notifier.py    # smart escalation alerts (critical surface / confirmed / high-sev)
+agents/
+  base_agent.py      # timeout + isolation + TTL cache + not_configured + sanitize_text
+  registry.py        # pluggable agent registry
+  osint_report_agent.py    attack_mapper_agent.py    misp_opencti_agent.py
+  ioc_reputation_agent.py  cve_agent.py              compromise_intel_agent.py
+  telecom_ntn_agent.py     network_intel_agent.py    greynoise_agent.py
+  urlscan_agent.py         darkweb_agent.py
+scraper/
+  fetcher.py         # THE chokepoint — allowlist + robots + rate-limit + honest UA
+  crawl4ai_client.py scrapling_client.py text_extract.py feeds_client.py discovery.py
+  allowlist.yaml     # 43 approved OSINT domains
+data/
+  attack_techniques.json   attack_surface.yaml   # Skylo NTN surface zones
+```
+
+## The 11 agents (all run in parallel via asyncio.gather per cluster)
+1. OSINT Report — CISA/Unit42/SANS via Crawl4AI → Claude extraction
+2. ATT&CK Mapper — local MITRE JSON, intent → technique IDs (no network)
+3. MISP/OpenCTI — queries existing MISP; **only path to `confirmed` confidence**
+4. IoC Reputation — abuse.ch (URLhaus/ThreatFox) + AlienVault OTX + Pulsedive
+5. CVE — NVD + CISA KEV + EPSS, filtered to NTN/5G/telecom/cloud
+6. Compromise Intel — ransomware.live + RansomLook + HIBP (signals only, no PII)
+7. Telecom/NTN — NCSC UK + SANS ISC (Skylo-specific)
+8. Network Intel — Shodan InternetDB + BGPView (NO KEY, always on)
+9. GreyNoise — noise-vs-targeted IP classification (free key)
+10. URLScan — community URL scan verdicts (free key)
+11. Dark Web — IntelligenceX + CIRCL PassiveDNS + LeakIX (clearnet only, no Tor)
+
+## Fusion confidence rules (deterministic Python, tested)
+- agent=='misp' hard match → `confirmed` (ONLY path)
+- ≥2 independent root domains → `high`
+- 1 source → `moderate`
+- internal-only → `low`
+- nothing → `speculative`
+The profiler can LOWER but never RAISE the fusion-assigned ceiling.
+
+## SQLite tables added (all `CREATE TABLE IF NOT EXISTS`, init in main.py lifespan)
+actor_clusters (+ last_profiled_at), actor_profiles, intel_sources,
+ttp_observations, org_threat_assessment, profile_feedback (+ cluster_id)
+
+## API endpoints
+```
+POST /api/intel/run                    GET /api/intel/profiles[/{id}]
+GET  /api/intel/clusters               GET /api/intel/rollup/sectors|org|network
+GET  /api/intel/assessment             POST /api/intel/assessment/export
+POST /api/intel/profiles/{id}/export   POST /api/intel/profiles/{id}/feedback
+GET  /api/intel/graph                  POST /api/intel/graph/sync
+GET  /api/intel/status
+```
+
+## Dashboard — Profiling tab
+Stats bar · filter chips · Strategic Assessment banner · 3 rollup panels ·
+Neo4j relationship graph (Neovis.js + Cypher bar) · ranked profile cards with
+3-tab evidence panel (Intelligence Sources per-agent / ATT&CK & Surface / Profile Info).
+Gotchas preserved: data-* onclick, panel survives 5s re-render.
+
+## Phase 5 hardening
+- Dirty-flag skip: only clusters with `updated_at > last_profiled_at` re-profiled
+- Provenance: every finding with a source URL logged to intel_sources
+- Retention: prune_old_intel_sources(90d); bounded concurrency semaphore
+
+## Feedback loop (Option D)
+"Mark Incorrect" → saved against cluster_id (survives re-profiling) → next cycle
+lowers confidence ceiling one tier + injects analyst note into Claude prompt.
+
+## Smart Slack alerts (Option C)
+Fires on: critical surface (ground_station_ingress/ntn_5g_core) · confirmed
+match · high-severity on gcp_infra/supply_chain. Block Kit cards. corporate_it
+alone does NOT alert (too common).
+
+## Infrastructure changes
+- docker-compose: +opencti-worker, +neo4j (5.20-community, ports 7474/7687)
+- Dockerfile: separate pip step for crawl4ai/scrapling/trafilatura (|| true)
+- requirements-threatlens.txt: heavy scraper deps (avoid version conflicts)
+- MISP fixes: BASE_URL=https://localhost:8443 (not MISP_BASEURL), misp-nginx-php.conf
+  with `fastcgi_param HTTPS on`, misp_exporter publishes events on creation
+- MISP→OpenCTI sync working: 306 events → 213 OpenCTI objects, 80 reports
+
+## API keys (.env)
+Active: ANTHROPIC, VIRUSTOTAL, ABUSEIPDB, GOOGLE_SAFE_BROWSING, GEMINI, SLACK,
+MISP, ABUSECH_AUTH, OTX, PULSEDIVE, GREYNOISE, URLSCAN, INTELX, LEAKIX.
+INTEL_ENABLED=true.
+
+## Tests
+~107 ThreatLens tests across: store, clusterer, scraper_guard, agents, fusion,
+profiler, feeds, ttp_mapper, rollup, org_assessor, scheduler, api, hardening,
+slack, feedback. Plus the original 186. All green.
+
+*Session 7 specifies ThreatLens (Layer 8) as built 2026-06-24/25. Branch: feature/threatlens.*

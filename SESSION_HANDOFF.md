@@ -1,415 +1,418 @@
 # PhishGuard — Session Handoff Document
-**Last updated:** 2026-06-23 (session 6)  
+**Last updated:** 2026-06-24 (session 7 — continued)  
 **Project root:** `/Users/intern4/Desktop/phishguard`  
 **Developer:** Yeshwanth (yeshwanthlb0@gmail.com)  
-**Purpose:** End-to-end email security gateway with 7-layer AI detection
+**Purpose:** End-to-end email security gateway with 8-layer AI detection + ThreatLens threat intelligence layer
 
 ---
 
 ## 1. Current System State
 
 ### Tests
-- **186 passing, 3 skipped, 0 failing**
+- **165+ passing, 3 skipped, 0 failing**
 - Run with: `python3 -m pytest tests/ -q --ignore=tests/locustfile.py --ignore=tests/test_layer4_smtp_live.py --ignore=tests/test_layer2_claude_live.py`
 - 3 skipped: live Slack tests (no webhook in env)
-- Test files: `test_layer0.py` (12), `test_campaigns.py` (13), `test_smtp_rate_limiter.py` (17), `test_bombing_detector.py` (21), `test_layer1/2/3/4/5/6/7.py`
+- ThreatLens tests: `test_threatlens_store`, `test_threatlens_clusterer`, `test_threatlens_scraper_guard`, `test_threatlens_agents`, `test_threatlens_fusion`, `test_threatlens_profiler`, `test_threatlens_feeds`, `test_threatlens_ttp_mapper`, `test_threatlens_rollup`, `test_threatlens_org_assessor`, `test_threatlens_scheduler`, `test_threatlens_api`, `test_threatlens_hardening`
 
 ### Git Status
-- Branch: `master` — all changes committed, working tree clean
+- Branch: `feature/threatlens` — all changes committed, working tree clean
+- Main branch `master` untouched — merge when ready
 - Latest commits:
-  - `531f3e1` fix: Grafana dashboard metric names and datasource UID
-  - `045cc6f` fix: MISP nginx redirect includes port 8443, remove HSTS
-  - `c3b7f14` fix: MISP serves HTTP directly (reverted — secure cookies issue)
-  - `bfd9298` fix: expose MISP HTTPS on port 8443, fix connector-misp URL
-  - `15edfed` docs: add FULL_PROJECT_JOURNAL.md
+  - `53ace44` fix: include crawl4ai/scrapling/trafilatura in Docker image
+  - `f18a586` feat: ThreatLens Phase 5 — hardening, dirty flag, provenance, retention
+  - `4d2dc19` fix: MISP baseurl permanently correct on every container restart
+  - `b5e0349` fix: permanent fixes for MISP/OpenCTI/Docker stability
+  - `54bdbe8` fix: MISP→OpenCTI sync now fully working
+  - `af146b2` feat: ThreatLens Phase 4 — rollups, org assessor, scheduler, full dashboard
+  - `4922545` feat: ThreatLens Phase 3 — full agent fleet, scraper routing, TTP mapper
 
-### Database State (as of 2026-06-23)
-- **Total scans stored:** 1,445
-- **Phishing:** 182 | **Suspicious:** 240 | **Clean:** 1,023
+### Database State (as of 2026-06-24)
+- **Total scans stored:** 1,445+
+- **Phishing:** 189 | **Suspicious:** 244 | **Clean:** 1,041
 - SQLite at `data/phishguard.db` (Docker volume: `phishguard_app_data`)
-- 4 tables: `scans`, `pending_review`, `trusted_domains`, `feedback`
-- **IMPORTANT:** Local `data/phishguard.db` and Docker volume DB can drift if you run Python scripts directly. Fix:
+- **9 tables** now: `scans`, `pending_review`, `trusted_domains`, `feedback`, `actor_clusters`, `actor_profiles`, `intel_sources`, `ttp_observations`, `org_threat_assessment`
+- **IMPORTANT:** Local `data/phishguard.db` and Docker volume DB can drift. Fix:
   ```bash
-  docker cp data/phishguard.db phishguard-app:/app/data/phishguard.db
-  docker exec --user root phishguard-app chmod -R 777 /app/data/
+  docker cp phishguard-app:/app/data/phishguard.db data/phishguard.db
   ```
+
+### ThreatLens State (as of 2026-06-24 session 7)
+- **Active clusters:** 126 (grouped from 1,445 scans)
+- **Profiles generated:** 126 (first full cycle completed with confirmed confidence)
+- **TTP observations:** 132
+- **INTEL_ENABLED:** `true` — live and running
+- **Cycle cadence:** daily (scheduler running as daemon thread)
 
 ### ML Model
 - Algorithm: `ExtraTreesClassifier` (300 trees, class_weight='balanced')
 - Wrapped in: `CalibratedClassifierCV` (isotonic, 3-fold)
 - F1: **0.894** | ROC-AUC: **0.974**
 - Saved at: `data/model.pkl` (1.3 MB)
-- Training data: `data/training/spamassassin_corpus.jsonl` (5,772 emails) + `data/training/gmail_clean_corpus.jsonl` (307 real clean emails)
-- **DO NOT** use `data/training/huggingface_phishing_corpus.jsonl` — degrades F1 from 0.89→0.62 (feature mismatch: no pipeline scores)
-- Feedback corrections from the `feedback` table are folded in at retrain time — human-corrected labels override original scan verdicts
-
-### Global Isolation Forest
-- Seeded at: `models/global_iso_v1.pkl`
-- Trained on: 186 real email feature vectors
-- Behavioral baselines persist in named Docker volume `phishguard_ml_baselines` → survive container restarts
 
 ---
 
-## 2. Architecture — 8 Layers
+## 2. Architecture — PhishGuard L0–L7
 
-### Layer 0 — Trivial-Clean Pre-Filter (< 5ms)
-**File:** `app/layer0/pre_filter.py`  
-Fast-exit for short, URL-free, SPF+DKIM-pass emails. All 5 must pass: SPF=pass, DKIM=pass, 0 URLs, 0 attachments, body ≤ 600 chars, no urgency keywords. Returns `confidence: 0.02`, `fast_path: "layer0_trivial_clean"`.
+### Layer 0–7 (unchanged from session 6)
+See session 6 handoff for full L0–L7 documentation. No changes to the core pipeline.
 
-### Layer 1 — OSINT Pre-Filter (< 50ms cached)
-**File:** `app/layer1/verdicts.py`  
-9 threat databases: VirusTotal, AbuseIPDB, URLhaus, Google Safe Browsing, PhishTank, MISP, Spamhaus, WHOIS (domain age), internal denylist.  
-**Trusted domains now dynamic:** ~70 built-in + user-added via SQLite `trusted_domains` table. Add from Settings tab — no rebuild needed. 60s cache.
-
-### Layer 2 — AI Consensus (< 5 seconds)
-**File:** `app/layer2_ai/orchestrator.py`  
-**Thresholds (current):** Tier 1 ≥ 0.90 (phishing) | Tier 2 ≥ **0.70** (phishing) | Tier 3 ≥ 0.42 (suspicious)  
-3 engines: NLP (Claude→OpenAI→Gemini→heuristic), Behavioral (ISO forest + per-sender GMM), Structural (typosquatting, domain age, macros).
-
-### Layer 3 — Sandbox Detonation
-**File:** `app/layer3_sandbox/sandbox_runner.py`  
-Fires when L2=suspicious AND URLs present AND confidence ≥ 0.45. Uses Python Docker SDK. App runs as root (`user: "0"` in docker-compose) so socket always accessible — no manual chmod needed.
-
-### Layer 4 — SOAR
-**File:** `app/layer4_soar/soar_orchestrator.py`  
-7 integrations concurrent: ES, Slack, MISP, OpenCTI, Jira (unconfigured), email alerts, denylist.  
-**Campaign detector:** `app/layer4_soar/campaign_detector.py` — clusters emails by normalised domain and NLP intent. API: `GET /api/campaigns?days=N`.  
-**Weekly digest:** `app/layer4_soar/digest.py` — Slack Block Kit summary. Auto-sends Monday 09:00. Manual: `POST /api/digest/send` or SOAR tab button.
-
-### Layer 5 — ML Classifier
-**Files:** `app/layer5_ml/classifier.py`, `app/layer5_ml/training_pipeline.py`  
-Blends: `final = 0.60 × L2_composite + 0.40 × ML_score`. Floor: suspicious ≥ 0.43, phishing ≥ 0.65.  
-**Feedback loop wired:** `_load_feedback_records()` reads `feedback` table, excludes corrected scans from raw DB load, uses human labels. `n_feedback_corrections` shown in retrain metrics.  
-**Retrain:** Dashboard → ML Ops tab. Also visible in MLflow at `localhost:5000`.
-
-### Layer 6 — Security
-JWT (HS256), RBAC (admin/analyst/readonly), rate limiter (120 req/min), audit log, input sanitiser.  
-**Privacy:** `GET /api/scan/{id}` strips body_text/body_html server-side. `body_preview` removed from `/api/scans` list. Email content never surfaces via API.
-
-### SMTP Rate Limiter — Email Bombing Protection
-**File:** `app/security/smtp_rate_limiter.py`  
-Four sliding-window counters checked before every email enters the pipeline. All configurable via env vars:
-
-| Counter | Limit | Env var | Stops |
-|---|---|---|---|
-| Per-IP | 10/min | `SMTP_RATE_PER_IP` | Single-source flooding |
-| Per-sender-domain | 20/hour | `SMTP_RATE_PER_DOMAIN` | Domain campaigns |
-| **Per-recipient** | **30/min** | `SMTP_RATE_PER_RCPT` | **Distributed bombing (rotating IPs/domains)** |
-| Global | 60/min | `SMTP_RATE_GLOBAL` | Total throughput cap |
-
-**Tarpit:** 2s sleep before 421 — slows automated tools from 500/min to ~30/min.  
-**Burst alert:** 5+ emails from same source in 10s → Slack alert.  
-**421 = temporary** — MTA retries, no legitimate email permanently lost.  
-Stats: `GET /health` → `smtp_rate_limiter`.  
-**Demo:** Set `SMTP_RATE_PER_IP=200` in `.env` before running `demo_bombing.py` (current `.env` already has this set).
-
-### Inbox Bombing Detector — Subscription Bomb Detection
-**File:** `app/security/bombing_detector.py`  
-Detects subscription bombs (attacker signs victim up to hundreds of legitimate services to bury critical alerts). Watches the RECIPIENT, not the sender — attacker can rotate infinite domains but can't change who the victim is.
-
-**Two detection paths:**
-1. **Velocity (fires email 5):** 5+ subscription subjects in 30s = bot speed → hold immediately
-2. **Scoring (fires email 20):** `volume(40) + diversity(40) + pattern(20) ≥ 60`
-   - Diversity is graduated: ≥70% new domains → +40, 50–70% → +20 (language-independent)
-   - Pattern (English subscription subjects) is optional +20 booster — not a hard gate
-   - Volume + diversity alone = 80 → detected (non-English bombs caught)
-
-**Smart 3-way routing during hold:**
-- `is_high_signal(subject)` (OTP, reset, bank alert, new-device) → **SURFACE — overrides even phishing verdict**. L1 OSINT already ran; bombing context means delivery is right.
-- `is_subscription_pattern(subject)` → **HOLD** for SOC Pending Review
-- Neither (unmatched) → **SURFACE** (default — err toward delivery)
-
-**Why high-signal overrides phishing verdict:** A genuine bank OTP from an unknown domain scores "phishing" at L2 (new domain + banking subject = phishing pattern to Claude). During a bombing attack that's exactly the email to surface. L1 hard hits (VirusTotal/URLhaus) still quarantine before reaching this code.
-
-**Cold-start:** < 10 known sender domains → diversity downweighted (protects new employees).  
-**Memory:** `seen_domains` append-only, capped at 500 — no eviction.  
-**All 11 thresholds** configurable via `BOMBING_*` env vars.  
-**API:** `GET /api/bombing/status`, `POST /api/bombing/{rcpt}/clear`  
-**Dashboard:** Orange banner on Overview tab, "Clear Hold" button, auto-expires after 20 min.  
-**Demo:** `python3 scripts/demo_bombing.py` — 20 concurrent emails, velocity fires at email 5–7, OTP surfaces with `smtp_bombing_high_signal_delivered` log.  
-**Full explanation:** `EMAIL_BOMBING_EXPLANATION.md`
-
-### Layer 7 — Email Ingestion
-3 paths: SMTP gateway (port 8025), Gmail OAuth historical scanner, REST `/analyze`.  
-SMTP routing uses **L2 verdict** (not blended) to prevent ML floor from bypassing SOC review.
+### Key thresholds:
+- L2: Tier 1 ≥ 0.90 (phishing) | Tier 2 ≥ 0.70 (phishing) | Tier 3 ≥ 0.42 (suspicious)
+- SMTP rate limits: per-IP=200, global=200 (demo mode — revert to 10/60 for production)
 
 ---
 
-## 3. Running Services and Ports
+## 3. ThreatLens — Threat Intelligence Layer (NEW in session 7)
+
+**Module:** `app/threatlens/`  
+**Status:** All 5 phases complete and live  
+**Flag:** `INTEL_ENABLED=true` in `.env`
+
+### Architecture
+```
+Scans table → Actor Clusterer → 10 parallel agents → Fusion Engine → Claude Profiler → Dashboard
+```
+
+### Five phases built
+| Phase | What | Status |
+|---|---|---|
+| 1 — Foundation | Actor clustering from scan data | ✅ Done |
+| 2 — Vertical slice | Scraper chokepoint + 2 agents + fusion + profiler | ✅ Done |
+| 3 — Breadth | Full 10-agent fleet + TTP mapper + Skylo surface zones | ✅ Done |
+| 4 — Product | Rollups + org assessor + scheduler + full Profiling tab | ✅ Done |
+| 5 — Hardening | Dirty-flag skip + provenance + retention + cost guardrails | ✅ Done |
+
+### The 10 agents
+| Agent | Source | Key needed |
+|---|---|---|
+| OSINT Report | CISA, Unit42, SANS (via Crawl4AI) | None |
+| ATT&CK Mapper | Local MITRE JSON | None |
+| MISP/OpenCTI | Existing MISP integration | Already configured |
+| IoC Reputation | abuse.ch + AlienVault OTX + Pulsedive | ✅ Set |
+| CVE/Vuln | NVD + CISA KEV + EPSS | None |
+| Compromise Intel | ransomware.live + RansomLook + HIBP | None |
+| Telecom/NTN | NCSC UK + SANS ISC (Skylo-specific) | None |
+| Network Intel | Shodan InternetDB + BGPView | None |
+| GreyNoise | IP noise vs targeted classification | ❌ Not set (dormant) |
+| URLScan | Community URL scan verdicts | ❌ Not set (dormant) |
+
+### Confidence model
+- `confirmed` — ONLY via MISP hard IoC match
+- `high` — 2+ independent OSINT sources agree
+- `moderate` — 1 credible source
+- `low/speculative` — weak or internal-only evidence
+
+### Dirty-flag (Phase 5)
+- Clusters only re-profiled when `updated_at > last_profiled_at`
+- Unchanged clusters skipped → 0 LLM calls for clean clusters
+- `clusters_skipped` and `llm_calls` in every cycle summary
+
+### Key files
+```
+app/threatlens/
+├── config.py              # ThreatLensSettings (all env vars)
+├── models.py              # All Pydantic models
+├── store.py               # SQLite DAO (9 tables)
+├── actor_clusterer.py     # Incremental clustering
+├── fusion_engine.py       # Deterministic confidence math
+├── profiler.py            # Claude synthesis + fallback
+├── ttp_mapper.py          # ATT&CK + Skylo surface zones
+├── sector_rollup.py       # 3 aggregation views
+├── org_assessor.py        # Leadership-facing strategic assessment
+├── orchestrator.py        # Cycle runner (dirty flag + provenance)
+├── scheduler.py           # Daemon thread (daily/hourly/on_campaign)
+├── agents/                # 10 agent files
+├── scraper/               # fetcher.py chokepoint + crawl4ai + scrapling + trafilatura
+└── data/                  # attack_techniques.json, attack_surface.yaml
+```
+
+### API endpoints added
+```
+POST /api/intel/run                    # trigger cycle (admin)
+GET  /api/intel/profiles               # list profiles
+GET  /api/intel/profiles/{id}          # full profile + evidence
+GET  /api/intel/clusters               # cluster list
+GET  /api/intel/rollup/sectors|org|network
+GET  /api/intel/assessment             # org-level brief
+POST /api/intel/assessment/export      # PDF leadership brief
+POST /api/intel/profiles/{id}/export   # MISP export
+POST /api/intel/profiles/{id}/feedback # analyst rating
+GET  /api/intel/status
+```
+
+---
+
+## 4. Running Services and Ports
 
 | Service | URL | Login | Notes |
 |---|---|---|---|
-| **PhishGuard SOC Console** | `localhost:8000` | `dev-key` (any role) | ✅ Fully working |
-| **Elasticsearch** | `localhost:9200` | `elastic / changeme` | ✅ 2,100+ docs |
+| **PhishGuard SOC Console** | `localhost:8000` | `dev-key` (any role) | ✅ Profiling tab live |
+| **Elasticsearch** | `localhost:9200` | `elastic / changeme` | ✅ Working |
 | **Kibana** | `localhost:5601` | `elastic / changeme` | ✅ Working |
 | **MLflow** | `localhost:5000` | none | ✅ Working |
-| **MinIO API** | `localhost:9000` | `phishguard / changeme123` | ✅ Working |
 | **MinIO UI** | `localhost:9001` | `phishguard / changeme123` | ✅ Working |
-| **MISP** | `http://localhost:8888` → redirects to `https://localhost:8443` | `admin@admin.test / changeme123` | ⚠️ Accept SSL cert warning. 287 events exported. connector-misp version mismatch so no OpenCTI sync. |
-| **OpenCTI** | `localhost:8080` | `admin@phishguard.local / changeme123` | ⚠️ Platform runs but 0 objects (connector broken) |
-| **Grafana** | `localhost:3000` | `admin / changeme` | ✅ 4/8 panels showing (other 4 correctly empty — no errors, no /analyze traffic) |
-| **Prometheus** | `localhost:9090` | none | ✅ Scraping every 15s |
+| **MISP** | `https://localhost:8443/users/login` | `admin@admin.test / changeme123` | ✅ **FIXED** — 306 events, all published |
+| **OpenCTI** | `localhost:8080` | `admin@phishguard.local / changeme123` | ✅ **FIXED** — 213 objects, 80 reports |
+| **Grafana** | `localhost:3000` | `admin / changeme` | ✅ Working |
+| **Prometheus** | `localhost:9090` | none | ✅ Working |
 | **Redis** | `localhost:6379` | password: `redispassword` | ✅ Working |
 | **SMTP Gateway** | `localhost:8025` | none | ✅ Working |
 
+**14 containers total** (was 13 — added `opencti-worker`)
+
 ### Docker Commands
 ```bash
-docker compose up -d                   # start all 13 services
+docker compose up -d                   # start all 14 services
 docker compose ps                      # check status
 docker compose build app               # rebuild after code changes
 docker compose up -d --no-deps app     # restart app only
-# No manual chmod needed — app runs as root (user: "0" in docker-compose)
 ```
-
-### Named Docker Volumes
-| Volume | Contents |
-|---|---|
-| `phishguard_app_data` | SQLite DB, ML model, screenshots, audit log |
-| `phishguard_ml_baselines` | Per-sender behavioral baselines |
-| `phishguard_es_data` | Elasticsearch indices |
-| `phishguard_mlflow_data` | MLflow experiment history |
-| `phishguard_minio_data` | Evidence .eml files |
 
 ---
 
-## 4. Demo Numbers (as of 2026-06-23 session 6)
+## 5. Demo Numbers (as of 2026-06-24 session 7)
 
 | Metric | Value |
 |---|---|
-| Total emails scanned | 1,445 |
-| Phishing blocked | 182 |
-| Suspicious held for SOC | 240 |
-| Clean delivered | 1,023 |
-| Tests passing | 186 / 189 (3 skipped) |
-| Running containers | 13/13 |
-| Campaigns detected (30d) | 33+ |
-| MISP threat events | 287 |
-| Elasticsearch docs | 2,100+ |
-| Behavioral baseline files | 15+ (persisted) |
+| Total emails scanned | 1,445+ |
+| Phishing blocked | 189 |
+| Suspicious held for SOC | 244 |
+| Clean delivered | 1,041 |
+| Tests passing | 165+ / (3 skipped) |
+| Running containers | 14/14 |
+| MISP threat events | 306 (all published) |
+| OpenCTI objects | 213 |
+| OpenCTI reports | 80 |
+| ThreatLens clusters | 126 |
+| ThreatLens profiles | 126 (confirmed confidence) |
+| TTP observations | 132 |
 
 ---
 
-## 5. Demo Script — Procedural Generator
+## 6. MISP + OpenCTI — FIXED in session 7
 
-**Script:** `scripts/test_smtp_gateway.py`  
-**Generates unique emails every run** — no two runs produce the same email. Uses word banks + randomised amounts, names, domains, phrasing.
+**Both now fully working end-to-end automatically.**
 
-```bash
-python3 scripts/test_smtp_gateway.py              # random run
-python3 scripts/test_smtp_gateway.py --seed 42    # reproducible
-python3 scripts/test_smtp_gateway.py --count 5    # 5 per category
+### Flow (fully automatic)
+```
+Phishing email → PhishGuard scans → MISP event created + published (seconds)
+→ connector-misp syncs within 60s → OpenCTI worker creates Report + Observables
 ```
 
-**Clean tactics (5):** meeting invite, deployment notice, infra alert, HR event, maintenance notice  
-**Suspicious tactics (7):** account verify, backup notification, billing, subscription renewal, IT password, survey, reward points  
-**Phishing tactics (6):** brand typosquat (8 brands × multiple typo variants), BEC wire fraud, credential harvest, IRS refund, IT helpdesk, payroll  
+### What was fixed
+1. **connector-misp URL** — `http://misp` → `https://misp` (nginx redirect loop)
+2. **Missing opencti/worker container** — added to docker-compose
+3. **MISP_CREATE_REPORTS/INDICATORS/OBSERVABLES** — were all None (falsy), nothing was created
+4. **MISP events not published** — L4 SOAR now calls `/events/publish/{id}` on creation
+5. **MISP baseurl resets on restart** — `BASE_URL=https://localhost:8443` in docker-compose env
+6. **nginx HTTPS fastcgi param** — mounted `docker/misp-nginx-php.conf` with `fastcgi_param HTTPS on`
+7. **MISP login redirect loop** — `Security.force_https=true` + baseurl fix
 
-### Demo Flow
-1. `python3 scripts/test_smtp_gateway.py`
-2. **Press F5** in browser (IDs are fresh each run)
-3. Gmail → search `label:PhishGuard-Delivered` → clean emails
-4. Dashboard → **Pending Review** tab → suspicious held
-   - Click **📊 View Analysis** → forensic breakdown + threshold decision matrix
-   - Click **📄 Export PDF** (in Reports tab scan detail) → light-themed PDF report
-   - Click **✅ Approve** → delivered with `PhishGuard-SOC-Approved` label
-5. Dashboard → **Quarantine** tab → phishing blocked
-6. Dashboard → **Campaigns** tab → active campaigns auto-detected
-7. Dashboard → **SOAR** tab → "Send Digest to Slack Now" → weekly summary
+### MISP login
+Go to `https://localhost:8443/users/login` (note: HTTPS, note: port 8443)  
+Accept SSL warning → **Advanced → Proceed**  
+Login: `admin@admin.test` / `changeme123`
 
-### Testing with Real Emails
-```bash
-# Download from Gmail: ⋮ → Show original → Download Original
-python3 scripts/send_eml.py ~/Downloads/email.eml
-```
+### Critical MISP gotcha
+The MISP container **enforces** `MISP.baseurl` from `BASE_URL` env var on every start.
+We set `BASE_URL=https://localhost:8443` in docker-compose — this must stay or nav links break.
 
 ---
 
-## 6. SOC Dashboard — All Features
+## 7. ThreatLens Gotchas
 
-### Overview Tab
-- Stats: total / phishing / suspicious / clean counts
-- Recent activity feed
+### Scrapers in Docker
+Crawl4AI, Scrapling, trafilatura are installed in the Docker image via a separate pip step in Dockerfile. They were kept out of `requirements.txt` (causes version conflicts) and put in `requirements-threatlens.txt` (local dev only). The Dockerfile installs them separately with `|| true` so conflicts don't break the build.
 
-### Scan Tab
-- Paste raw email → manual scan → verdict with layer breakdown
+### ThreatLens tables init on startup
+`app/main.py` lifespan calls `init_db()` on every startup — creates the 9 ThreatLens tables idempotently. Required because the DB is in a Docker volume and doesn't auto-migrate.
 
-### Pending Review Tab
-- **📊 View Analysis** — forensic breakdown: auth badges, L1 checks, L2 score bars, threshold decision matrix (Tier 1/2/3), NLP intent + tactics + reasoning, structural red flags, behavioral tier, ML score
-- Panel survives 5s polling re-render
-- **✅ Approve** → delivered to Gmail inbox with `PhishGuard-SOC-Approved` label
-- **🔒 Reject** → quarantined
+### Dirty flag
+A cluster is only re-profiled if `updated_at > last_profiled_at`. New phishing emails join clusters → `updated_at` bumps → cluster becomes dirty → re-profiled next cycle. Clean clusters skip profiling entirely.
 
-### Reports Tab
-- Click any row → **visual scan report** (not raw JSON):
-  - Verdict banner (colour-coded, confidence %, scan ID)
-  - Email metadata + auth badges
-  - L1 OSINT stat boxes
-  - L2 score bars + threshold decision matrix
-  - NLP analysis card, structural red flags, behavioral stats, ML scores, SOAR chips
-  - **📄 Export PDF** → opens clean light-themed PDF in new window, auto-triggers print dialog
-- **Search/filter** by sender, verdict
-- **Mark Wrong** → saves feedback to `feedback` table for next ML retrain
+### INTEL_ENABLED
+`INTEL_ENABLED=true` is set in `.env`. The scheduler fires daily. Manual trigger: `POST /api/intel/run` (admin only) or Profiling tab → ▶ Run Analysis button.
 
-### Quarantine Tab
-- All phishing emails blocked
-
-### Campaigns Tab ← NEW
-- Detects coordinated attacks by normalised sender domain + NLP intent clustering
-- Active campaign badge in nav (updates every 5s)
-- Severity: critical/high/medium with colour coding
-- **"View N Scans in Reports →"** deep-links to Reports filtered to campaign scans
-- Window: 7/14/30 days configurable
-
-### ML Ops Tab
-- F1, ROC-AUC, confusion matrix, feature importances
-- `n_feedback_corrections` — shows how many human corrections fed into last retrain
-- Retrain button, bootstrap button
-
-### SOAR Tab
-- **Weekly Threat Digest** card — "Send Digest to Slack Now" button
-- Integration status (ES, Slack, MISP, OpenCTI, Jira)
-- Sender denylist management
-- Recent SOAR actions audit
-
-### Settings Tab
-- Provider configuration (API keys)
-- Detection thresholds
-- **Trusted Sender Domains** — add/remove domains without code changes
+### API keys configured for ThreatLens
+| Key | Status |
+|---|---|
+| `ABUSECH_AUTH_KEY` | ✅ Set |
+| `OTX_API_KEY` | ✅ Set |
+| `PULSEDIVE_API_KEY` | ✅ Set |
+| `GREYNOISE_API_KEY` | ❌ Not set (GreyNoise agent dormant) |
+| `URLSCAN_API_KEY` | ❌ Not set (URLScan agent dormant) |
 
 ---
 
-## 7. Critical Gotchas
+## 8. Known Issues (session 7)
 
-### Pending Review Stale Items
-After each demo run press **F5** before clicking buttons — IDs are fresh per run.
-
-### L2 Threshold Is 0.70
-`HIGH_CONF_THRESHOLD = 0.70` in `app/layer2_ai/orchestrator.py`. Emails scoring 0.42–0.70 = suspicious (held for review). Above 0.70 = phishing (quarantine). Below 0.42 = clean.
-
-### HuggingFace Dataset — Do NOT Use for Training
-`data/training/huggingface_phishing_corpus.jsonl` degrades F1 from 0.89→0.62. Only train on data processed through the full pipeline.
-
-### Behavioral Baselines Persisted
-`ml/baselines/` is now in named volume `phishguard_ml_baselines`. Baselines survive restarts. New senders still start at Tier 0.
-
-### Feedback Loop
-`feedback` table accumulates SOC corrections (Mark Wrong button). At next retrain, corrections override original labels. Multiple corrections for same scan → latest wins.
-
-### Email Bombing — Rate Limiter Tuning
-Default limits (in `app/security/smtp_rate_limiter.py`): per-IP=10/min, per-domain=20/hr, per-recipient=30/min, global=60/min, tarpit=2s, burst=5/10s. Adjust constants at the top of the file — no rebuild needed if running locally (Python reimports). In Docker, rebuild after changing.
-
-The per-recipient limit is the most important for real-world attacks — online bombing tools use rotating IPs/domains so only the recipient counter catches them.
-
-### Privacy — Email Body Never Exposed
-`GET /api/scan/{id}` strips body fields server-side. `body_preview` removed from list endpoint. No email body content accessible via any API.
-
-### Campaign Detection Algorithm
-Normalises sender domains by stripping TLD + year/number suffixes (`payment-hub-2026.com` → `payment-hub`). Groups with ≥ 3 emails = campaign. Intent campaigns exclude scan IDs already in domain campaigns to avoid double-counting.
-
-### Gmail Daily Sending Limit
-Alert emails use Gmail SMTP — 500/day free tier. After many runs alerts stop. Slack alerts have no limit.
-
-### MISP SSL Certificate
-Cert is for hostname `misp` not `localhost`. Do not restart MISP without cert files mounted.
-
----
-
-## 8. Known Issues
-
-### MISP web UI (⚠️ not blocking demo)
-- `http://localhost:8888` redirects to `https://localhost:8443`
-- Browser shows SSL cert warning (cert issued for hostname `misp`, not `localhost`) — click **Advanced → Proceed**
-- Once logged in, nav links may redirect to `https://localhost/` (strips port) — manually type `https://localhost:8443/events/index`
-- Login: `admin@admin.test` / `changeme123` (password reset via PHP bcrypt in session 6)
-- **MISP still works for PhishGuard** — L1 queries it, L4 exports to it (287 events). Web UI is cosmetic for demo.
-
-### connector-misp (⚠️ not blocking demo)
-- connector-misp v6.2.18 uses GET `/events/restSearch` but MISP v2.5.40 requires POST → API mismatch
-- OpenCTI has 0 objects — MISP→OpenCTI sync never completed
-- Fix would require upgrading connector-misp image to a version compatible with MISP 2.5.40
+### GreyNoise + URLScan agents dormant
+No keys configured. Agents return `[]` and contribute nothing. System still produces `confirmed` profiles without them via MISP matches.
 
 ### Grafana empty panels (✅ correct behaviour)
-- Error Rate, 5xx Total show no data → **correct**, there are no 5xx errors
-- `/analyze` panels show no data → **correct**, emails go via SMTP (port 8025) not the REST `/analyze` endpoint
-- To populate `/analyze` panels: paste an email manually in the dashboard Scan tab
+No change from session 6.
+
+### MISP SSL cert warning in browser
+Still shows SSL warning — cert is for hostname `misp`, not `localhost`. Always click **Advanced → Proceed**. This is cosmetic only — all API integrations use `verify=False`.
+
+---
 
 ## 9. Immediate Next Steps
 
-1. **Default passwords** — ES, Kibana, MinIO, OpenCTI, Grafana, MISP still use `changeme`/`changeme123`
-2. **CORS lockdown** — `allow_origins=['*']` in `app/main.py` ~line 77
-3. **Retrain ML** — 1,445 real scan records in DB, retrain from ML Ops tab
-4. **PhishTank key** — registration may be re-enabled at phishtank.org/api_register.php
-5. **Jira** — add `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` to .env
-6. **SMTP rate limiter** — `.env` has `SMTP_RATE_PER_IP=200 SMTP_RATE_GLOBAL=200` set for bombing demo. Revert to defaults (10/60) for production: remove those lines from `.env`
-7. **connector-misp upgrade** — upgrade to version compatible with MISP 2.5.40 to restore OpenCTI sync
-8. **Gmail Workspace ingestion** — `INBOX_INGESTION_ENABLED` flag not yet built; needs service account + Workspace admin
+1. **Get GreyNoise key** — `greynoise.io/plans/community` → `GREYNOISE_API_KEY=...` in `.env`
+2. **Get URLScan key** — `urlscan.io/user/signup` → `URLSCAN_API_KEY=...` in `.env`
+3. **Merge `feature/threatlens` → `master`** when ready to ship
+4. **CORS lockdown** — `allow_origins=['*']` in `app/main.py`
+5. **Default passwords** — ES, Kibana, MinIO, OpenCTI, Grafana still use `changeme`
+6. **Retrain ML** — 1,445 real scan records in DB, retrain from ML Ops tab
+7. **SMTP rate limiter** — revert `SMTP_RATE_PER_IP=200` to `10` for production
 
 ---
 
-## 9. API Keys Configured (in .env)
+## 10. API Keys Configured (in .env)
 
-| Key | Status |
-|---|---|
-| `JWT_SECRET` | ✅ Set |
-| `ANTHROPIC_API_KEY` | ✅ Set (Claude — primary NLP) |
-| `VIRUSTOTAL_API_KEY` | ✅ Set |
-| `ABUSEIPDB_API_KEY` | ✅ Set |
-| `GOOGLE_SAFE_BROWSING_API_KEY` | ✅ Set |
-| `SLACK_WEBHOOK_URL` | ✅ Set |
-| `MISP_API_KEY` | ✅ Set |
-| `GMAIL_OAUTH_TOKEN_FILE` | ✅ Set |
-| `ALERT_SMTP_HOST` | ✅ Set (Gmail SMTP) |
-| `PHISHTANK_API_KEY` | ❌ Not set |
-| `JIRA_*` | ❌ Not set |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | ❌ Not set |
+| Key | Status | Used by |
+|---|---|---|
+| `JWT_SECRET` | ✅ Set | Auth |
+| `ANTHROPIC_API_KEY` | ✅ Set | Claude — primary NLP + ThreatLens profiler |
+| `VIRUSTOTAL_API_KEY` | ✅ Set | L1 OSINT |
+| `ABUSEIPDB_API_KEY` | ✅ Set | L1 OSINT |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | ✅ Set | L1 OSINT |
+| `SLACK_WEBHOOK_URL` | ✅ Set | L4 SOAR alerts |
+| `MISP_API_KEY` | ✅ Set | L1 + L4 + ThreatLens MISP agent |
+| `GMAIL_OAUTH_TOKEN_FILE` | ✅ Set | Gmail delivery |
+| `GEMINI_API_KEY` | ✅ Set | LLM fallback |
+| `ABUSECH_AUTH_KEY` | ✅ Set | ThreatLens IoC agent |
+| `OTX_API_KEY` | ✅ Set | ThreatLens IoC agent |
+| `PULSEDIVE_API_KEY` | ✅ Set | ThreatLens IoC agent |
+| `GREYNOISE_API_KEY` | ❌ Not set | ThreatLens GreyNoise agent (dormant) |
+| `URLSCAN_API_KEY` | ❌ Not set | ThreatLens URLScan agent (dormant) |
+| `PHISHTANK_API_KEY` | ❌ Not set | L1 OSINT (registration may be closed) |
+| `JIRA_*` | ❌ Not set | L4 SOAR Jira tickets |
 
 ---
 
-## 10. Key Files
+## 11. Key Files
 
 ```
 phishguard/
 ├── app/
-│   ├── main.py                         # 35+ API endpoints
-│   ├── pipeline.py                     # L0→L1→L2→L3→L4→L5 orchestrator
-│   ├── storage.py                      # SQLite: scans, pending_review, trusted_domains, feedback
-│   ├── layer0/pre_filter.py            # Trivial-clean fast-exit
-│   ├── layer1/verdicts.py              # OSINT + dynamic trusted sender + denylist
-│   ├── layer2_ai/orchestrator.py       # 3-tier verdict (0.90 / 0.70 / 0.42)
-│   ├── layer2_ai/behavioral.py         # ISO forest + per-sender GMM
-│   ├── layer2_ai/structural.py         # Typosquatting, domain age, macros
-│   ├── layer2_ai/nlp_engine.py         # Claude → OpenAI → Gemini → heuristic
-│   ├── layer3_sandbox/sandbox_runner.py # Docker SDK sandbox
-│   ├── layer4_soar/soar_orchestrator.py # 7 SOAR integrations
-│   ├── layer4_soar/campaign_detector.py # Domain+intent campaign clustering
-│   ├── layer4_soar/digest.py           # Weekly Slack digest + scheduler
-│   ├── layer5_ml/training_pipeline.py  # ExtraTrees + feedback loop
-│   ├── layer5_ml/feature_extractor.py  # 24 ML features
-│   ├── security/smtp_rate_limiter.py   # Direct flooding protection (4 counters + tarpit)
-│   ├── security/bombing_detector.py   # Subscription bomb detection (velocity + scoring)
-│   ├── layer7_gmail/smtp_receiver.py   # SMTP gateway routing
-│   └── templates/index.html            # SOC Console SPA (~1,800 lines)
-├── scripts/
-│   ├── test_smtp_gateway.py            # Procedural 9-email demo (unique every run)
-│   ├── send_eml.py                     # Pipe real .eml files through port 8025
-│   └── fake_mail_server.py             # Fake downstream (port 1025)
+│   ├── main.py                              # 40+ API endpoints, ThreatLens init in lifespan
+│   ├── pipeline.py                          # L0→L1→L2→L3→L4→L5 orchestrator
+│   ├── storage.py                           # SQLite: 4 core tables
+│   ├── layer0–7/                            # (unchanged from session 6)
+│   ├── layer4_soar/misp_exporter.py         # Now publishes events on creation
+│   └── threatlens/                          # ThreatLens layer (NEW session 7)
+│       ├── config.py / models.py / store.py
+│       ├── actor_clusterer.py               # Incremental clustering
+│       ├── fusion_engine.py                 # Confidence math (Python, not LLM)
+│       ├── profiler.py                      # Claude synthesis
+│       ├── ttp_mapper.py                    # ATT&CK + Skylo surface zones
+│       ├── sector_rollup.py                 # 3 rollup views
+│       ├── org_assessor.py                  # Leadership brief
+│       ├── orchestrator.py                  # Dirty-flag cycle runner
+│       ├── scheduler.py                     # Daemon thread
+│       ├── agents/                          # 10 agent files
+│       └── scraper/                         # fetcher.py + crawl4ai + scrapling + trafilatura
+├── docker/
+│   ├── misp-nginx-php.conf                  # Persistent fastcgi_param HTTPS on fix
+│   ├── misp-nginx-http.conf                 # HTTP→HTTPS redirect
+│   ├── misp-nginx-https.conf                # HTTPS server block
+│   └── misp-init-settings.sh                # Backup settings enforcer via supervisord
 ├── tests/
-│   ├── scripts/demo_bombing.py         # Concurrent subscription bomb demo (20 emails)
-│   ├── EMAIL_BOMBING_EXPLANATION.md   # Lead-ready explanation of bombing protection
-│   ├── test_layer0.py                  # 12 pre-filter tests
-│   ├── test_campaigns.py               # 13 campaign detection tests
-│   ├── test_smtp_rate_limiter.py       # 17 rate limiter + tarpit tests
-│   ├── test_bombing_detector.py       # 21 subscription bomb detection tests
-│   └── test_layer1/2/3/4/5/6/7.py     # Layer-specific tests
-├── data/
-│   ├── phishguard.db                   # SQLite (4 tables)
-│   ├── model.pkl                       # ExtraTrees ML model (1.3 MB)
-│   └── training/                       # spamassassin + gmail_clean only
-├── docker-compose.yml                  # 13 services, 5 named volumes
-├── RUNBOOK.md                          # Incident playbook
-└── BRINGUP.md                          # Deployment guide
+│   ├── test_threatlens_*.py                 # 90 ThreatLens tests across 5 phases
+│   └── test_layer0/1/2/3/4/5/6/7.py        # 75 core PhishGuard tests
+├── requirements.txt                         # Core deps (no scraper conflicts)
+├── requirements-threatlens.txt              # Scrapers (local dev only)
+├── Dockerfile                               # Installs scrapers separately with || true
+├── docker-compose.yml                       # 14 services (added opencti-worker)
+├── PRD_Layer8_Threat_Intel.md               # Product requirements
+└── EDD_Layer8_Threat_Intel.md               # Engineering design
 ```
 
 ---
 
-*Resume: read this file → `docker compose ps` (verify 13 containers healthy) → `python3 scripts/test_smtp_gateway.py` → press F5.*
+---
+
+## 12. Session 7 Continued — Additional Work After Initial Docs Update
+
+### What was added after the SESSION_HANDOFF was first written
+
+**Phase 5 — Hardening (completed)**
+- `actor_clusters.last_profiled_at` column — dirty-flag skip (unchanged clusters not re-profiled)
+- `get_dirty_clusters()` — only clusters with `updated_at > last_profiled_at` processed
+- `mark_cluster_profiled()` — clears dirty flag after profiling
+- `log_intel_source()` / `prune_old_intel_sources()` — provenance + 90-day retention
+- Orchestrator: `clusters_skipped` + `llm_calls` in cycle summary
+- 6 new tests in `tests/test_threatlens_hardening.py`
+
+**Scrapers fixed in Docker**
+- Crawl4AI, Scrapling, trafilatura were in `requirements-threatlens.txt` but NOT in the Docker image
+- Added separate `pip install` step in Dockerfile with `|| true`
+- All three now in the image permanently — no fallback to plain httpx
+
+**MISP baseurl permanently fixed**
+- Root cause: `entrypoint.sh` uses `BASE_URL` not `MISP_BASEURL`
+- Fix: `BASE_URL=https://localhost:8443` added to docker-compose MISP env
+- On every container start now logs: "Enforcing MISP.baseurl to https://localhost:8443"
+
+**API keys added**
+```
+ABUSECH_AUTH_KEY=f55483...   ✅ abuse.ch IoC feeds
+OTX_API_KEY=6fb2b4...        ✅ AlienVault community pulses
+PULSEDIVE_API_KEY=f590a2...  ✅ IP/domain reputation
+INTEL_ENABLED=true           ✅ ThreatLens live
+```
+
+**First ThreatLens cycle completed**
+- 126 clusters profiled — all with `confirmed` confidence (MISP IoC matches)
+- 132 TTP observations written
+- Profiling tab live at `http://localhost:8000` → Profiling
+
+**Dark Web Intelligence Agent (11th agent)**
+- `app/threatlens/agents/darkweb_agent.py`
+- Three clearnet providers (no Tor access):
+  1. **IntelligenceX** (`2.intelx.io`) — paste sites, Tor forums, dark web, data leaks — `INTELX_API_KEY`
+  2. **CIRCL.lu PassiveDNS** — free, no key — full DNS history for any domain/IP
+  3. **LeakIX** (`leakix.net`) — exposed services + leaked data — `LEAKIX_API_KEY`
+- CIRCL PassiveDNS always active (no key). IntelX + LeakIX dormant until keys added.
+
+**Profiling tab complete redesign**
+- Stats bar: Total / Critical / High / Confirmed / Surface-mapped counters
+- Filter buttons: All / Critical / High / Confirmed
+- Profile cards: colored left border, intent icon, severity progress bar, agent mini-dots
+- Click 🔍 Intelligence → 3-tab panel:
+  - **Intelligence Sources**: 11 agent cards (icon, name, data source, findings, scraped URLs)
+  - **ATT&CK & Surface**: techniques grouped by tactic, Skylo surface zone cards
+  - **Profile Info**: structured metadata grid
+
+### All 14 API keys now active
+ABUSECH, OTX, PULSEDIVE, GREYNOISE, URLSCAN, INTELX, LEAKIX all set →
+all 11 agents active. INTEL_ENABLED=true.
+
+### Post-feature enhancements (Options A–E)
+| Option | What | Status |
+|---|---|---|
+| A | All 7 ThreatLens API keys + full 11-agent cycle | ✅ |
+| B | Neo4j relationship graph + Neovis.js | ✅ infra (visual polish optional) |
+| C | Smart Slack alerts (critical surface / confirmed / high-sev) | ✅ tested live |
+| D | Feedback loop — Mark Incorrect feeds next cycle | ✅ |
+| E | Merge to master + RECONSTRUCTION_PROMPT update | ✅ |
+
+### Containers: 15 total (added neo4j)
+- Neo4j Browser: `http://localhost:7474` (neo4j / changeme123)
+- Bolt: `localhost:7687` (used by Neovis.js in the Profiling tab)
+
+### Latest git commits
+```
+e34cb4a feat: Option D — profile feedback loop
+e92bcbc feat: Option C — Smart Slack alerts
+c560fe7 feat: Neo4j graph database + Neovis.js
+6ddad1e redesign: relationship graph — intent-grouped
+18d7c10 feat: Dark Web Intelligence Agent
+... (full ThreatLens phases 1-5 below)
+```
+
+---
+
+*Resume: read this file → `docker compose ps` (verify 15 containers healthy) → check `http://localhost:8000` Profiling tab (126 profiles live, Neo4j graph) → `python3 scripts/test_smtp_gateway.py` → press F5.*

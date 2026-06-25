@@ -159,6 +159,19 @@ async def _post_event(event: dict, misp_url: str, misp_key: str) -> dict | None:
         raise RuntimeError(str(exc)) from exc
 
 
+async def _publish_event(event_id: str, misp_url: str, misp_key: str) -> None:
+    """Publish a MISP event so connector-misp syncs it to OpenCTI."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(verify=False, timeout=10) as client:
+            await client.post(
+                f"{misp_url.rstrip('/')}/events/publish/{event_id}",
+                headers={"Authorization": misp_key, "Accept": "application/json"},
+            )
+    except Exception:
+        pass  # Non-critical — event is still stored, just unpublished
+
+
 async def export_to_misp(verdict_doc: dict, settings) -> dict:
     """Export IoCs to MISP with retry. Returns a result dict for the pipeline document.
 
@@ -200,6 +213,9 @@ async def export_to_misp(verdict_doc: dict, settings) -> dict:
             ev = (response or {}).get("Event") or {}
             event_id = str(ev.get("id") or "")
             event_uuid = str(ev.get("uuid") or "")
+            # Publish immediately so connector-misp syncs it to OpenCTI
+            if event_id:
+                await _publish_event(event_id, misp_url, misp_key)
             logger.info(
                 "misp_exported",
                 event_id=event_id,
