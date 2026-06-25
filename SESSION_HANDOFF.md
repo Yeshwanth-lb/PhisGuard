@@ -386,26 +386,33 @@ INTEL_ENABLED=true           ✅ ThreatLens live
   - **ATT&CK & Surface**: techniques grouped by tactic, Skylo surface zone cards
   - **Profile Info**: structured metadata grid
 
-### API keys still needed
-| Key | Where | Impact |
+### All 14 API keys now active
+ABUSECH, OTX, PULSEDIVE, GREYNOISE, URLSCAN, INTELX, LEAKIX all set →
+all 11 agents active. INTEL_ENABLED=true.
+
+### Post-feature enhancements (Options A–E)
+| Option | What | Status |
 |---|---|---|
-| `GREYNOISE_API_KEY` | greynoise.io/plans/community | GreyNoise agent active |
-| `URLSCAN_API_KEY` | urlscan.io/user/signup | URLScan agent active |
-| `INTELX_API_KEY` | intelx.io/signup | Dark web search active |
-| `LEAKIX_API_KEY` | leakix.net | Exposed service search active |
+| A | All 7 ThreatLens API keys + full 11-agent cycle | ✅ |
+| B | Neo4j relationship graph + Neovis.js | ✅ infra (visual polish optional) |
+| C | Smart Slack alerts (critical surface / confirmed / high-sev) | ✅ tested live |
+| D | Feedback loop — Mark Incorrect feeds next cycle | ✅ |
+| E | Merge to master + RECONSTRUCTION_PROMPT update | ✅ |
+
+### Containers: 15 total (added neo4j)
+- Neo4j Browser: `http://localhost:7474` (neo4j / changeme123)
+- Bolt: `localhost:7687` (used by Neovis.js in the Profiling tab)
 
 ### Latest git commits
 ```
+e34cb4a feat: Option D — profile feedback loop
+e92bcbc feat: Option C — Smart Slack alerts
+c560fe7 feat: Neo4j graph database + Neovis.js
+6ddad1e redesign: relationship graph — intent-grouped
 18d7c10 feat: Dark Web Intelligence Agent
-6c590ca redesign: full Profiling tab rebuild
-1376dc0 redesign: Profiling tab — stats bar, filters
-ecd2d7c docs: update SESSION_HANDOFF.md for session 7
-53ace44 fix: scrapers in Docker image
-f18a586 feat: ThreatLens Phase 5 — hardening
-4d2dc19 fix: MISP baseurl permanent fix
-b5e0349 fix: MISP/OpenCTI/Docker stability
+... (full ThreatLens phases 1-5 below)
 ```
 
 ---
 
-*Resume: read this file → `docker compose ps` (verify 14 containers healthy) → check `http://localhost:8000` Profiling tab (126 profiles live) → `python3 scripts/test_smtp_gateway.py` → press F5.*
+*Resume: read this file → `docker compose ps` (verify 15 containers healthy) → check `http://localhost:8000` Profiling tab (126 profiles live, Neo4j graph) → `python3 scripts/test_smtp_gateway.py` → press F5.*

@@ -68,13 +68,18 @@ def test_api_profiles_accessible_with_auth(client):
     assert isinstance(r.json(), list)
 
 
-def test_api_run_is_admin_only(client):
+def test_api_run_is_admin_only(client, mocker):
     """POST /api/intel/run — analyst → 403; admin → not 403."""
+    # Mock the cycle so the test verifies the permission gate, not a real run
+    async def _fake_cycle(*a, **k):
+        return {"clusters_processed": 0, "profiles_written": 0}
+    mocker.patch("app.threatlens.orchestrator.run_cycle", _fake_cycle)
+
     r_analyst = client.post("/api/intel/run", headers=_auth(client, "analyst"))
     assert r_analyst.status_code == 403
 
     r_admin = client.post("/api/intel/run", headers=_auth(client, "admin"))
-    assert r_admin.status_code in (200, 202, 503)  # 503 = disabled, not a 403 permission error
+    assert r_admin.status_code in (200, 202, 503)  # not a 403 permission error
 
 
 def test_api_profile_detail_returns_evidence_chain(client, mocker):
@@ -123,10 +128,14 @@ def test_api_export_calls_misp_exporter(client, mocker):
     assert "body_html" not in str(vd)
 
 
-def test_api_run_is_audited(client):
+def test_api_run_is_audited(client, mocker):
     """POST /api/intel/run is logged by audit middleware (request_id in audit log)."""
     import os, json as _json
     audit_path = "data/audit.jsonl"
+
+    async def _fake_cycle(*a, **k):
+        return {"clusters_processed": 0, "profiles_written": 0}
+    mocker.patch("app.threatlens.orchestrator.run_cycle", _fake_cycle)
 
     r = client.post("/api/intel/run", headers=_auth(client, "admin"))
     # Whether 200 or 503, the request should be audited
