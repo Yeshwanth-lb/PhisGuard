@@ -415,6 +415,44 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     </div>
   </div>
 
+  <!-- Relationship Graph (collapsible) -->
+  <div style="background:#080d14;border:1px solid #1a2332;border-radius:10px;margin-bottom:16px;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer" onclick="_toggleGraph(this)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:16px">🕸</span>
+        <span style="font-size:13px;font-weight:600;color:#e2e8f0">Threat Actor Relationship Graph</span>
+        <span id="graphEdgeBadge" style="display:none;background:#1e293b;color:#64748b;border-radius:10px;padding:1px 8px;font-size:10px"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;gap:4px" id="graphFilterBtns" style="display:none">
+          <button onclick="event.stopPropagation();_filterGraph('all',this)" style="padding:2px 10px;font-size:10px;background:#1e293b;border:1px solid #334155;border-radius:10px;color:#94a3b8;cursor:pointer">All</button>
+          <button onclick="event.stopPropagation();_filterGraph('shared_ip',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #10b98155;border-radius:10px;color:#10b981;cursor:pointer">Shared IP</button>
+          <button onclick="event.stopPropagation();_filterGraph('same_intent',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #3b82f655;border-radius:10px;color:#3b82f6;cursor:pointer">Same Intent</button>
+          <button onclick="event.stopPropagation();_filterGraph('shared_ttps',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #f59e0b55;border-radius:10px;color:#f59e0b;cursor:pointer">Shared TTPs</button>
+          <button onclick="event.stopPropagation();_filterGraph('shared_zone',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #8b5cf655;border-radius:10px;color:#8b5cf6;cursor:pointer">Same Zone</button>
+        </div>
+        <span id="graphToggleIcon" style="color:#334155;font-size:12px">▶ Show</span>
+      </div>
+    </div>
+    <div id="graphContainer" style="display:none;padding:0 0 12px">
+      <canvas id="threatGraph" style="width:100%;height:500px;display:block;cursor:grab"></canvas>
+      <!-- Legend -->
+      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 16px;border-top:1px solid #111827">
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#ef4444;display:inline-block"></span>Critical</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#f97316;display:inline-block"></span>High</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Medium</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#6b7280;display:inline-block"></span>Low</div>
+        <div style="margin-left:16px;display:flex;align-items:center;gap:5px;font-size:10px;color:#10b981">── Shared IP</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#3b82f6">── Same Intent</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#f59e0b">── Shared TTPs</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#8b5cf6">── Same Zone</div>
+        <div style="margin-left:auto;font-size:10px;color:#1e293b">Node size = scan count · Drag to reposition · Scroll to zoom</div>
+      </div>
+      <!-- Node info popup -->
+      <div id="graphNodeInfo" style="display:none;margin:0 16px;background:#0c1929;border:1px solid #1d4ed855;border-radius:8px;padding:12px"></div>
+    </div>
+  </div>
+
   <!-- Filter Bar + Profiles -->
   <div style="background:#141925;border:1px solid #1e293b;border-radius:10px;overflow:hidden">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1e293b;background:#0f172a">
@@ -1499,6 +1537,257 @@ async function _markWrongProfile(btn){
   const r=await api('/api/intel/profiles/'+pid+'/feedback',{method:'POST',body:JSON.stringify({rating:'incorrect',notes:'Marked wrong by analyst'})});
   if(r.ok) toast('Feedback saved','success');
   else toast('Feedback failed','error');
+}
+
+// ── Threat Actor Relationship Graph ──────────────────────────────────────────
+let _graphData = null;
+let _graphFilter = 'all';
+let _graphNodes = [];
+let _graphEdges = [];
+let _graphDragging = null;
+let _graphHover = null;
+let _graphScale = 1;
+let _graphOffX = 0;
+let _graphOffY = 0;
+let _graphLastMouse = null;
+let _graphPanning = false;
+let _graphAnimId = null;
+let _graphInitialized = false;
+
+const _EDGE_COLORS = {shared_ip:'#10b981',shared_domain:'#06b6d4',same_intent:'#3b82f6',shared_ttps:'#f59e0b',shared_zone:'#8b5cf6'};
+const _SEV_NODE = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#475569',unknown:'#334155'};
+
+async function _toggleGraph(header){
+  const container = document.getElementById('graphContainer');
+  const icon = document.getElementById('graphToggleIcon');
+  const filterBtns = document.getElementById('graphFilterBtns');
+  const isOpen = container.style.display !== 'none';
+  container.style.display = isOpen ? 'none' : 'block';
+  icon.textContent = isOpen ? '▶ Show' : '▼ Hide';
+  if(filterBtns) filterBtns.style.display = isOpen ? 'none' : 'flex';
+  if(!isOpen && !_graphInitialized) await _loadGraph();
+}
+
+async function _loadGraph(){
+  const canvas = document.getElementById('threatGraph');
+  if(!canvas) return;
+  canvas.width = canvas.offsetWidth || 900;
+  canvas.height = 500;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#040810';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#334155'; ctx.font='13px monospace'; ctx.textAlign='center';
+  ctx.fillText('Loading relationship graph…', canvas.width/2, canvas.height/2);
+  try{
+    const r = await api('/api/intel/graph?limit=50');
+    if(!r.ok){ ctx.fillStyle='#ef4444'; ctx.fillText('Failed to load', canvas.width/2, canvas.height/2); return; }
+    _graphData = await r.json();
+    const badge = document.getElementById('graphEdgeBadge');
+    if(badge){ badge.textContent = `${_graphData.stats.shown} nodes · ${_graphData.stats.edges} edges`; badge.style.display='inline'; }
+    _initGraphNodes(canvas);
+    _graphInitialized = true;
+    _attachGraphEvents(canvas);
+    _graphAnimId = requestAnimationFrame(()=>_graphAnimate(canvas));
+  }catch(e){ ctx.fillStyle='#ef4444'; ctx.fillText('Error: '+e.message, canvas.width/2, canvas.height/2); }
+}
+
+function _filterGraph(filter, btn){
+  _graphFilter = filter;
+  document.querySelectorAll('#graphFilterBtns button').forEach(b=>{ b.style.background='transparent'; });
+  if(btn) btn.style.background='#1e293b';
+  const canvas = document.getElementById('threatGraph');
+  if(canvas) _graphDraw(canvas);
+}
+
+function _initGraphNodes(canvas){
+  const data = _graphData;
+  const cx = canvas.width/2, cy = canvas.height/2;
+  // Place nodes in a circle initially
+  _graphNodes = data.nodes.map((n,i) => ({
+    ...n,
+    x: cx + Math.cos(i/data.nodes.length*2*Math.PI)*180,
+    y: cy + Math.sin(i/data.nodes.length*2*Math.PI)*180,
+    vx: 0, vy: 0,
+    r: Math.max(6, Math.min(22, Math.sqrt(n.member_count||1)*2.5)),
+  }));
+  _graphEdges = data.edges;
+  // Run force layout iterations
+  for(let i=0;i<200;i++) _graphForceStep(0.85 - i*0.003, canvas);
+}
+
+function _graphForceStep(cooling, canvas){
+  const k = 70, cx = canvas.width/2, cy = canvas.height/2;
+  // Repulsion
+  for(let i=0;i<_graphNodes.length;i++){
+    for(let j=i+1;j<_graphNodes.length;j++){
+      const a=_graphNodes[i], b=_graphNodes[j];
+      const dx=b.x-a.x, dy=b.y-a.y, d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+      const f=k*k/d;
+      a.vx-=f*dx/d; a.vy-=f*dy/d;
+      b.vx+=f*dx/d; b.vy+=f*dy/d;
+    }
+  }
+  // Attraction along edges
+  const activeEdges = _graphEdges.filter(e=>_graphFilter==='all'||e.type===_graphFilter);
+  const nodeById = {};
+  _graphNodes.forEach(n=>nodeById[n.id]=n);
+  activeEdges.forEach(e=>{
+    const a=nodeById[e.from], b=nodeById[e.to];
+    if(!a||!b) return;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+    const ideal = k * (2 - e.weight);
+    const f = (d - ideal) * 0.1;
+    a.vx+=f*dx/d; a.vy+=f*dy/d;
+    b.vx-=f*dx/d; b.vy-=f*dy/d;
+  });
+  // Gravity + update
+  _graphNodes.forEach(n=>{
+    n.vx+=(cx-n.x)*0.008; n.vy+=(cy-n.y)*0.008;
+    n.vx*=cooling; n.vy*=cooling;
+    n.x+=n.vx; n.y+=n.vy;
+    n.x=Math.max(n.r+10,Math.min(canvas.width-n.r-10,n.x));
+    n.y=Math.max(n.r+10,Math.min(canvas.height-n.r-10,n.y));
+  });
+}
+
+let _graphSettled = false;
+function _graphAnimate(canvas){
+  if(!_graphSettled){
+    _graphForceStep(0.8, canvas);
+    _graphDraw(canvas);
+    _graphAnimId = requestAnimationFrame(()=>_graphAnimate(canvas));
+    _graphSettled = _graphNodes.every(n=>Math.abs(n.vx)<0.1&&Math.abs(n.vy)<0.1);
+  } else {
+    _graphDraw(canvas);
+  }
+}
+
+function _graphDraw(canvas){
+  const ctx = canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height;
+  ctx.save();
+  ctx.fillStyle='#040810'; ctx.fillRect(0,0,W,H);
+  ctx.translate(_graphOffX, _graphOffY);
+  ctx.scale(_graphScale, _graphScale);
+
+  const activeEdges = _graphEdges.filter(e=>_graphFilter==='all'||e.type===_graphFilter);
+  const nodeById = {};
+  _graphNodes.forEach(n=>nodeById[n.id]=n);
+
+  // Draw edges
+  activeEdges.forEach(e=>{
+    const a=nodeById[e.from], b=nodeById[e.to];
+    if(!a||!b) return;
+    const color = _EDGE_COLORS[e.type]||'#334155';
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+    ctx.strokeStyle = color+'55';
+    ctx.lineWidth = e.weight * 1.5;
+    ctx.stroke();
+    // Edge label at midpoint on hover
+    if(_graphHover && (_graphHover.id===e.from||_graphHover.id===e.to)){
+      ctx.fillStyle=color; ctx.font='9px monospace'; ctx.textAlign='center';
+      ctx.fillText(e.label, (a.x+b.x)/2, (a.y+b.y)/2-4);
+    }
+  });
+
+  // Draw nodes
+  _graphNodes.forEach(n=>{
+    const isHovered = _graphHover&&_graphHover.id===n.id;
+    const color = _SEV_NODE[n.severity]||'#334155';
+    // Glow for hovered
+    if(isHovered){
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+6,0,Math.PI*2);
+      ctx.fillStyle=color+'22'; ctx.fill();
+    }
+    // Node circle
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
+    const grad=ctx.createRadialGradient(n.x-n.r*0.3,n.y-n.r*0.3,1,n.x,n.y,n.r);
+    grad.addColorStop(0,color+'dd'); grad.addColorStop(1,color+'88');
+    ctx.fillStyle=grad; ctx.fill();
+    ctx.strokeStyle=isHovered?color:'#1e293b';
+    ctx.lineWidth=isHovered?2:1; ctx.stroke();
+    // Confidence ring for confirmed
+    if(n.confidence==='confirmed'){
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+3,0,Math.PI*2);
+      ctx.strokeStyle='#10b98166'; ctx.lineWidth=1.5; ctx.stroke();
+    }
+    // Label
+    if(n.r>8||isHovered){
+      ctx.fillStyle=isHovered?'#f1f5f9':'#94a3b8';
+      ctx.font=`${isHovered?10:8}px monospace`; ctx.textAlign='center';
+      const shortLabel=n.label.length>14?n.label.slice(0,13)+'…':n.label;
+      ctx.fillText(shortLabel, n.x, n.y+n.r+12);
+    }
+  });
+  ctx.restore();
+}
+
+function _attachGraphEvents(canvas){
+  const getNode = (mx,my)=>{
+    const x=(mx-_graphOffX)/_graphScale, y=(my-_graphOffY)/_graphScale;
+    return _graphNodes.find(n=>Math.sqrt((n.x-x)**2+(n.y-y)**2)<=n.r+4)||null;
+  };
+  canvas.onmousedown = e=>{
+    const {offsetX:mx,offsetY:my}=e;
+    const n=getNode(mx,my);
+    if(n){ _graphDragging=n; canvas.style.cursor='grabbing'; }
+    else { _graphPanning=true; _graphLastMouse={x:mx,y:my}; canvas.style.cursor='grabbing'; }
+  };
+  canvas.onmousemove = e=>{
+    const {offsetX:mx,offsetY:my}=e;
+    if(_graphDragging){
+      _graphDragging.x=(mx-_graphOffX)/_graphScale;
+      _graphDragging.y=(my-_graphOffY)/_graphScale;
+      _graphDragging.vx=0; _graphDragging.vy=0;
+      _graphDraw(canvas); return;
+    }
+    if(_graphPanning&&_graphLastMouse){
+      _graphOffX+=mx-_graphLastMouse.x; _graphOffY+=my-_graphLastMouse.y;
+      _graphLastMouse={x:mx,y:my}; _graphDraw(canvas); return;
+    }
+    const n=getNode(mx,my);
+    if(n!==_graphHover){ _graphHover=n; canvas.style.cursor=n?'pointer':'grab'; _graphDraw(canvas); }
+  };
+  canvas.onmouseup = ()=>{ _graphDragging=null; _graphPanning=false; _graphLastMouse=null; canvas.style.cursor=_graphHover?'pointer':'grab'; };
+  canvas.onclick = e=>{
+    if(_graphDragging) return;
+    const n=getNode(e.offsetX,e.offsetY);
+    _showGraphNodeInfo(n);
+  };
+  canvas.onwheel = e=>{
+    e.preventDefault();
+    const delta=e.deltaY>0?0.9:1.1;
+    const mx=e.offsetX, my=e.offsetY;
+    _graphOffX=mx-(_graphScale*delta)*(mx-_graphOffX)/_graphScale;
+    _graphOffY=my-(_graphScale*delta)*(my-_graphOffY)/_graphScale;
+    _graphScale*=delta; _graphScale=Math.max(0.3,Math.min(3,_graphScale));
+    _graphDraw(canvas);
+  };
+}
+
+function _showGraphNodeInfo(node){
+  const el=document.getElementById('graphNodeInfo'); if(!el) return;
+  if(!node){ el.style.display='none'; return; }
+  const cc=_CONF_COLORS[node.confidence]||'#6b7280';
+  const sc=_SEV_COLORS[node.severity]||'#6b7280';
+  el.style.display='block';
+  el.innerHTML=`
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:600;color:#e2e8f0;margin-bottom:4px">${node.label}</div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">${node.summary||'No summary'}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${(node.surface_zones||[]).map(z=>`<span style="background:#0c1929;border:1px solid #1d4ed844;border-radius:4px;padding:1px 6px;font-size:10px;color:#60a5fa">${z.replace(/_/g,' ')}</span>`).join('')}
+          ${(node.ttp_ids||[]).slice(0,4).map(t=>`<span style="background:#1c1007;border:1px solid #f59e0b44;border-radius:4px;padding:1px 6px;font-size:10px;color:#f59e0b">${t}</span>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+        <span style="background:${sc}18;color:${sc};border:1px solid ${sc}44;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">${(node.severity||'').toUpperCase()}</span>
+        <span style="background:${cc}12;color:${cc};border:1px solid ${cc}44;border-radius:4px;padding:1px 8px;font-size:10px">${node.confidence}</span>
+        <span style="font-size:10px;color:#334155">${node.member_count} scans</span>
+      </div>
+    </div>`;
 }
 
 async function exportOrgBrief(){

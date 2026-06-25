@@ -55,6 +55,12 @@ async def _lifespan(app):
         start_digest_scheduler(settings)
     except Exception as _e:
         logger.warning("digest_scheduler_start_failed", error=str(_e))
+    # Initialise ThreatLens tables (idempotent — safe on every startup)
+    try:
+        from app.threatlens.store import init_db as _tl_init_db
+        _tl_init_db()
+    except Exception as _e:
+        logger.warning("threatlens_init_db_failed", error=str(_e))
     # Start ThreatLens scheduler (no-op when INTEL_ENABLED=false)
     try:
         from app.threatlens.scheduler import start_scheduler as _start_tl
@@ -691,6 +697,105 @@ async def run_intel_cycle(current_user: dict = Depends(require_admin())):
     from app.threatlens.orchestrator import run_cycle
     result = await run_cycle()
     return result
+
+
+@app.get('/api/intel/graph')
+async def intel_graph(
+    limit: int = 50,
+    current_user: dict = Depends(require_permission('scan')),
+):
+    """Threat actor relationship graph — nodes are clusters, edges are shared infrastructure/TTPs."""
+    from app.threatlens import store as tl_store
+
+    clusters = tl_store.get_active_clusters()
+    profiles_list = tl_store.get_profiles()
+    profiles = {p.cluster_id: p for p in profiles_list}
+
+    # Top N clusters by member count
+    top = sorted(clusters, key=lambda c: len(c.member_scan_ids), reverse=True)[:limit]
+
+    # Build nodes
+    nodes = []
+    for c in top:
+        p = profiles.get(c.id)
+        nodes.append({
+            "id":           c.id[:12],
+            "full_id":      c.id,
+            "label":        (c.dominant_intent or "unknown").replace("_", " "),
+            "member_count": len(c.member_scan_ids),
+            "severity":     p.severity if p else "low",
+            "confidence":   p.confidence if p else "speculative",
+            "surface_zones": p.surface_zones if p else [],
+            "ttp_ids":      [t.attack_id for t in p.ttps] if p else [],
+            "summary":      (p.summary or "")[:120] if p else "",
+            "domains":      c.iocs.domains[:3],
+        })
+
+    # Build edges — compare all pairs
+    edges = []
+    node_ids = {n["full_id"] for n in nodes}
+    node_map = {c.id: c for c in top if c.id in node_ids}
+
+    for i, c1 in enumerate(top):
+        for c2 in top[i+1:]:
+            p1, p2 = profiles.get(c1.id), profiles.get(c2.id)
+            rels = []
+
+            # Shared sender IPs (strongest signal)
+            shared_ips = set(c1.iocs.ips) & set(c2.iocs.ips) - {""}
+            if shared_ips:
+                rels.append({"type": "shared_ip", "label": f"IP: {list(shared_ips)[0]}", "weight": 1.0})
+
+            # Shared domains
+            shared_domains = set(c1.iocs.domains) & set(c2.iocs.domains) - {""}
+            if shared_domains:
+                rels.append({"type": "shared_domain", "label": f"domain", "weight": 0.9})
+
+            # Same intent (filter out noise intents)
+            noise = {"unknown", "legitimate", "clean", "unclear", "", None}
+            if c1.dominant_intent and c1.dominant_intent == c2.dominant_intent \
+               and c1.dominant_intent not in noise:
+                rels.append({"type": "same_intent", "label": c1.dominant_intent.replace("_", " "), "weight": 0.5})
+
+            # Shared ATT&CK techniques (≥2)
+            if p1 and p2:
+                t1 = {t.attack_id for t in p1.ttps}
+                t2 = {t.attack_id for t in p2.ttps}
+                shared_ttps = t1 & t2
+                if len(shared_ttps) >= 2:
+                    rels.append({"type": "shared_ttps", "label": f"{len(shared_ttps)} TTPs", "weight": 0.7})
+
+                # Shared Skylo surface zone
+                z1 = set(p1.surface_zones) - {"unmapped", ""}
+                z2 = set(p2.surface_zones) - {"unmapped", ""}
+                shared_zones = z1 & z2
+                if shared_zones:
+                    rels.append({"type": "shared_zone", "label": list(shared_zones)[0].replace("_", " "), "weight": 0.4})
+
+            # Only emit the strongest relationship between each pair
+            if rels:
+                best = max(rels, key=lambda r: r["weight"])
+                edges.append({
+                    "from":   c1.id[:12],
+                    "to":     c2.id[:12],
+                    "type":   best["type"],
+                    "label":  best["label"],
+                    "weight": best["weight"],
+                })
+
+    isolated = sum(1 for n in nodes
+                   if not any(e["from"] == n["id"] or e["to"] == n["id"] for e in edges))
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "stats": {
+            "total_clusters": len(clusters),
+            "shown":          len(nodes),
+            "edges":          len(edges),
+            "isolated":       isolated,
+        },
+    }
 
 
 @app.get('/api/intel/status')
