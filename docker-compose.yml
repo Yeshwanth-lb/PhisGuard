@@ -362,6 +362,27 @@ services:
     mem_limit: 256m
     networks: [phishguard]
 
+  # Neo4j — graph database for threat actor relationship visualization
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: phishguard-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # Neo4j Browser (HTTP)
+      - "7687:7687"   # Bolt protocol (used by Neovis.js + Python driver)
+    environment:
+      - NEO4J_AUTH=neo4j/changeme123
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=128m
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_connector_bolt_listen__address=0.0.0.0:7687
+      - NEO4J_dbms_connector_http_listen__address=0.0.0.0:7474
+    volumes:
+      - neo4j_data:/data
+    mem_limit: 1g
+    networks: [phishguard]
+
 networks:
   phishguard: { driver: bridge }
 
@@ -377,3 +398,4 @@ volumes:
   misp_data: {}
   misp_db_data: {}
   rabbitmq_data: {}
+  neo4j_data: {}

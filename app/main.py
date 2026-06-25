@@ -830,6 +830,14 @@ async def intel_graph(
     }
 
 
+@app.post('/api/intel/graph/sync')
+async def sync_intel_graph(current_user: dict = Depends(require_admin())):
+    """Push current ThreatLens graph data to Neo4j."""
+    from app.threatlens.orchestrator import _push_to_neo4j
+    result = await _push_to_neo4j()
+    return result
+
+
 @app.get('/api/intel/status')
 async def intel_status(current_user: dict = Depends(require_permission('scan'))):
     from app.threatlens.config import threatlens_settings

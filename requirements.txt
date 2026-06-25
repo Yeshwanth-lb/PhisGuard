@@ -81,3 +81,4 @@ opentelemetry-exporter-otlp-proto-http==1.24.0
 # They are not included here to avoid version conflicts in the Docker build.
 # INTEL_ENABLED=false by default so they are not needed at runtime.
 pyyaml>=6.0.1                   # Parse allowlist.yaml and attack_surface.yaml (also used elsewhere)
+neo4j>=5.0.0                    # Graph database driver — writes threat actor relationships to Neo4j

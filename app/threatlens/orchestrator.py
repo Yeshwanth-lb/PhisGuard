@@ -34,6 +34,7 @@ from app.threatlens.agents.urlscan_agent import URLScanAgent
 from app.threatlens.agents.darkweb_agent import DarkWebAgent
 from app.threatlens.config import threatlens_settings
 from app.threatlens.models import Finding
+from app.threatlens import neo4j_writer
 
 logger = structlog.get_logger()
 
@@ -159,6 +160,13 @@ async def run_cycle(db_path: str | None = None) -> dict:
 
     await asyncio.gather(*[_process_one(c) for c in dirty_clusters])
 
+    # Push updated graph to Neo4j (non-blocking, silently skips if Neo4j unavailable)
+    neo4j_result = {"skipped": True}
+    try:
+        neo4j_result = await _push_to_neo4j(db_path)
+    except Exception as exc:
+        logger.debug("neo4j_push_skipped", error=str(exc)[:80])
+
     duration = time.time() - started
     summary = {
         "clusters_processed": len(dirty_clusters),
@@ -166,6 +174,79 @@ async def run_cycle(db_path: str | None = None) -> dict:
         "profiles_written":   profiles_written,
         "llm_calls":          llm_calls,
         "duration_secs":      round(duration, 2),
+        "neo4j":              neo4j_result,
     }
     logger.info("threatlens_cycle_done", **summary)
     return summary
+
+
+async def _push_to_neo4j(db_path: str | None = None) -> dict:
+    """Build the graph data and push to Neo4j after each cycle."""
+    kwargs = {"db_path": db_path} if db_path else {}
+    clusters = store.get_active_clusters(**kwargs)
+    profiles_list = store.get_profiles(**kwargs)
+    profiles = {p.cluster_id: p for p in profiles_list}
+
+    NOISE = {"unknown", "legitimate", "clean", "unclear", "generic_phish", "", None}
+    INTENT_META = {
+        "credential_harvest":"#3b82f6","credential_harvesting":"#3b82f6",
+        "bec_fraud":"#ef4444","fraud_payment":"#f97316","fraud_scam":"#f97316",
+        "brand_impersonation":"#8b5cf6","executive_impersonation":"#a855f7",
+    }
+    GROUP_MAP = {
+        "credential_harvest":"Credential Theft","credential_harvesting":"Credential Theft",
+        "bec_fraud":"BEC Fraud","fraud_payment":"Financial Fraud","fraud_scam":"Financial Fraud",
+        "brand_impersonation":"Impersonation","executive_impersonation":"Impersonation",
+    }
+
+    threat = [c for c in clusters if c.dominant_intent not in NOISE and len(c.member_scan_ids) >= 2]
+    threat.sort(key=lambda c: len(c.member_scan_ids), reverse=True)
+    top = threat[:30]
+
+    nodes = []
+    for c in top:
+        p = profiles.get(c.id)
+        intent = c.dominant_intent or "other"
+        nodes.append({
+            "id":           c.id[:12],
+            "full_id":      c.id,
+            "intent":       intent,
+            "group":        GROUP_MAP.get(intent, "Other"),
+            "group_color":  INTENT_META.get(intent, "#64748b"),
+            "label":        intent.replace("_"," ").title(),
+            "short_label":  (intent.replace("credential_harvest","Cred Theft")
+                                   .replace("credential_harvesting","Cred Theft")
+                                   .replace("bec_fraud","BEC Fraud")
+                                   .replace("fraud_payment","Fin. Fraud")
+                                   .replace("brand_impersonation","Brand Imp.")
+                                   .replace("_"," ").title()),
+            "member_count": len(c.member_scan_ids),
+            "severity":     p.severity if p else "low",
+            "confidence":   p.confidence if p else "speculative",
+            "surface_zones": ",".join(p.surface_zones) if p else "",
+            "ttp_ids":      ",".join(t.attack_id for t in p.ttps[:4]) if p else "",
+            "summary":      (p.summary or "")[:150] if p else "",
+            "domains":      ",".join(c.iocs.domains[:2]),
+        })
+
+    edges = []
+    for i, c1 in enumerate(top):
+        for c2 in top[i+1:]:
+            p1, p2 = profiles.get(c1.id), profiles.get(c2.id)
+            shared_ips = set(c1.iocs.ips) & set(c2.iocs.ips) - {""}
+            if shared_ips:
+                edges.append({"from":c1.id[:12],"to":c2.id[:12],"type":"shared_ip",
+                              "label":f"Shared IP: {list(shared_ips)[0]}","weight":1.0})
+                continue
+            shared_domains = set(c1.iocs.domains) & set(c2.iocs.domains) - {""}
+            if shared_domains:
+                edges.append({"from":c1.id[:12],"to":c2.id[:12],"type":"shared_domain",
+                              "label":f"Domain: {list(shared_domains)[0]}","weight":0.9})
+                continue
+            if p1 and p2:
+                shared = {t.attack_id for t in p1.ttps} & {t.attack_id for t in p2.ttps}
+                if len(shared) >= 3:
+                    edges.append({"from":c1.id[:12],"to":c2.id[:12],"type":"shared_ttps",
+                                  "label":f"{len(shared)} shared TTPs","weight":0.7})
+
+    return await neo4j_writer.push_graph(nodes, edges)

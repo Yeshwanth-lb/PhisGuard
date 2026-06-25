@@ -415,37 +415,58 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     </div>
   </div>
 
-  <!-- Relationship Graph (collapsible) -->
+  <!-- Relationship Graph — powered by Neo4j + Neovis.js -->
   <div style="background:#080d14;border:1px solid #1a2332;border-radius:10px;margin-bottom:16px;overflow:hidden">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer" onclick="_toggleGraph(this)">
-      <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:16px">🕸</span>
         <span style="font-size:13px;font-weight:600;color:#e2e8f0">Threat Actor Relationship Graph</span>
-        <span id="graphEdgeBadge" style="display:none;background:#1e293b;color:#64748b;border-radius:10px;padding:1px 8px;font-size:10px"></span>
+        <span style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:1px 10px;font-size:10px;color:#64748b">Neo4j</span>
+        <span id="graphEdgeBadge" style="display:none;background:#0f1f35;border:1px solid #1d4ed844;border-radius:10px;padding:1px 10px;font-size:10px;color:#60a5fa"></span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <div id="graphFilterBtns" style="display:none"></div>
+        <a href="http://localhost:7474" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#3b82f6;text-decoration:none;padding:3px 10px;border:1px solid #1d4ed844;border-radius:5px">Open Neo4j Browser ↗</a>
         <span id="graphToggleIcon" style="color:#334155;font-size:12px">▶ Show</span>
       </div>
     </div>
-    <div id="graphContainer" style="display:none;padding:0 0 12px">
-      <canvas id="threatGraph" style="width:100%;height:500px;display:block;cursor:grab"></canvas>
-      <!-- Legend -->
-      <div style="display:flex;gap:20px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid #111827;background:#050a0f">
-        <div style="font-size:10px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:.5px;align-self:center">NODE FILL = SEVERITY</div>
+    <div id="graphContainer" style="display:none">
+
+      <!-- Cypher query bar -->
+      <div style="padding:10px 16px;background:#050a0f;border-bottom:1px solid #111827;display:flex;gap:8px;align-items:center">
+        <span style="font-size:10px;color:#475569;font-weight:600;white-space:nowrap">CYPHER</span>
+        <input id="cipherInput" value="MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b"
+          style="flex:1;background:#0d1117;border:1px solid #1e293b;border-radius:5px;padding:5px 10px;font-size:11px;color:#94a3b8;font-family:monospace"
+          onkeydown="if(event.key==='Enter') _runCypher()">
+        <button onclick="_runCypher()" style="padding:4px 14px;font-size:11px;background:#1d4ed8;border:none;border-radius:5px;color:#fff;cursor:pointer">Run</button>
+        <select onchange="document.getElementById('cipherInput').value=this.value;_runCypher()"
+          style="padding:4px 8px;font-size:11px;background:#0d1117;border:1px solid #1e293b;border-radius:5px;color:#64748b">
+          <option value="">Quick queries…</option>
+          <option value="MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b">All connections</option>
+          <option value="MATCH (a)-[r:SHARED_IP|SHARED_DOMAIN]->(b) RETURN a,r,b">Shared infrastructure</option>
+          <option value="MATCH (a:ThreatCluster) WHERE a.severity IN ['critical','high'] RETURN a">High severity only</option>
+          <option value="MATCH (a:ThreatCluster {confidence:'confirmed'})-[r]->(b) RETURN a,r,b">Confirmed clusters</option>
+          <option value="MATCH (a:ThreatCluster)-[r:SHARED_TTPS]->(b) RETURN a,r,b">Same tradecraft</option>
+        </select>
+      </div>
+
+      <!-- Neovis.js render container -->
+      <div id="neovisContainer" style="width:100%;height:540px;background:#040810"></div>
+
+      <!-- Legend + status -->
+      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid #111827;background:#050a0f;align-items:center">
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>Critical</div>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f97316;display:inline-block"></span>High</div>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Medium</div>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#475569;display:inline-block"></span>Low</div>
         <div style="width:1px;background:#1e293b;align-self:stretch"></div>
-        <div style="font-size:10px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:.5px;align-self:center">EDGE = CONNECTION TYPE</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#10b981">━━ Shared Infrastructure (IP)</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#06b6d4">━━ Shared Domain</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#f59e0b">━━ Same Tradecraft (TTPs)</div>
-        <div style="margin-left:auto;font-size:10px;color:#1e293b;align-self:center">Drag · Scroll to zoom · Click node for detail</div>
+        <div style="font-size:10px;color:#10b981">━ Shared IP</div>
+        <div style="font-size:10px;color:#06b6d4">━ Shared Domain</div>
+        <div style="font-size:10px;color:#f59e0b">━ Shared TTPs</div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <span id="graphStatus" style="font-size:10px;color:#334155"></span>
+          <button onclick="_syncNeo4j()" style="padding:3px 10px;font-size:10px;background:transparent;border:1px solid #1e293b;border-radius:5px;color:#475569;cursor:pointer">↻ Sync</button>
+        </div>
       </div>
-      <!-- Node info popup -->
-      <div id="graphNodeInfo" style="display:none;margin:0 16px;background:#0c1929;border:1px solid #1d4ed855;border-radius:8px;padding:12px"></div>
     </div>
   </div>
 
@@ -1535,306 +1556,140 @@ async function _markWrongProfile(btn){
   else toast('Feedback failed','error');
 }
 
-// ── Threat Actor Relationship Graph ──────────────────────────────────────────
-let _graphData = null;
-let _graphNodes = [];
-let _graphEdges = [];
-let _graphDragging = null;
-let _graphHover = null;
-let _graphScale = 1;
-let _graphOffX = 0;
-let _graphOffY = 0;
-let _graphLastMouse = null;
-let _graphPanning = false;
+// ── Threat Actor Relationship Graph — Neo4j + Neovis.js ─────────────────────
+let _viz = null;
 let _graphInitialized = false;
-
-const _EDGE_COLORS  = {shared_ip:'#10b981',shared_domain:'#06b6d4',shared_ttps:'#f59e0b'};
-const _EDGE_LABELS  = {shared_ip:'Shared Infrastructure',shared_domain:'Shared Domain',shared_ttps:'Same Tradecraft'};
-const _SEV_NODE     = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#475569',unknown:'#334155'};
 
 async function _toggleGraph(header){
   const container = document.getElementById('graphContainer');
   const icon = document.getElementById('graphToggleIcon');
-  const filterBtns = document.getElementById('graphFilterBtns');
   const isOpen = container.style.display !== 'none';
   container.style.display = isOpen ? 'none' : 'block';
   icon.textContent = isOpen ? '▶ Show' : '▼ Hide';
-  if(filterBtns) filterBtns.style.display = isOpen ? 'none' : 'flex';
-  if(!isOpen && !_graphInitialized) await _loadGraph();
-}
-
-async function _loadGraph(){
-  const canvas = document.getElementById('threatGraph');
-  if(!canvas) return;
-  canvas.width = canvas.offsetWidth || 960;
-  canvas.height = 520;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle='#040810'; ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.fillStyle='#334155'; ctx.font='13px system-ui'; ctx.textAlign='center';
-  ctx.fillText('Computing threat actor layout…', canvas.width/2, canvas.height/2);
-  try{
-    const r = await api('/api/intel/graph');
-    if(!r.ok){ctx.fillStyle='#ef4444';ctx.fillText('Failed to load',canvas.width/2,canvas.height/2);return;}
-    _graphData = await r.json();
-    const badge = document.getElementById('graphEdgeBadge');
-    if(badge){
-      badge.textContent = `${_graphData.stats.shown} threat actors · ${_graphData.stats.edges} connections`;
-      badge.style.display='inline';
-    }
-    _buildGroupedLayout(canvas);
-    _graphInitialized = true;
-    _attachGraphEvents(canvas);
-    _graphDraw(canvas);
-  }catch(e){ctx.fillStyle='#ef4444';ctx.fillText('Error: '+e.message,canvas.width/2,canvas.height/2);}
-}
-
-function _buildGroupedLayout(canvas){
-  const W=canvas.width, H=canvas.height;
-  const data = _graphData;
-
-  // Group nodes by intent group
-  const groups = {};
-  data.nodes.forEach(n=>{
-    if(!groups[n.group]) groups[n.group]=[]; groups[n.group].push(n);
-  });
-  const groupNames = Object.keys(groups);
-  const G = groupNames.length;
-
-  // Place group centers evenly around an ellipse
-  const ellW = W*0.36, ellH = H*0.36;
-  const cx = W/2, cy = H/2;
-  const groupCenters = {};
-  groupNames.forEach((g,i)=>{
-    const angle = (i/G)*2*Math.PI - Math.PI/2;
-    groupCenters[g] = {x: cx + ellW*Math.cos(angle), y: cy + ellH*Math.sin(angle)};
-  });
-
-  // Place nodes within their group
-  _graphNodes = [];
-  _graphEdges = data.edges;
-
-  groupNames.forEach(g=>{
-    const nodes = groups[g];
-    const center = groupCenters[g];
-    const radius = Math.min(70, 20 + nodes.length*12);
-    nodes.forEach((n,i)=>{
-      const angle = (i/nodes.length)*2*Math.PI;
-      const r = nodes.length===1?0:radius*0.6;
-      _graphNodes.push({
-        ...n,
-        x: center.x + r*Math.cos(angle),
-        y: center.y + r*Math.sin(angle),
-        vx: 0, vy: 0,
-        groupX: center.x, groupY: center.y,
-        r: Math.max(14, Math.min(28, 10 + Math.sqrt(n.member_count||1)*3)),
-      });
-    });
-  });
-
-  // Gentle force refinement — prevent overlap, keep group cohesion
-  for(let iter=0;iter<300;iter++){
-    const cool = Math.max(0.02, 0.5*Math.pow(0.985, iter));
-    _graphNodes.forEach(a=>{
-      // Group cohesion — pull toward group center
-      a.vx += (a.groupX - a.x)*0.04;
-      a.vy += (a.groupY - a.y)*0.04;
-      // Repulsion from other nodes
-      _graphNodes.forEach(b=>{
-        if(a===b) return;
-        const dx=a.x-b.x, dy=a.y-b.y;
-        const d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
-        const minDist = a.r+b.r+8;
-        if(d<minDist){
-          const f=(minDist-d)*0.5/d;
-          a.vx+=dx*f; a.vy+=dy*f;
-        }
-      });
-      // Edge attraction (only for connected nodes)
-      _graphEdges.forEach(e=>{
-        if(e.from!==a.id&&e.to!==a.id) return;
-        const other=_graphNodes.find(n=>(e.from===a.id?n.id===e.to:n.id===e.from));
-        if(!other) return;
-        const dx=other.x-a.x, dy=other.y-a.y, d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
-        a.vx+=dx*0.002; a.vy+=dy*0.002;
-      });
-      a.vx*=cool; a.vy*=cool;
-      a.x+=a.vx; a.y+=a.vy;
-      a.x=Math.max(a.r+8,Math.min(W-a.r-8,a.x));
-      a.y=Math.max(a.r+8,Math.min(H-a.r-8,a.y));
-    });
+  if(!isOpen && !_graphInitialized) {
+    await _syncNeo4j();
+    _initNeovis();
   }
-  // Freeze
-  _graphNodes.forEach(n=>{n.vx=0;n.vy=0;});
 }
 
-function _graphDraw(canvas){
-  const ctx = canvas.getContext('2d');
-  const W=canvas.width, H=canvas.height;
-  ctx.save();
-  ctx.fillStyle='#040810'; ctx.fillRect(0,0,W,H);
-  ctx.translate(_graphOffX,_graphOffY);
-  ctx.scale(_graphScale,_graphScale);
-
-  const nodeById={};
-  _graphNodes.forEach(n=>nodeById[n.id]=n);
-
-  // Draw group background bubbles
-  const groups={};
-  _graphNodes.forEach(n=>{ if(!groups[n.group]) groups[n.group]=[]; groups[n.group].push(n); });
-  Object.entries(groups).forEach(([g,ns])=>{
-    if(ns.length<2) return;
-    const xs=ns.map(n=>n.x), ys=ns.map(n=>n.y);
-    const minX=Math.min(...xs)-35, maxX=Math.max(...xs)+35;
-    const minY=Math.min(...ys)-35, maxY=Math.max(...ys)+35;
-    const bx=(minX+maxX)/2, by=(minY+maxY)/2;
-    const bw=(maxX-minX)/2, bh=(maxY-minY)/2;
-    const color=ns[0].group_color||'#334155';
-    ctx.beginPath();
-    ctx.ellipse(bx,by,bw,bh,0,0,2*Math.PI);
-    ctx.fillStyle=color+'08'; ctx.fill();
-    ctx.strokeStyle=color+'25'; ctx.lineWidth=1; ctx.setLineDash([4,4]); ctx.stroke();
-    ctx.setLineDash([]);
-    // Group label
-    ctx.fillStyle=color+'99'; ctx.font='bold 10px system-ui'; ctx.textAlign='center';
-    ctx.fillText(g, bx, minY-8);
-  });
-
-  // Draw edges — curved bezier
-  _graphEdges.forEach(e=>{
-    const a=nodeById[e.from], b=nodeById[e.to];
-    if(!a||!b) return;
-    const isHighlighted = _graphHover && (_graphHover.id===e.from||_graphHover.id===e.to);
-    const color=_EDGE_COLORS[e.type]||'#475569';
-    const alpha=isHighlighted?'cc':'44';
-    // Quadratic bezier — control point offset perpendicular to midpoint
-    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
-    const dx=b.x-a.x, dy=b.y-a.y, len=Math.sqrt(dx*dx+dy*dy)||1;
-    const curve = Math.min(40, len*0.2);
-    const cx2=mx - dy/len*curve, cy2=my + dx/len*curve;
-    ctx.beginPath();
-    ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo(cx2,cy2,b.x,b.y);
-    ctx.strokeStyle=color+alpha;
-    ctx.lineWidth=isHighlighted?2.5:1.5; ctx.stroke();
-    // Edge label on hover
-    if(isHighlighted){
-      ctx.fillStyle=color; ctx.font='10px system-ui'; ctx.textAlign='center';
-      ctx.fillText(e.label, cx2, cy2-6);
+async function _syncNeo4j(){
+  const status = document.getElementById('graphStatus');
+  if(status) status.textContent = 'Syncing to Neo4j…';
+  try {
+    const TOKEN = (await api('/api/auth/whoami').catch(()=>null));
+    const r = await api('/api/intel/graph/sync', {method:'POST'});
+    if(r.ok){
+      const d = await r.json();
+      const badge = document.getElementById('graphEdgeBadge');
+      if(badge && !d.skipped){
+        badge.textContent = `${d.nodes||0} nodes · ${d.edges||0} edges`;
+        badge.style.display='inline';
+      }
+      if(status) status.textContent = d.skipped ? 'Neo4j not available' : `${d.nodes||0} nodes synced`;
     }
-  });
-
-  // Draw nodes
-  _graphNodes.forEach(n=>{
-    const isHov=_graphHover&&_graphHover.id===n.id;
-    const sevColor=_SEV_NODE[n.severity]||'#475569';
-    const groupColor=n.group_color||'#475569';
-    // Glow
-    if(isHov){
-      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+8,0,Math.PI*2);
-      ctx.fillStyle=groupColor+'20'; ctx.fill();
-    }
-    // Outer ring (group color)
-    ctx.beginPath(); ctx.arc(n.x,n.y,n.r+2,0,Math.PI*2);
-    ctx.strokeStyle=groupColor+(isHov?'cc':'55'); ctx.lineWidth=isHov?2:1.5; ctx.stroke();
-    // Node fill (severity color)
-    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
-    const g2=ctx.createRadialGradient(n.x-n.r*0.25,n.y-n.r*0.25,1,n.x,n.y,n.r);
-    g2.addColorStop(0,sevColor+'ee'); g2.addColorStop(1,sevColor+'66');
-    ctx.fillStyle=g2; ctx.fill();
-    // Confirmed badge
-    if(n.confidence==='confirmed'){
-      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+5,0,Math.PI*2);
-      ctx.strokeStyle='#10b981'; ctx.lineWidth=1.5; ctx.stroke();
-    }
-    // Always-visible label INSIDE node
-    ctx.fillStyle=isHov?'#ffffff':'#e2e8f0';
-    ctx.font=`bold ${Math.max(8,Math.min(11,n.r-3))}px system-ui`;
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    const lbl=n.short_label||n.label;
-    // Split into 2 lines if needed
-    const words=lbl.split(' ');
-    if(words.length>=2 && n.r>=16){
-      const mid=Math.ceil(words.length/2);
-      ctx.fillText(words.slice(0,mid).join(' '), n.x, n.y-6);
-      ctx.fillText(words.slice(mid).join(' '), n.x, n.y+6);
-    } else {
-      ctx.fillText(lbl.length>10?lbl.slice(0,9)+'…':lbl, n.x, n.y);
-    }
-    ctx.textBaseline='alphabetic';
-    // Member count below node
-    ctx.fillStyle=isHov?groupColor:'#334155';
-    ctx.font=`9px system-ui`; ctx.textAlign='center';
-    ctx.fillText(`${n.member_count} scans`, n.x, n.y+n.r+13);
-  });
-
-  ctx.restore();
+  } catch(e){ if(status) status.textContent = 'Sync failed'; }
 }
 
-function _attachGraphEvents(canvas){
-  const getNode = (mx,my)=>{
-    const x=(mx-_graphOffX)/_graphScale, y=(my-_graphOffY)/_graphScale;
-    return _graphNodes.find(n=>Math.sqrt((n.x-x)**2+(n.y-y)**2)<=n.r+4)||null;
-  };
-  canvas.onmousedown = e=>{
-    const {offsetX:mx,offsetY:my}=e;
-    const n=getNode(mx,my);
-    if(n){ _graphDragging=n; canvas.style.cursor='grabbing'; }
-    else { _graphPanning=true; _graphLastMouse={x:mx,y:my}; canvas.style.cursor='grabbing'; }
-  };
-  canvas.onmousemove = e=>{
-    const {offsetX:mx,offsetY:my}=e;
-    if(_graphDragging){
-      _graphDragging.x=(mx-_graphOffX)/_graphScale;
-      _graphDragging.y=(my-_graphOffY)/_graphScale;
-      _graphDragging.vx=0; _graphDragging.vy=0;
-      _graphDraw(canvas); return;
-    }
-    if(_graphPanning&&_graphLastMouse){
-      _graphOffX+=mx-_graphLastMouse.x; _graphOffY+=my-_graphLastMouse.y;
-      _graphLastMouse={x:mx,y:my}; _graphDraw(canvas); return;
-    }
-    const n=getNode(mx,my);
-    if(n!==_graphHover){ _graphHover=n; canvas.style.cursor=n?'pointer':'grab'; _graphDraw(canvas); }
-  };
-  canvas.onmouseup = ()=>{ _graphDragging=null; _graphPanning=false; _graphLastMouse=null; canvas.style.cursor=_graphHover?'pointer':'grab'; };
-  canvas.onclick = e=>{
-    if(_graphDragging) return;
-    const n=getNode(e.offsetX,e.offsetY);
-    _showGraphNodeInfo(n);
-  };
-  canvas.onwheel = e=>{
-    e.preventDefault();
-    const delta=e.deltaY>0?0.9:1.1;
-    const mx=e.offsetX, my=e.offsetY;
-    _graphOffX=mx-(_graphScale*delta)*(mx-_graphOffX)/_graphScale;
-    _graphOffY=my-(_graphScale*delta)*(my-_graphOffY)/_graphScale;
-    _graphScale*=delta; _graphScale=Math.max(0.3,Math.min(3,_graphScale));
-    _graphDraw(canvas);
-  };
+function _initNeovis(){
+  const container = document.getElementById('neovisContainer');
+  if(!container) return;
+  container.innerHTML = '<div style="padding:40px;text-align:center;color:#334155;font-size:12px">Connecting to Neo4j graph database…</div>';
+
+  // Load Neovis.js from CDN
+  if(!window.NeoVis){
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/neovis.js@2.0.2/dist/neovis.js';
+    script.onload = () => _renderNeovis();
+    script.onerror = () => {
+      container.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b;font-size:12px">Neovis.js unavailable offline.<br><br><a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser instead ↗</a></div>';
+    };
+    document.head.appendChild(script);
+  } else {
+    _renderNeovis();
+  }
+  _graphInitialized = true;
 }
 
-function _showGraphNodeInfo(node){
-  const el=document.getElementById('graphNodeInfo'); if(!el) return;
-  if(!node){ el.style.display='none'; return; }
-  const cc=_CONF_COLORS[node.confidence]||'#6b7280';
-  const sc=_SEV_COLORS[node.severity]||'#6b7280';
-  el.style.display='block';
-  el.innerHTML=`
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
-      <div style="flex:1">
-        <div style="font-size:12px;font-weight:600;color:#e2e8f0;margin-bottom:4px">${node.label}</div>
-        <div style="font-size:11px;color:#64748b;margin-bottom:8px">${node.summary||'No summary'}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${(node.surface_zones||[]).map(z=>`<span style="background:#0c1929;border:1px solid #1d4ed844;border-radius:4px;padding:1px 6px;font-size:10px;color:#60a5fa">${z.replace(/_/g,' ')}</span>`).join('')}
-          ${(node.ttp_ids||[]).slice(0,4).map(t=>`<span style="background:#1c1007;border:1px solid #f59e0b44;border-radius:4px;padding:1px 6px;font-size:10px;color:#f59e0b">${t}</span>`).join('')}
-        </div>
-      </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
-        <span style="background:${sc}18;color:${sc};border:1px solid ${sc}44;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700">${(node.severity||'').toUpperCase()}</span>
-        <span style="background:${cc}12;color:${cc};border:1px solid ${cc}44;border-radius:4px;padding:1px 8px;font-size:10px">${node.confidence}</span>
-        <span style="font-size:10px;color:#334155">${node.member_count} scans</span>
-      </div>
-    </div>`;
+function _renderNeovis(cypher){
+  const q = cypher || document.getElementById('cipherInput')?.value ||
+    'MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b';
+
+  const config = {
+    containerId: 'neovisContainer',
+    neo4j: {
+      serverUrl:      'bolt://localhost:7687',
+      serverUser:     'neo4j',
+      serverPassword: 'changeme123',
+    },
+    visConfig: {
+      nodes: {
+        shape: 'dot',
+        font: { color: '#e2e8f0', size: 13, face: 'system-ui' },
+        borderWidth: 2,
+        borderWidthSelected: 3,
+      },
+      edges: {
+        arrows: { to: { enabled: false } },
+        smooth: { type: 'curvedCW', roundness: 0.2 },
+        font: { color: '#64748b', size: 10, align: 'middle' },
+      },
+      physics: {
+        barnesHut: { gravitationalConstant: -8000, springLength: 120, springConstant: 0.04 },
+        stabilization: { iterations: 200, updateInterval: 25 },
+      },
+      interaction: { hover: true, tooltipDelay: 200 },
+      background: { color: '#040810' },
+    },
+    labels: {
+      ThreatCluster: {
+        label:     'short_label',
+        color:     { background: 'severity',
+                     mapping: { critical:'#ef4444', high:'#f97316', medium:'#f59e0b', low:'#475569', unknown:'#334155' } },
+        size:      'member_count',
+        sizeCypher: 'MATCH (n) WHERE id(n) = id(n) RETURN n.member_count * 2',
+        [NeoVis.NEOVIS_ADVANCED_CONFIG]: {
+          function: {
+            title: n => `<b>${n.properties.label}</b><br>Severity: ${n.properties.severity}<br>Confidence: ${n.properties.confidence}<br>Members: ${n.properties.member_count} scans<br>${n.properties.summary||''}`,
+            color: { background: n => {
+              const m = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#334155'};
+              return m[n.properties.severity] || '#334155';
+            }, border: n => {
+              const gc = n.properties.group_color || '#475569';
+              return gc;
+            }},
+          },
+        },
+      },
+    },
+    relationships: {
+      SHARED_IP:     { color: '#10b981', caption: true },
+      SHARED_DOMAIN: { color: '#06b6d4', caption: true },
+      SHARED_TTPS:   { color: '#f59e0b', caption: false, [NeoVis.NEOVIS_ADVANCED_CONFIG]: { static: { width: 1 } } },
+    },
+    initialCypher: q,
+  };
+
+  try {
+    if(_viz) { _viz.clearNetwork(); }
+    _viz = new NeoVis.default(config);
+    _viz.render();
+  } catch(e) {
+    document.getElementById('neovisContainer').innerHTML =
+      `<div style="padding:30px;text-align:center;font-size:12px;color:#64748b">
+        Could not connect to Neo4j at localhost:7687.<br>
+        Make sure Neo4j is running: <code style="color:#3b82f6">docker compose up -d neo4j</code><br><br>
+        <a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser ↗</a>
+      </div>`;
+  }
 }
+
+function _runCypher(){
+  const q = document.getElementById('cipherInput')?.value;
+  if(!q) return;
+  if(!_graphInitialized){ _initNeovis(); return; }
+  _renderNeovis(q);
+}
+
 
 async function exportOrgBrief(){
   toast('Generating leadership brief…','info');
