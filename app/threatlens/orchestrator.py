@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 
 import structlog
@@ -35,6 +36,7 @@ from app.threatlens.agents.darkweb_agent import DarkWebAgent
 from app.threatlens.config import threatlens_settings
 from app.threatlens.models import Finding
 from app.threatlens import neo4j_writer
+from app.threatlens import slack_notifier as tl_slack
 
 logger = structlog.get_logger()
 
@@ -113,9 +115,13 @@ async def run_cycle(db_path: str | None = None) -> dict:
     started = time.time()
     profiles_written = 0
     llm_calls = 0
+    alerts_sent = 0
+    confirmed_count = 0
+    critical_zone_count = 0
+    _webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
 
     async def _process_one(cluster):
-        nonlocal profiles_written, llm_calls
+        nonlocal profiles_written, llm_calls, alerts_sent, confirmed_count, critical_zone_count
         async with sem:
             # 1. Run all agents in parallel
             agent_tasks = [agent.run(cluster) for agent in registry.active()]
@@ -148,6 +154,18 @@ async def run_cycle(db_path: str | None = None) -> dict:
             store.mark_cluster_profiled(cluster.id, **kwargs)
             profiles_written += 1
 
+            # 7. Smart Slack alert — fires for critical surfaces / confirmed matches
+            if _webhook:
+                sent = await tl_slack.alert_if_critical(
+                    cluster, profile, webhook_url=_webhook
+                )
+                if sent:
+                    alerts_sent += 1
+                    if profile.confidence == "confirmed":
+                        confirmed_count += 1
+                    if set(profile.surface_zones or []) & {"ground_station_ingress", "ntn_5g_core"}:
+                        critical_zone_count += 1
+
             logger.info(
                 "threatlens_cluster_done",
                 cluster=cluster.id[:8],
@@ -159,6 +177,16 @@ async def run_cycle(db_path: str | None = None) -> dict:
             )
 
     await asyncio.gather(*[_process_one(c) for c in dirty_clusters])
+
+    # Send cycle summary to Slack if notable events occurred
+    if _webhook:
+        await tl_slack.send_cycle_summary(
+            clusters_processed=len(dirty_clusters),
+            profiles_written=profiles_written,
+            confirmed_count=confirmed_count,
+            critical_zones_count=critical_zone_count,
+            webhook_url=_webhook,
+        )
 
     # Push updated graph to Neo4j (non-blocking, silently skips if Neo4j unavailable)
     neo4j_result = {"skipped": True}
@@ -173,6 +201,7 @@ async def run_cycle(db_path: str | None = None) -> dict:
         "clusters_skipped":   clusters_skipped,
         "profiles_written":   profiles_written,
         "llm_calls":          llm_calls,
+        "alerts_sent":        alerts_sent,
         "duration_secs":      round(duration, 2),
         "neo4j":              neo4j_result,
     }
