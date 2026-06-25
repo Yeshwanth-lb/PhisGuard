@@ -701,99 +701,131 @@ async def run_intel_cycle(current_user: dict = Depends(require_admin())):
 
 @app.get('/api/intel/graph')
 async def intel_graph(
-    limit: int = 50,
     current_user: dict = Depends(require_permission('scan')),
 ):
-    """Threat actor relationship graph — nodes are clusters, edges are shared infrastructure/TTPs."""
+    """Threat actor relationship graph — intent-grouped nodes with infrastructure edges."""
     from app.threatlens import store as tl_store
 
     clusters = tl_store.get_active_clusters()
     profiles_list = tl_store.get_profiles()
     profiles = {p.cluster_id: p for p in profiles_list}
 
-    # Top N clusters by member count
-    top = sorted(clusters, key=lambda c: len(c.member_scan_ids), reverse=True)[:limit]
+    # Only meaningful threat clusters — filter out noise
+    NOISE = {"unknown", "legitimate", "clean", "unclear", "generic_phish", "", None}
+    threat_clusters = [
+        c for c in clusters
+        if c.dominant_intent not in NOISE and len(c.member_scan_ids) >= 2
+    ]
 
-    # Build nodes
+    # Sort by member count, take top 30
+    threat_clusters.sort(key=lambda c: len(c.member_scan_ids), reverse=True)
+    top = threat_clusters[:30]
+
+    # Intent group metadata for coloring and grouping
+    INTENT_META = {
+        "credential_harvest":     {"color": "#3b82f6", "group": "Credential Theft"},
+        "credential_harvesting":  {"color": "#3b82f6", "group": "Credential Theft"},
+        "bec_fraud":              {"color": "#ef4444", "group": "BEC Fraud"},
+        "fraud_payment":          {"color": "#f97316", "group": "Financial Fraud"},
+        "fraud_scam":             {"color": "#f97316", "group": "Financial Fraud"},
+        "brand_impersonation":    {"color": "#8b5cf6", "group": "Impersonation"},
+        "executive_impersonation":{"color": "#a855f7", "group": "Impersonation"},
+        "malware_delivery":       {"color": "#10b981", "group": "Malware"},
+    }
+
     nodes = []
     for c in top:
         p = profiles.get(c.id)
+        intent = c.dominant_intent or "other"
+        meta = INTENT_META.get(intent, {"color": "#64748b", "group": "Other"})
         nodes.append({
             "id":           c.id[:12],
             "full_id":      c.id,
-            "label":        (c.dominant_intent or "unknown").replace("_", " "),
+            "intent":       intent,
+            "group":        meta["group"],
+            "group_color":  meta["color"],
+            "label":        intent.replace("_", " ").title(),
+            "short_label":  intent.replace("credential_harvest", "Cred Theft")
+                                  .replace("credential_harvesting", "Cred Theft")
+                                  .replace("bec_fraud", "BEC Fraud")
+                                  .replace("fraud_payment", "Fin. Fraud")
+                                  .replace("brand_impersonation", "Brand Imp.")
+                                  .replace("executive_impersonation", "Exec. Imp.")
+                                  .replace("_", " ").title(),
             "member_count": len(c.member_scan_ids),
             "severity":     p.severity if p else "low",
             "confidence":   p.confidence if p else "speculative",
             "surface_zones": p.surface_zones if p else [],
-            "ttp_ids":      [t.attack_id for t in p.ttps] if p else [],
-            "summary":      (p.summary or "")[:120] if p else "",
-            "domains":      c.iocs.domains[:3],
+            "ttp_ids":      [t.attack_id for t in p.ttps][:4] if p else [],
+            "summary":      (p.summary or "")[:150] if p else "",
+            "domains":      c.iocs.domains[:2],
         })
 
-    # Build edges — compare all pairs
+    # Build edges — only strong infrastructure/tradecraft overlaps
     edges = []
-    node_ids = {n["full_id"] for n in nodes}
-    node_map = {c.id: c for c in top if c.id in node_ids}
-
     for i, c1 in enumerate(top):
         for c2 in top[i+1:]:
             p1, p2 = profiles.get(c1.id), profiles.get(c2.id)
-            rels = []
 
-            # Shared sender IPs (strongest signal)
+            # Shared IPs — strongest (same physical infrastructure)
             shared_ips = set(c1.iocs.ips) & set(c2.iocs.ips) - {""}
             if shared_ips:
-                rels.append({"type": "shared_ip", "label": f"IP: {list(shared_ips)[0]}", "weight": 1.0})
+                edges.append({
+                    "from": c1.id[:12], "to": c2.id[:12],
+                    "type": "shared_ip",
+                    "label": f"Shared IP: {list(shared_ips)[0]}",
+                    "weight": 1.0,
+                })
+                continue
 
-            # Shared domains
+            # Shared sending domain — same actor different campaigns
             shared_domains = set(c1.iocs.domains) & set(c2.iocs.domains) - {""}
             if shared_domains:
-                rels.append({"type": "shared_domain", "label": f"domain", "weight": 0.9})
+                edges.append({
+                    "from": c1.id[:12], "to": c2.id[:12],
+                    "type": "shared_domain",
+                    "label": f"Domain: {list(shared_domains)[0]}",
+                    "weight": 0.9,
+                })
+                continue
 
-            # Same intent (filter out noise intents)
-            noise = {"unknown", "legitimate", "clean", "unclear", "", None}
-            if c1.dominant_intent and c1.dominant_intent == c2.dominant_intent \
-               and c1.dominant_intent not in noise:
-                rels.append({"type": "same_intent", "label": c1.dominant_intent.replace("_", " "), "weight": 0.5})
-
-            # Shared ATT&CK techniques (≥2)
+            # Shared ATT&CK techniques ≥ 3 — very similar tradecraft
             if p1 and p2:
                 t1 = {t.attack_id for t in p1.ttps}
                 t2 = {t.attack_id for t in p2.ttps}
-                shared_ttps = t1 & t2
-                if len(shared_ttps) >= 2:
-                    rels.append({"type": "shared_ttps", "label": f"{len(shared_ttps)} TTPs", "weight": 0.7})
+                shared = t1 & t2
+                if len(shared) >= 3:
+                    edges.append({
+                        "from": c1.id[:12], "to": c2.id[:12],
+                        "type": "shared_ttps",
+                        "label": f"{len(shared)} shared TTPs",
+                        "weight": 0.7,
+                    })
 
-                # Shared Skylo surface zone
-                z1 = set(p1.surface_zones) - {"unmapped", ""}
-                z2 = set(p2.surface_zones) - {"unmapped", ""}
-                shared_zones = z1 & z2
-                if shared_zones:
-                    rels.append({"type": "shared_zone", "label": list(shared_zones)[0].replace("_", " "), "weight": 0.4})
+    # Group summary for the UI
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for n in nodes:
+        groups[n["group"]].append(n)
 
-            # Only emit the strongest relationship between each pair
-            if rels:
-                best = max(rels, key=lambda r: r["weight"])
-                edges.append({
-                    "from":   c1.id[:12],
-                    "to":     c2.id[:12],
-                    "type":   best["type"],
-                    "label":  best["label"],
-                    "weight": best["weight"],
-                })
+    group_list = [
+        {"name": g, "count": len(ns), "color": ns[0]["group_color"]}
+        for g, ns in sorted(groups.items(), key=lambda x: -len(x[1]))
+    ]
 
-    isolated = sum(1 for n in nodes
-                   if not any(e["from"] == n["id"] or e["to"] == n["id"] for e in edges))
+    connected_ids = {e["from"] for e in edges} | {e["to"] for e in edges}
 
     return {
         "nodes": nodes,
         "edges": edges,
+        "groups": group_list,
         "stats": {
             "total_clusters": len(clusters),
-            "shown":          len(nodes),
-            "edges":          len(edges),
-            "isolated":       isolated,
+            "threat_clusters": len(threat_clusters),
+            "shown":  len(nodes),
+            "edges":  len(edges),
+            "connected": len(connected_ids),
+            "isolated": len(nodes) - len(connected_ids),
         },
     }
 

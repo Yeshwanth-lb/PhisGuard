@@ -424,29 +424,25 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
         <span id="graphEdgeBadge" style="display:none;background:#1e293b;color:#64748b;border-radius:10px;padding:1px 8px;font-size:10px"></span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <div style="display:flex;gap:4px" id="graphFilterBtns" style="display:none">
-          <button onclick="event.stopPropagation();_filterGraph('all',this)" style="padding:2px 10px;font-size:10px;background:#1e293b;border:1px solid #334155;border-radius:10px;color:#94a3b8;cursor:pointer">All</button>
-          <button onclick="event.stopPropagation();_filterGraph('shared_ip',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #10b98155;border-radius:10px;color:#10b981;cursor:pointer">Shared IP</button>
-          <button onclick="event.stopPropagation();_filterGraph('same_intent',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #3b82f655;border-radius:10px;color:#3b82f6;cursor:pointer">Same Intent</button>
-          <button onclick="event.stopPropagation();_filterGraph('shared_ttps',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #f59e0b55;border-radius:10px;color:#f59e0b;cursor:pointer">Shared TTPs</button>
-          <button onclick="event.stopPropagation();_filterGraph('shared_zone',this)" style="padding:2px 10px;font-size:10px;background:transparent;border:1px solid #8b5cf655;border-radius:10px;color:#8b5cf6;cursor:pointer">Same Zone</button>
-        </div>
+        <div id="graphFilterBtns" style="display:none"></div>
         <span id="graphToggleIcon" style="color:#334155;font-size:12px">▶ Show</span>
       </div>
     </div>
     <div id="graphContainer" style="display:none;padding:0 0 12px">
       <canvas id="threatGraph" style="width:100%;height:500px;display:block;cursor:grab"></canvas>
       <!-- Legend -->
-      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 16px;border-top:1px solid #111827">
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#ef4444;display:inline-block"></span>Critical</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#f97316;display:inline-block"></span>High</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Medium</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:12px;height:12px;border-radius:50%;background:#6b7280;display:inline-block"></span>Low</div>
-        <div style="margin-left:16px;display:flex;align-items:center;gap:5px;font-size:10px;color:#10b981">── Shared IP</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#3b82f6">── Same Intent</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#f59e0b">── Shared TTPs</div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#8b5cf6">── Same Zone</div>
-        <div style="margin-left:auto;font-size:10px;color:#1e293b">Node size = scan count · Drag to reposition · Scroll to zoom</div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid #111827;background:#050a0f">
+        <div style="font-size:10px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:.5px;align-self:center">NODE FILL = SEVERITY</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>Critical</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f97316;display:inline-block"></span>High</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Medium</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#475569;display:inline-block"></span>Low</div>
+        <div style="width:1px;background:#1e293b;align-self:stretch"></div>
+        <div style="font-size:10px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:.5px;align-self:center">EDGE = CONNECTION TYPE</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#10b981">━━ Shared Infrastructure (IP)</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#06b6d4">━━ Shared Domain</div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#f59e0b">━━ Same Tradecraft (TTPs)</div>
+        <div style="margin-left:auto;font-size:10px;color:#1e293b;align-self:center">Drag · Scroll to zoom · Click node for detail</div>
       </div>
       <!-- Node info popup -->
       <div id="graphNodeInfo" style="display:none;margin:0 16px;background:#0c1929;border:1px solid #1d4ed855;border-radius:8px;padding:12px"></div>
@@ -1541,7 +1537,6 @@ async function _markWrongProfile(btn){
 
 // ── Threat Actor Relationship Graph ──────────────────────────────────────────
 let _graphData = null;
-let _graphFilter = 'all';
 let _graphNodes = [];
 let _graphEdges = [];
 let _graphDragging = null;
@@ -1551,11 +1546,11 @@ let _graphOffX = 0;
 let _graphOffY = 0;
 let _graphLastMouse = null;
 let _graphPanning = false;
-let _graphAnimId = null;
 let _graphInitialized = false;
 
-const _EDGE_COLORS = {shared_ip:'#10b981',shared_domain:'#06b6d4',same_intent:'#3b82f6',shared_ttps:'#f59e0b',shared_zone:'#8b5cf6'};
-const _SEV_NODE = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#475569',unknown:'#334155'};
+const _EDGE_COLORS  = {shared_ip:'#10b981',shared_domain:'#06b6d4',shared_ttps:'#f59e0b'};
+const _EDGE_LABELS  = {shared_ip:'Shared Infrastructure',shared_domain:'Shared Domain',shared_ttps:'Same Tradecraft'};
+const _SEV_NODE     = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#475569',unknown:'#334155'};
 
 async function _toggleGraph(header){
   const container = document.getElementById('graphContainer');
@@ -1571,95 +1566,105 @@ async function _toggleGraph(header){
 async function _loadGraph(){
   const canvas = document.getElementById('threatGraph');
   if(!canvas) return;
-  canvas.width = canvas.offsetWidth || 900;
-  canvas.height = 500;
+  canvas.width = canvas.offsetWidth || 960;
+  canvas.height = 520;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#040810';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.fillStyle = '#334155'; ctx.font='13px monospace'; ctx.textAlign='center';
-  ctx.fillText('Loading relationship graph…', canvas.width/2, canvas.height/2);
+  ctx.fillStyle='#040810'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle='#334155'; ctx.font='13px system-ui'; ctx.textAlign='center';
+  ctx.fillText('Computing threat actor layout…', canvas.width/2, canvas.height/2);
   try{
-    const r = await api('/api/intel/graph?limit=50');
-    if(!r.ok){ ctx.fillStyle='#ef4444'; ctx.fillText('Failed to load', canvas.width/2, canvas.height/2); return; }
+    const r = await api('/api/intel/graph');
+    if(!r.ok){ctx.fillStyle='#ef4444';ctx.fillText('Failed to load',canvas.width/2,canvas.height/2);return;}
     _graphData = await r.json();
     const badge = document.getElementById('graphEdgeBadge');
-    if(badge){ badge.textContent = `${_graphData.stats.shown} nodes · ${_graphData.stats.edges} edges`; badge.style.display='inline'; }
-    _initGraphNodes(canvas);
+    if(badge){
+      badge.textContent = `${_graphData.stats.shown} threat actors · ${_graphData.stats.edges} connections`;
+      badge.style.display='inline';
+    }
+    _buildGroupedLayout(canvas);
     _graphInitialized = true;
     _attachGraphEvents(canvas);
-    _graphAnimId = requestAnimationFrame(()=>_graphAnimate(canvas));
-  }catch(e){ ctx.fillStyle='#ef4444'; ctx.fillText('Error: '+e.message, canvas.width/2, canvas.height/2); }
+    _graphDraw(canvas);
+  }catch(e){ctx.fillStyle='#ef4444';ctx.fillText('Error: '+e.message,canvas.width/2,canvas.height/2);}
 }
 
-function _filterGraph(filter, btn){
-  _graphFilter = filter;
-  document.querySelectorAll('#graphFilterBtns button').forEach(b=>{ b.style.background='transparent'; });
-  if(btn) btn.style.background='#1e293b';
-  const canvas = document.getElementById('threatGraph');
-  if(canvas) _graphDraw(canvas);
-}
-
-function _initGraphNodes(canvas){
+function _buildGroupedLayout(canvas){
+  const W=canvas.width, H=canvas.height;
   const data = _graphData;
-  const cx = canvas.width/2, cy = canvas.height/2;
-  // Place nodes in a circle initially
-  _graphNodes = data.nodes.map((n,i) => ({
-    ...n,
-    x: cx + Math.cos(i/data.nodes.length*2*Math.PI)*180,
-    y: cy + Math.sin(i/data.nodes.length*2*Math.PI)*180,
-    vx: 0, vy: 0,
-    r: Math.max(6, Math.min(22, Math.sqrt(n.member_count||1)*2.5)),
-  }));
+
+  // Group nodes by intent group
+  const groups = {};
+  data.nodes.forEach(n=>{
+    if(!groups[n.group]) groups[n.group]=[]; groups[n.group].push(n);
+  });
+  const groupNames = Object.keys(groups);
+  const G = groupNames.length;
+
+  // Place group centers evenly around an ellipse
+  const ellW = W*0.36, ellH = H*0.36;
+  const cx = W/2, cy = H/2;
+  const groupCenters = {};
+  groupNames.forEach((g,i)=>{
+    const angle = (i/G)*2*Math.PI - Math.PI/2;
+    groupCenters[g] = {x: cx + ellW*Math.cos(angle), y: cy + ellH*Math.sin(angle)};
+  });
+
+  // Place nodes within their group
+  _graphNodes = [];
   _graphEdges = data.edges;
-  // Run force layout iterations
-  for(let i=0;i<200;i++) _graphForceStep(0.85 - i*0.003, canvas);
-}
 
-function _graphForceStep(cooling, canvas){
-  const k = 70, cx = canvas.width/2, cy = canvas.height/2;
-  // Repulsion
-  for(let i=0;i<_graphNodes.length;i++){
-    for(let j=i+1;j<_graphNodes.length;j++){
-      const a=_graphNodes[i], b=_graphNodes[j];
-      const dx=b.x-a.x, dy=b.y-a.y, d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
-      const f=k*k/d;
-      a.vx-=f*dx/d; a.vy-=f*dy/d;
-      b.vx+=f*dx/d; b.vy+=f*dy/d;
-    }
-  }
-  // Attraction along edges
-  const activeEdges = _graphEdges.filter(e=>_graphFilter==='all'||e.type===_graphFilter);
-  const nodeById = {};
-  _graphNodes.forEach(n=>nodeById[n.id]=n);
-  activeEdges.forEach(e=>{
-    const a=nodeById[e.from], b=nodeById[e.to];
-    if(!a||!b) return;
-    const dx=b.x-a.x, dy=b.y-a.y, d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
-    const ideal = k * (2 - e.weight);
-    const f = (d - ideal) * 0.1;
-    a.vx+=f*dx/d; a.vy+=f*dy/d;
-    b.vx-=f*dx/d; b.vy-=f*dy/d;
+  groupNames.forEach(g=>{
+    const nodes = groups[g];
+    const center = groupCenters[g];
+    const radius = Math.min(70, 20 + nodes.length*12);
+    nodes.forEach((n,i)=>{
+      const angle = (i/nodes.length)*2*Math.PI;
+      const r = nodes.length===1?0:radius*0.6;
+      _graphNodes.push({
+        ...n,
+        x: center.x + r*Math.cos(angle),
+        y: center.y + r*Math.sin(angle),
+        vx: 0, vy: 0,
+        groupX: center.x, groupY: center.y,
+        r: Math.max(14, Math.min(28, 10 + Math.sqrt(n.member_count||1)*3)),
+      });
+    });
   });
-  // Gravity + update
-  _graphNodes.forEach(n=>{
-    n.vx+=(cx-n.x)*0.008; n.vy+=(cy-n.y)*0.008;
-    n.vx*=cooling; n.vy*=cooling;
-    n.x+=n.vx; n.y+=n.vy;
-    n.x=Math.max(n.r+10,Math.min(canvas.width-n.r-10,n.x));
-    n.y=Math.max(n.r+10,Math.min(canvas.height-n.r-10,n.y));
-  });
-}
 
-let _graphSettled = false;
-function _graphAnimate(canvas){
-  if(!_graphSettled){
-    _graphForceStep(0.8, canvas);
-    _graphDraw(canvas);
-    _graphAnimId = requestAnimationFrame(()=>_graphAnimate(canvas));
-    _graphSettled = _graphNodes.every(n=>Math.abs(n.vx)<0.1&&Math.abs(n.vy)<0.1);
-  } else {
-    _graphDraw(canvas);
+  // Gentle force refinement — prevent overlap, keep group cohesion
+  for(let iter=0;iter<300;iter++){
+    const cool = Math.max(0.02, 0.5*Math.pow(0.985, iter));
+    _graphNodes.forEach(a=>{
+      // Group cohesion — pull toward group center
+      a.vx += (a.groupX - a.x)*0.04;
+      a.vy += (a.groupY - a.y)*0.04;
+      // Repulsion from other nodes
+      _graphNodes.forEach(b=>{
+        if(a===b) return;
+        const dx=a.x-b.x, dy=a.y-b.y;
+        const d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+        const minDist = a.r+b.r+8;
+        if(d<minDist){
+          const f=(minDist-d)*0.5/d;
+          a.vx+=dx*f; a.vy+=dy*f;
+        }
+      });
+      // Edge attraction (only for connected nodes)
+      _graphEdges.forEach(e=>{
+        if(e.from!==a.id&&e.to!==a.id) return;
+        const other=_graphNodes.find(n=>(e.from===a.id?n.id===e.to:n.id===e.from));
+        if(!other) return;
+        const dx=other.x-a.x, dy=other.y-a.y, d=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+        a.vx+=dx*0.002; a.vy+=dy*0.002;
+      });
+      a.vx*=cool; a.vy*=cool;
+      a.x+=a.vx; a.y+=a.vy;
+      a.x=Math.max(a.r+8,Math.min(W-a.r-8,a.x));
+      a.y=Math.max(a.r+8,Math.min(H-a.r-8,a.y));
+    });
   }
+  // Freeze
+  _graphNodes.forEach(n=>{n.vx=0;n.vy=0;});
 }
 
 function _graphDraw(canvas){
@@ -1667,59 +1672,100 @@ function _graphDraw(canvas){
   const W=canvas.width, H=canvas.height;
   ctx.save();
   ctx.fillStyle='#040810'; ctx.fillRect(0,0,W,H);
-  ctx.translate(_graphOffX, _graphOffY);
-  ctx.scale(_graphScale, _graphScale);
+  ctx.translate(_graphOffX,_graphOffY);
+  ctx.scale(_graphScale,_graphScale);
 
-  const activeEdges = _graphEdges.filter(e=>_graphFilter==='all'||e.type===_graphFilter);
-  const nodeById = {};
+  const nodeById={};
   _graphNodes.forEach(n=>nodeById[n.id]=n);
 
-  // Draw edges
-  activeEdges.forEach(e=>{
+  // Draw group background bubbles
+  const groups={};
+  _graphNodes.forEach(n=>{ if(!groups[n.group]) groups[n.group]=[]; groups[n.group].push(n); });
+  Object.entries(groups).forEach(([g,ns])=>{
+    if(ns.length<2) return;
+    const xs=ns.map(n=>n.x), ys=ns.map(n=>n.y);
+    const minX=Math.min(...xs)-35, maxX=Math.max(...xs)+35;
+    const minY=Math.min(...ys)-35, maxY=Math.max(...ys)+35;
+    const bx=(minX+maxX)/2, by=(minY+maxY)/2;
+    const bw=(maxX-minX)/2, bh=(maxY-minY)/2;
+    const color=ns[0].group_color||'#334155';
+    ctx.beginPath();
+    ctx.ellipse(bx,by,bw,bh,0,0,2*Math.PI);
+    ctx.fillStyle=color+'08'; ctx.fill();
+    ctx.strokeStyle=color+'25'; ctx.lineWidth=1; ctx.setLineDash([4,4]); ctx.stroke();
+    ctx.setLineDash([]);
+    // Group label
+    ctx.fillStyle=color+'99'; ctx.font='bold 10px system-ui'; ctx.textAlign='center';
+    ctx.fillText(g, bx, minY-8);
+  });
+
+  // Draw edges — curved bezier
+  _graphEdges.forEach(e=>{
     const a=nodeById[e.from], b=nodeById[e.to];
     if(!a||!b) return;
-    const color = _EDGE_COLORS[e.type]||'#334155';
+    const isHighlighted = _graphHover && (_graphHover.id===e.from||_graphHover.id===e.to);
+    const color=_EDGE_COLORS[e.type]||'#475569';
+    const alpha=isHighlighted?'cc':'44';
+    // Quadratic bezier — control point offset perpendicular to midpoint
+    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+    const dx=b.x-a.x, dy=b.y-a.y, len=Math.sqrt(dx*dx+dy*dy)||1;
+    const curve = Math.min(40, len*0.2);
+    const cx2=mx - dy/len*curve, cy2=my + dx/len*curve;
     ctx.beginPath();
-    ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
-    ctx.strokeStyle = color+'55';
-    ctx.lineWidth = e.weight * 1.5;
-    ctx.stroke();
-    // Edge label at midpoint on hover
-    if(_graphHover && (_graphHover.id===e.from||_graphHover.id===e.to)){
-      ctx.fillStyle=color; ctx.font='9px monospace'; ctx.textAlign='center';
-      ctx.fillText(e.label, (a.x+b.x)/2, (a.y+b.y)/2-4);
+    ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo(cx2,cy2,b.x,b.y);
+    ctx.strokeStyle=color+alpha;
+    ctx.lineWidth=isHighlighted?2.5:1.5; ctx.stroke();
+    // Edge label on hover
+    if(isHighlighted){
+      ctx.fillStyle=color; ctx.font='10px system-ui'; ctx.textAlign='center';
+      ctx.fillText(e.label, cx2, cy2-6);
     }
   });
 
   // Draw nodes
   _graphNodes.forEach(n=>{
-    const isHovered = _graphHover&&_graphHover.id===n.id;
-    const color = _SEV_NODE[n.severity]||'#334155';
-    // Glow for hovered
-    if(isHovered){
-      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+6,0,Math.PI*2);
-      ctx.fillStyle=color+'22'; ctx.fill();
+    const isHov=_graphHover&&_graphHover.id===n.id;
+    const sevColor=_SEV_NODE[n.severity]||'#475569';
+    const groupColor=n.group_color||'#475569';
+    // Glow
+    if(isHov){
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+8,0,Math.PI*2);
+      ctx.fillStyle=groupColor+'20'; ctx.fill();
     }
-    // Node circle
+    // Outer ring (group color)
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r+2,0,Math.PI*2);
+    ctx.strokeStyle=groupColor+(isHov?'cc':'55'); ctx.lineWidth=isHov?2:1.5; ctx.stroke();
+    // Node fill (severity color)
     ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
-    const grad=ctx.createRadialGradient(n.x-n.r*0.3,n.y-n.r*0.3,1,n.x,n.y,n.r);
-    grad.addColorStop(0,color+'dd'); grad.addColorStop(1,color+'88');
-    ctx.fillStyle=grad; ctx.fill();
-    ctx.strokeStyle=isHovered?color:'#1e293b';
-    ctx.lineWidth=isHovered?2:1; ctx.stroke();
-    // Confidence ring for confirmed
+    const g2=ctx.createRadialGradient(n.x-n.r*0.25,n.y-n.r*0.25,1,n.x,n.y,n.r);
+    g2.addColorStop(0,sevColor+'ee'); g2.addColorStop(1,sevColor+'66');
+    ctx.fillStyle=g2; ctx.fill();
+    // Confirmed badge
     if(n.confidence==='confirmed'){
-      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+3,0,Math.PI*2);
-      ctx.strokeStyle='#10b98166'; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+5,0,Math.PI*2);
+      ctx.strokeStyle='#10b981'; ctx.lineWidth=1.5; ctx.stroke();
     }
-    // Label
-    if(n.r>8||isHovered){
-      ctx.fillStyle=isHovered?'#f1f5f9':'#94a3b8';
-      ctx.font=`${isHovered?10:8}px monospace`; ctx.textAlign='center';
-      const shortLabel=n.label.length>14?n.label.slice(0,13)+'…':n.label;
-      ctx.fillText(shortLabel, n.x, n.y+n.r+12);
+    // Always-visible label INSIDE node
+    ctx.fillStyle=isHov?'#ffffff':'#e2e8f0';
+    ctx.font=`bold ${Math.max(8,Math.min(11,n.r-3))}px system-ui`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    const lbl=n.short_label||n.label;
+    // Split into 2 lines if needed
+    const words=lbl.split(' ');
+    if(words.length>=2 && n.r>=16){
+      const mid=Math.ceil(words.length/2);
+      ctx.fillText(words.slice(0,mid).join(' '), n.x, n.y-6);
+      ctx.fillText(words.slice(mid).join(' '), n.x, n.y+6);
+    } else {
+      ctx.fillText(lbl.length>10?lbl.slice(0,9)+'…':lbl, n.x, n.y);
     }
+    ctx.textBaseline='alphabetic';
+    // Member count below node
+    ctx.fillStyle=isHov?groupColor:'#334155';
+    ctx.font=`9px system-ui`; ctx.textAlign='center';
+    ctx.fillText(`${n.member_count} scans`, n.x, n.y+n.r+13);
   });
+
   ctx.restore();
 }
 
