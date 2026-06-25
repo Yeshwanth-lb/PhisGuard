@@ -451,38 +451,89 @@ def get_latest_org_assessment(db_path: str = _DB_PATH) -> OrgThreatAssessment | 
 # Profile feedback
 # ---------------------------------------------------------------------------
 
+def _ensure_feedback_table(c) -> None:
+    """Create the feedback table and migrate the cluster_id column if missing."""
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS profile_feedback (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            cluster_id TEXT,
+            rating TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            submitted_at REAL NOT NULL,
+            submitted_by TEXT DEFAULT 'soc'
+        )
+    """)
+    # Migrate: add cluster_id to pre-existing tables
+    try:
+        c.execute("ALTER TABLE profile_feedback ADD COLUMN cluster_id TEXT")
+    except Exception:
+        pass  # column already exists
+
+
 def save_profile_feedback(
     profile_id: str,
     rating: str,
     notes: str = "",
     submitted_by: str = "soc",
+    cluster_id: str | None = None,
     db_path: str = _DB_PATH,
 ) -> bool:
-    """Save analyst rating for an adversary profile."""
+    """Save analyst rating for an adversary profile.
+
+    Stores cluster_id so the feedback survives re-profiling (profiles get a
+    new UUID each cycle, but the cluster_id is stable).
+    """
     import uuid as _uuid
     with _lock:
         c = _conn(db_path)
         try:
             import time as _time
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS profile_feedback (
-                    id TEXT PRIMARY KEY,
-                    profile_id TEXT NOT NULL,
-                    rating TEXT NOT NULL,
-                    notes TEXT DEFAULT '',
-                    submitted_at REAL NOT NULL,
-                    submitted_by TEXT DEFAULT 'soc'
-                )
-            """)
+            _ensure_feedback_table(c)
+            # Resolve cluster_id from the profile if not provided
+            if cluster_id is None:
+                row = c.execute(
+                    "SELECT cluster_id FROM actor_profiles WHERE id = ?", (profile_id,)
+                ).fetchone()
+                cluster_id = row["cluster_id"] if row else None
             c.execute("""
                 INSERT INTO profile_feedback
-                    (id, profile_id, rating, notes, submitted_at, submitted_by)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (_uuid.uuid4().hex, profile_id, rating, notes, _time.time(), submitted_by))
+                    (id, profile_id, cluster_id, rating, notes, submitted_at, submitted_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (_uuid.uuid4().hex, profile_id, cluster_id, rating, notes,
+                  _time.time(), submitted_by))
             c.commit()
             return True
         except Exception:
             return False
+        finally:
+            c.close()
+
+
+def get_cluster_feedback(cluster_id: str, db_path: str = _DB_PATH) -> dict | None:
+    """Return the most recent analyst feedback for a cluster, or None.
+
+    Used by the profiler to apply human corrections on the next cycle.
+    """
+    with _lock:
+        c = _conn(db_path)
+        try:
+            _ensure_feedback_table(c)
+            row = c.execute("""
+                SELECT rating, notes, submitted_at, submitted_by
+                FROM profile_feedback
+                WHERE cluster_id = ?
+                ORDER BY submitted_at DESC
+                LIMIT 1
+            """, (cluster_id,)).fetchone()
+            if not row:
+                return None
+            return {
+                "rating":       row["rating"],
+                "notes":        row["notes"] or "",
+                "submitted_at": row["submitted_at"],
+                "submitted_by": row["submitted_by"] or "soc",
+            }
         finally:
             c.close()
 

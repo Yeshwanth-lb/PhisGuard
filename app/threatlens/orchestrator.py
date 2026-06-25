@@ -143,9 +143,12 @@ async def run_cycle(db_path: str | None = None) -> dict:
                 cluster, all_findings, **kwargs
             )
 
-            # 5. Claude synthesizes — counts as 1 LLM call
+            # 5. Claude synthesizes — counts as 1 LLM call.
+            #    Apply any prior analyst feedback for this cluster (feedback loop).
+            feedback = store.get_cluster_feedback(cluster.id, **kwargs)
             profile = await profiler.synthesize(
-                cluster, claims, ttps, max_conf, surface_zones, segments
+                cluster, claims, ttps, max_conf, surface_zones, segments,
+                feedback=feedback,
             )
             llm_calls += 1
 
