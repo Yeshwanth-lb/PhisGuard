@@ -415,57 +415,50 @@ code{font-family:JetBrains Mono,monospace;font-size:11px;color:#94a3b8;backgroun
     </div>
   </div>
 
-  <!-- Relationship Graph — powered by Neo4j + Neovis.js -->
+  <!-- Threat Actor Relationship Graph -->
   <div style="background:#080d14;border:1px solid #1a2332;border-radius:10px;margin-bottom:16px;overflow:hidden">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer" onclick="_toggleGraph(this)">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:16px">🕸</span>
         <span style="font-size:13px;font-weight:600;color:#e2e8f0">Threat Actor Relationship Graph</span>
-        <span style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:1px 10px;font-size:10px;color:#64748b">Neo4j</span>
         <span id="graphEdgeBadge" style="display:none;background:#0f1f35;border:1px solid #1d4ed844;border-radius:10px;padding:1px 10px;font-size:10px;color:#60a5fa"></span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <a href="http://localhost:7474" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#3b82f6;text-decoration:none;padding:3px 10px;border:1px solid #1d4ed844;border-radius:5px">Open Neo4j Browser ↗</a>
+        <a href="http://localhost:7474" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#3b82f6;text-decoration:none;padding:3px 10px;border:1px solid #1d4ed844;border-radius:5px">Neo4j Browser ↗</a>
         <span id="graphToggleIcon" style="color:#334155;font-size:12px">▶ Show</span>
       </div>
     </div>
     <div id="graphContainer" style="display:none">
 
-      <!-- Cypher query bar -->
-      <div style="padding:10px 16px;background:#050a0f;border-bottom:1px solid #111827;display:flex;gap:8px;align-items:center">
-        <span style="font-size:10px;color:#475569;font-weight:600;white-space:nowrap">CYPHER</span>
-        <input id="cipherInput" value="MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b"
-          style="flex:1;background:#0d1117;border:1px solid #1e293b;border-radius:5px;padding:5px 10px;font-size:11px;color:#94a3b8;font-family:monospace"
-          onkeydown="if(event.key==='Enter') _runCypher()">
-        <button onclick="_runCypher()" style="padding:4px 14px;font-size:11px;background:#1d4ed8;border:none;border-radius:5px;color:#fff;cursor:pointer">Run</button>
-        <select onchange="document.getElementById('cipherInput').value=this.value;_runCypher()"
-          style="padding:4px 8px;font-size:11px;background:#0d1117;border:1px solid #1e293b;border-radius:5px;color:#64748b">
-          <option value="">Quick queries…</option>
-          <option value="MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b">All connections</option>
-          <option value="MATCH (a)-[r:SHARED_IP|SHARED_DOMAIN]->(b) RETURN a,r,b">Shared infrastructure</option>
-          <option value="MATCH (a:ThreatCluster) WHERE a.severity IN ['critical','high'] RETURN a">High severity only</option>
-          <option value="MATCH (a:ThreatCluster {confidence:'confirmed'})-[r]->(b) RETURN a,r,b">Confirmed clusters</option>
-          <option value="MATCH (a:ThreatCluster)-[r:SHARED_TTPS]->(b) RETURN a,r,b">Same tradecraft</option>
-        </select>
+      <!-- Filter chips -->
+      <div style="padding:10px 16px;background:#050a0f;border-bottom:1px solid #111827;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:10px;color:#475569;font-weight:600">SHOW:</span>
+        <button id="gf-all"        onclick="event.stopPropagation();_filterGraph('all',this)"        class="gfbtn" style="padding:3px 12px;font-size:11px;background:#1e293b;border:1px solid #334155;border-radius:14px;color:#e2e8f0;cursor:pointer">All connections</button>
+        <button id="gf-shared_ip"  onclick="event.stopPropagation();_filterGraph('shared_ip',this)"  class="gfbtn" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #10b98155;border-radius:14px;color:#10b981;cursor:pointer">🔗 Shared IP</button>
+        <button id="gf-shared_domain" onclick="event.stopPropagation();_filterGraph('shared_domain',this)" class="gfbtn" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #06b6d455;border-radius:14px;color:#06b6d4;cursor:pointer">🌐 Shared Domain</button>
+        <button id="gf-shared_ttps" onclick="event.stopPropagation();_filterGraph('shared_ttps',this)" class="gfbtn" style="padding:3px 12px;font-size:11px;background:transparent;border:1px solid #f59e0b55;border-radius:14px;color:#f59e0b;cursor:pointer">⚡ Same Tradecraft</button>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <button onclick="event.stopPropagation();_graphFit()" style="padding:3px 10px;font-size:10px;background:transparent;border:1px solid #1e293b;border-radius:5px;color:#64748b;cursor:pointer">⊡ Fit</button>
+          <button onclick="event.stopPropagation();_syncNeo4j(true)" style="padding:3px 10px;font-size:10px;background:transparent;border:1px solid #1e293b;border-radius:5px;color:#64748b;cursor:pointer">↻ Refresh</button>
+        </div>
       </div>
 
-      <!-- Neovis.js render container -->
-      <div id="neovisContainer" style="width:100%;height:540px;background:#040810"></div>
+      <div style="display:flex">
+        <!-- vis-network render container -->
+        <div id="visGraph" style="flex:1;height:560px;background:radial-gradient(ellipse at center,#0a1220 0%,#040810 100%)"></div>
 
-      <!-- Legend + status -->
+        <!-- Side detail panel -->
+        <div id="graphSidePanel" style="width:0;overflow:hidden;transition:width .2s;background:#0a0f18;border-left:1px solid #1a2332"></div>
+      </div>
+
+      <!-- Legend -->
       <div style="display:flex;gap:16px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid #111827;background:#050a0f;align-items:center">
+        <span style="font-size:10px;color:#475569;font-weight:600">SEVERITY:</span>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>Critical</div>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f97316;display:inline-block"></span>High</div>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Medium</div>
         <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:50%;background:#475569;display:inline-block"></span>Low</div>
-        <div style="width:1px;background:#1e293b;align-self:stretch"></div>
-        <div style="font-size:10px;color:#10b981">━ Shared IP</div>
-        <div style="font-size:10px;color:#06b6d4">━ Shared Domain</div>
-        <div style="font-size:10px;color:#f59e0b">━ Shared TTPs</div>
-        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-          <span id="graphStatus" style="font-size:10px;color:#334155"></span>
-          <button onclick="_syncNeo4j()" style="padding:3px 10px;font-size:10px;background:transparent;border:1px solid #1e293b;border-radius:5px;color:#475569;cursor:pointer">↻ Sync</button>
-        </div>
+        <div style="margin-left:auto;font-size:10px;color:#334155">Node size = campaign size · ◯ green ring = confirmed · drag / scroll-zoom / click for detail</div>
       </div>
     </div>
   </div>
@@ -1556,9 +1549,13 @@ async function _markWrongProfile(btn){
   else toast('Feedback failed','error');
 }
 
-// ── Threat Actor Relationship Graph — Neo4j + Neovis.js ─────────────────────
-let _viz = null;
+// ── Threat Actor Relationship Graph — vis-network ──────────────────────────
+let _visNetwork = null;
+let _visAllData = null;
+let _graphFilter = 'all';
 let _graphInitialized = false;
+const _EDGE_COLORS = {shared_ip:'#10b981', shared_domain:'#06b6d4', shared_ttps:'#f59e0b'};
+const _SEV_NODE = {critical:'#ef4444', high:'#f97316', medium:'#f59e0b', low:'#475569', unknown:'#334155'};
 
 async function _toggleGraph(header){
   const container = document.getElementById('graphContainer');
@@ -1566,130 +1563,169 @@ async function _toggleGraph(header){
   const isOpen = container.style.display !== 'none';
   container.style.display = isOpen ? 'none' : 'block';
   icon.textContent = isOpen ? '▶ Show' : '▼ Hide';
-  if(!isOpen && !_graphInitialized) {
-    await _syncNeo4j();
-    _initNeovis();
+  if(!isOpen && !_graphInitialized){
+    await _loadVisLib();
+    await _loadGraphData();
+    _graphInitialized = true;
   }
 }
 
-async function _syncNeo4j(){
-  const status = document.getElementById('graphStatus');
-  if(status) status.textContent = 'Syncing to Neo4j…';
-  try {
-    const TOKEN = (await api('/api/auth/whoami').catch(()=>null));
-    const r = await api('/api/intel/graph/sync', {method:'POST'});
-    if(r.ok){
-      const d = await r.json();
-      const badge = document.getElementById('graphEdgeBadge');
-      if(badge && !d.skipped){
-        badge.textContent = `${d.nodes||0} nodes · ${d.edges||0} edges`;
-        badge.style.display='inline';
-      }
-      if(status) status.textContent = d.skipped ? 'Neo4j not available' : `${d.nodes||0} nodes synced`;
-    }
-  } catch(e){ if(status) status.textContent = 'Sync failed'; }
+function _loadVisLib(){
+  return new Promise((resolve)=>{
+    if(window.vis && window.vis.Network){ resolve(); return; }
+    // CSS
+    const css = document.createElement('link');
+    css.rel='stylesheet';
+    css.href='https://unpkg.com/vis-network@9.1.9/styles/vis-network.min.css';
+    document.head.appendChild(css);
+    // JS
+    const s = document.createElement('script');
+    s.src='https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js';
+    s.onload=()=>resolve();
+    s.onerror=()=>resolve(); // resolve anyway; _renderVis handles missing lib
+    document.head.appendChild(s);
+  });
 }
 
-function _initNeovis(){
-  const container = document.getElementById('neovisContainer');
-  if(!container) return;
-  container.innerHTML = '<div style="padding:40px;text-align:center;color:#334155;font-size:12px">Connecting to Neo4j graph database…</div>';
+async function _loadGraphData(){
+  const el = document.getElementById('visGraph');
+  if(!el) return;
+  try{
+    const r = await api('/api/intel/graph');
+    if(!r.ok){ el.innerHTML=`<div style="padding:40px;text-align:center;color:#64748b">Could not load graph (${r.status})</div>`; return; }
+    _visAllData = await r.json();
+    const badge = document.getElementById('graphEdgeBadge');
+    if(badge){ badge.textContent = `${_visAllData.stats.shown} actors · ${_visAllData.stats.edges} links`; badge.style.display='inline'; }
+    _renderVis();
+  }catch(e){ el.innerHTML=`<div style="padding:40px;text-align:center;color:#ef4444">Error: ${e.message}</div>`; }
+}
 
-  // Load Neovis.js from CDN
-  if(!window.NeoVis){
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/neovis.js@2.0.2/dist/neovis.js';
-    script.onload = () => _renderNeovis();
-    script.onerror = () => {
-      container.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b;font-size:12px">Neovis.js unavailable offline.<br><br><a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser instead ↗</a></div>';
+function _renderVis(){
+  const el = document.getElementById('visGraph');
+  if(!window.vis || !window.vis.Network){
+    el.innerHTML='<div style="padding:40px;text-align:center;color:#64748b;font-size:12px">Graph library unavailable offline.<br><br><a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser ↗</a></div>';
+    return;
+  }
+  const d = _visAllData;
+  if(!d || !d.nodes.length){ el.innerHTML='<div style="padding:40px;text-align:center;color:#475569">No threat clusters to display. Run an analysis cycle.</div>'; return; }
+
+  // Build vis nodes
+  const nodes = d.nodes.map(n=>{
+    const sev = _SEV_NODE[n.severity] || '#475569';
+    const size = Math.max(14, Math.min(45, 12 + Math.sqrt(n.member_count||1)*5));
+    return {
+      id: n.id,
+      label: n.short_label || n.label,
+      title: `${n.label}\nSeverity: ${n.severity} | Confidence: ${n.confidence}\n${n.member_count} emails\nZones: ${(n.surface_zones||'none')}`,
+      value: n.member_count || 1,
+      size: size,
+      color: {
+        background: sev,
+        border: n.confidence==='confirmed' ? '#10b981' : (n.group_color||'#1e293b'),
+        highlight: { background: sev, border: '#e2e8f0' },
+      },
+      borderWidth: n.confidence==='confirmed' ? 3 : 2,
+      font: { color:'#e2e8f0', size:12, face:'system-ui', strokeWidth:3, strokeColor:'#040810' },
+      _raw: n,
     };
-    document.head.appendChild(script);
-  } else {
-    _renderNeovis();
-  }
-  _graphInitialized = true;
-}
+  });
 
-function _renderNeovis(cypher){
-  const q = cypher || document.getElementById('cipherInput')?.value ||
-    'MATCH (a:ThreatCluster)-[r]->(b:ThreatCluster) RETURN a,r,b';
+  // Build vis edges (filtered)
+  const edges = d.edges
+    .filter(e=> _graphFilter==='all' || e.type===_graphFilter)
+    .map((e,i)=>({
+      id: i,
+      from: e.from, to: e.to,
+      label: e.label,
+      title: e.label,
+      color: { color: (_EDGE_COLORS[e.type]||'#475569')+'88', highlight: _EDGE_COLORS[e.type]||'#94a3b8' },
+      width: 1 + (e.weight||0.5)*2.5,
+      smooth: { type:'continuous', roundness:0.2 },
+      font: { color:'#64748b', size:9, strokeWidth:2, strokeColor:'#040810', align:'middle' },
+      _type: e.type,
+    }));
 
-  const config = {
-    containerId: 'neovisContainer',
-    neo4j: {
-      serverUrl:      'bolt://localhost:7687',
-      serverUser:     'neo4j',
-      serverPassword: 'changeme123',
+  const data = {
+    nodes: new vis.DataSet(nodes),
+    edges: new vis.DataSet(edges),
+  };
+  const options = {
+    nodes: { shape:'dot', scaling:{ min:14, max:45 } },
+    edges: { selectionWidth: 2 },
+    physics: {
+      enabled: true,
+      barnesHut: { gravitationalConstant:-12000, centralGravity:0.25, springLength:140, springConstant:0.05, damping:0.4, avoidOverlap:0.6 },
+      stabilization: { enabled:true, iterations:300, updateInterval:30, fit:true },
+      timestep: 0.4,
     },
-    visConfig: {
-      nodes: {
-        shape: 'dot',
-        font: { color: '#e2e8f0', size: 13, face: 'system-ui' },
-        borderWidth: 2,
-        borderWidthSelected: 3,
-      },
-      edges: {
-        arrows: { to: { enabled: false } },
-        smooth: { type: 'curvedCW', roundness: 0.2 },
-        font: { color: '#64748b', size: 10, align: 'middle' },
-      },
-      physics: {
-        barnesHut: { gravitationalConstant: -8000, springLength: 120, springConstant: 0.04 },
-        stabilization: { iterations: 200, updateInterval: 25 },
-      },
-      interaction: { hover: true, tooltipDelay: 200 },
-      background: { color: '#040810' },
-    },
-    labels: {
-      ThreatCluster: {
-        label:     'short_label',
-        color:     { background: 'severity',
-                     mapping: { critical:'#ef4444', high:'#f97316', medium:'#f59e0b', low:'#475569', unknown:'#334155' } },
-        size:      'member_count',
-        sizeCypher: 'MATCH (n) WHERE id(n) = id(n) RETURN n.member_count * 2',
-        [NeoVis.NEOVIS_ADVANCED_CONFIG]: {
-          function: {
-            title: n => `<b>${n.properties.label}</b><br>Severity: ${n.properties.severity}<br>Confidence: ${n.properties.confidence}<br>Members: ${n.properties.member_count} scans<br>${n.properties.summary||''}`,
-            color: { background: n => {
-              const m = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#334155'};
-              return m[n.properties.severity] || '#334155';
-            }, border: n => {
-              const gc = n.properties.group_color || '#475569';
-              return gc;
-            }},
-          },
-        },
-      },
-    },
-    relationships: {
-      SHARED_IP:     { color: '#10b981', caption: true },
-      SHARED_DOMAIN: { color: '#06b6d4', caption: true },
-      SHARED_TTPS:   { color: '#f59e0b', caption: false, [NeoVis.NEOVIS_ADVANCED_CONFIG]: { static: { width: 1 } } },
-    },
-    initialCypher: q,
+    interaction: { hover:true, tooltipDelay:120, navigationButtons:false, keyboard:false, zoomView:true, dragView:true },
+    layout: { improvedLayout:true },
   };
 
-  try {
-    if(_viz) { _viz.clearNetwork(); }
-    _viz = new NeoVis.default(config);
-    _viz.render();
-  } catch(e) {
-    document.getElementById('neovisContainer').innerHTML =
-      `<div style="padding:30px;text-align:center;font-size:12px;color:#64748b">
-        Could not connect to Neo4j at localhost:7687.<br>
-        Make sure Neo4j is running: <code style="color:#3b82f6">docker compose up -d neo4j</code><br><br>
-        <a href="http://localhost:7474" target="_blank" style="color:#3b82f6">Open Neo4j Browser ↗</a>
-      </div>`;
-  }
+  if(_visNetwork){ _visNetwork.destroy(); _visNetwork=null; }
+  _visNetwork = new vis.Network(el, data, options);
+
+  // Stop physics once stabilized so it sits still
+  _visNetwork.once('stabilizationIterationsDone', ()=>{ _visNetwork.setOptions({physics:{enabled:false}}); _visNetwork.fit({animation:{duration:400}}); });
+
+  // Click → detail panel
+  _visNetwork.on('click', params=>{
+    if(params.nodes.length){
+      const node = nodes.find(n=>n.id===params.nodes[0]);
+      _showGraphSide(node ? node._raw : null);
+    } else {
+      _showGraphSide(null);
+    }
+  });
 }
 
-function _runCypher(){
-  const q = document.getElementById('cipherInput')?.value;
-  if(!q) return;
-  if(!_graphInitialized){ _initNeovis(); return; }
-  _renderNeovis(q);
+function _filterGraph(filter, btn){
+  _graphFilter = filter;
+  document.querySelectorAll('.gfbtn').forEach(b=>{ b.style.background='transparent'; });
+  if(btn) btn.style.background = filter==='all' ? '#1e293b' : (btn.style.color+'22');
+  if(btn && filter==='all') btn.style.background='#1e293b';
+  _renderVis();
 }
 
+function _graphFit(){ if(_visNetwork) _visNetwork.fit({animation:{duration:400}}); }
+
+function _showGraphSide(n){
+  const panel = document.getElementById('graphSidePanel');
+  if(!panel) return;
+  if(!n){ panel.style.width='0'; panel.innerHTML=''; return; }
+  panel.style.width='280px';
+  const cc=_CONF_COLORS[n.confidence]||'#6b7280', sc=_SEV_NODE[n.severity]||'#475569';
+  const zones = (n.surface_zones||'').split(',').filter(Boolean);
+  const ttps  = (n.ttp_ids||'').split(',').filter(Boolean);
+  const doms  = (n.domains||'').split(',').filter(Boolean);
+  panel.innerHTML = `<div style="padding:16px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="width:12px;height:12px;border-radius:50%;background:${sc};display:inline-block;flex-shrink:0"></span>
+      <span style="font-size:13px;font-weight:700;color:#f1f5f9">${n.label}</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <span style="background:${sc}20;color:${sc};border:1px solid ${sc}55;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700">${(n.severity||'').toUpperCase()}</span>
+      <span style="background:${cc}15;color:${cc};border:1px solid ${cc}40;border-radius:5px;padding:2px 8px;font-size:10px">${n.confidence}</span>
+    </div>
+    ${n.summary?`<div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-bottom:12px">${n.summary}</div>`:''}
+    <div style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Campaign</div>
+    <div style="font-size:12px;color:#cbd5e1;margin-bottom:12px">${n.member_count} emails</div>
+    ${zones.length?`<div style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Surface Zones</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">${zones.map(z=>`<span style="background:#0c1929;border:1px solid #1d4ed844;border-radius:4px;padding:1px 7px;font-size:10px;color:#60a5fa">${z.replace(/_/g,' ')}</span>`).join('')}</div>`:''}
+    ${ttps.length?`<div style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">ATT&CK</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">${ttps.map(t=>`<span style="background:#1c1007;border:1px solid #f59e0b44;border-radius:4px;padding:1px 7px;font-size:10px;color:#f59e0b">${t}</span>`).join('')}</div>`:''}
+    ${doms.length?`<div style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Domains</div>
+      <div style="font-size:11px;color:#cbd5e1;font-family:monospace;word-break:break-all">${doms.join('<br>')}</div>`:''}
+  </div>`;
+}
+
+async function _syncNeo4j(reload){
+  const badge = document.getElementById('graphEdgeBadge');
+  try{
+    await api('/api/intel/graph/sync', {method:'POST'});
+  }catch(e){}
+  if(reload){ await _loadGraphData(); }
+}
 
 async function exportOrgBrief(){
   toast('Generating leadership brief…','info');
