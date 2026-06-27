@@ -89,7 +89,14 @@ class PhishGuardSMTPHandler:
         # ── Rate limiting — protects against email bombing ───────────────────
         peer_ip  = session.peer[0] if session.peer else "unknown"
         rcpt_str = original_rcpts[0] if original_rcpts else ""
-        allowed, reason, tarpit = _rl_check(peer_ip, mail_from, rcpt_str)
+        # Reconciliation: once an inbox is in active bombing mode, the triage engine
+        # owns its mail (Tier-1 fast-tracked, noise buffered). Skip the per-recipient
+        # limit for it so the limit can't 421 (and thus bury) the OTP. Other limits +
+        # TCP-drop still guard the gateway.
+        from app.security.bombing_detector import is_under_attack as _iua
+        _skip_rcpt_limit = _iua(rcpt_str)
+        allowed, reason, tarpit = _rl_check(peer_ip, mail_from, rcpt_str,
+                                            skip_recipient_limit=_skip_rcpt_limit)
         if not allowed:
             logger.warning("smtp_rate_limited", peer=peer_ip, sender=mail_from,
                            rcpt=rcpt_str, tarpit=tarpit, reason=reason)

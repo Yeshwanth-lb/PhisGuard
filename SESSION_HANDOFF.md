@@ -503,3 +503,43 @@ pubsub_watcher.py, historical_scanner.py. Then output: (1) state-diff spec-vs-co
 (2) phased plan, (3) audit answers (a)(b). STOP for approval before ANY code.
 Parser files that reference dmarc/spf/dkim: app/parser/email_parser.py, app/models.py,
 app/pipeline.py, app/layer1/osint_v2.py, app/layer0/pre_filter.py, app/layer2_ai/structural.py.
+
+---
+
+## 14. Email-Bombing Triage Engine — COMPLETE (2026-06-27)
+
+Built on branch `feature/bombing-triage-engine` (off master; not yet pushed/merged).
+Replaces the old "hold in Pending Review" bombing response with **asymmetric triage**:
+isolate the noise, accelerate authenticated high-signal mail, never drop or hold.
+Commits: `c097551` (Phase 1A+1B), `ad474a5` (demo), `dc48bcd` (Phase 2), + Phase 3.
+
+**New/changed code**
+- `app/security/critical_sender.py` (NEW) — real DMARC alignment via cryptographic DKIM
+  verification (dkimpy); works even as the receiving MTA (no upstream Authentication-
+  Results needed). Protected-TLD claim that fails alignment → `spoofed_critical`. SPF
+  deferred (needs live peer IP). Fail-closed. checkdmarc optional.
+- `app/security/bombing_triage.py` (NEW) — three-tier classifier (Tier 1 authenticated-
+  only; Tier 2 five structural noise signals; Tier 3 safety valve). Subject+headers only.
+- `app/security/bombing_pipeline.py` (NEW) — shared `evaluate()/buffer()/
+  ingest_gmail_message()` called by BOTH the SMTP gateway and the Gmail paths.
+- `app/security/bombing_detector.py` — third "slow-drip" window; sliding cooldown
+  (replaces fixed HOLD); `is_first_contact()`; `_now()` clock seam.
+- `app/storage.py` — WAL + `synchronous=NORMAL`; durable `bombing_buffer` table + helpers.
+- `app/layer7_gmail/smtp_receiver.py` — pending-review bombing branch removed; calls the
+  shared pipeline; TCP hard-drop; background release worker.
+- `app/security/smtp_rate_limiter.py` — RLock (fixed a self-deadlock that hung the handler
+  during a distributed bomb); empty-rcpt no longer collectively throttled; `skip_recipient_
+  limit` reconciliation (under-attack inbox bypasses per-rcpt limit so it can't bury the
+  OTP); `BOMBING_DEMO_MODE`.
+- `app/main.py` — release worker started on boot; `/health` buffer state; `/api/bombing/active`.
+- Config flag `INBOX_INGESTION_ENABLED` (default off → Gmail ingestion dormant).
+
+**Tests:** ~95+ bombing-related tests green (detector, critical-sender, buffer/WAL, triage,
+pipeline, gmail-ingestion, release, tcp-drop, receiver acceptance, reconciliation, rate
+limiter). Live logic demo: `PYTHONPATH=. python3 scripts/demo_bombing_triage.py`.
+
+**Docs:** RUNBOOK.md → "Runbook: Email-Bombing Triage Engine" (tiers, window interaction,
+demo mode, env-var table, troubleshooting). See also EMAIL_BOMBING_EXPLANATION.md.
+
+**Not done:** real end-to-end mail-delivery test (needs the app restarted on this branch +
+Gmail delivery creds). DKIM alignment is unit-tested; the demo simulates it offline.

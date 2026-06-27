@@ -166,6 +166,98 @@ If renew fails with 401/403: Service account credentials in `credentials/sa.json
 
 ---
 
+## Runbook: Email-Bombing Triage Engine
+
+**What it does:** When an inbox is flooded to bury a real alert (OTP / bank notice),
+PhishGuard isolates the noise and accelerates authenticated high-signal mail instead of
+blocking or holding. Detection runs three cascading windows; mail arriving during an
+attack is triaged into three tiers; nothing is dropped or held for a human.
+
+**Tiers (only applied while a recipient is in active bombing mode):**
+- **Tier 1 — IMPORTANT:** an *authenticated* critical sender (protected TLD or trusted
+  domain **AND** cryptographically DMARC/DKIM-aligned). Delivered instantly, tagged
+  `[PhishGuard-Priority]`, never buffered. A protected-TLD claim that FAILS alignment →
+  `spoofed_critical` → routed to quarantine (phishing). Subject words alone never qualify.
+- **Tier 2 — NOISE:** structural signals (List-Unsubscribe, Precedence:bulk/List-Id,
+  first-contact domain, ESP fingerprint, new domain). Buffered, released labeled
+  `[Possible Bombing Noise]`.
+- **Tier 3 — UNCERTAIN:** everything else (default favors delivery). Buffered, released
+  labeled `[Received During Mail Bomb]`. A subject-only OTP from an unauthenticated
+  sender lands here — delivered + labeled, never fast-tracked.
+
+**Detection windows (any one trips bombing mode):** fast `5 subscription/30s`,
+standard `score≥60 over 20/5min`, slow-drip `100/1h`. Mode is a **sliding cooldown**:
+it stays active while qualifying mail keeps arriving and auto-exits after
+`BOMBING_MODE_COOLDOWN_SECS` of quiet.
+
+**Durability:** the buffer is SQLite (WAL mode) so it survives a restart mid-bomb. The
+release worker (daemon) delivers buffered mail labeled once it ages past
+`BOMBING_ANALYSIS_WINDOW_SECS`, then purges.
+
+### Rate limiter ↔ bombing windows (IMPORTANT interaction)
+The SMTP rate limiter (per-IP 10/60s, per-domain 20/3600s, **per-recipient 30/60s**,
+global 60/60s) sits *in front of* the bombing engine. These are reconciled so they
+don't mask each other:
+- The bombing **volume** window (20/5min) and **velocity** (5/30s) trip *before* the
+  per-recipient limit (30/60s), so bombing mode activates first.
+- **Once an inbox is in bombing mode, the per-recipient limit is bypassed for it**
+  (`skip_recipient_limit`), so the limit can never 421 — and thereby bury — the OTP.
+  Per-IP, per-domain, global limits and the TCP hard-drop still protect the gateway.
+- TCP hard-drop: an IP that exceeds the 421 boundary `>BOMBING_TCP_DROP_THRESHOLD`
+  times in `BOMBING_TCP_DROP_WINDOW_SECS` has its socket dropped (connection-pool
+  protection); reset by any allowed email.
+
+### Demo safety
+A real demo bomb (~25 emails to one inbox) would otherwise be 421'd by the
+per-recipient limit before the detector sees enough. For a demo run set
+`BOMBING_DEMO_MODE=1` — rate-limit **blocking is disabled** (arrivals still recorded,
+burst alerts still fire, each would-be block logged as `smtp_rate_limit_demo_bypass`).
+**Never enable in production** (logs `smtp_rate_limiter_DEMO_MODE_ON` at startup).
+
+### Observability
+- `GET /health` → `bombing_detector` (windows + active attacks) and `bombing_buffer`
+  (per-recipient tier counts, release window).
+- `GET /api/bombing/active` → active events + per-recipient tier breakdown (banner).
+- `GET /api/bombing/status` → detector thresholds + active attacks.
+- `POST /api/bombing/{rcpt}/clear` → manually clear a recipient's bombing mode.
+- Key log events: `inbox_bombing_started`, `smtp_bombing_triage`,
+  `smtp_bombing_priority_delivered`, `smtp_bombing_buffered`,
+  `smtp_bombing_spoofed_critical`, `bombing_release_cycle`, `smtp_tcp_dropped`.
+
+### Gmail ingestion (dormant)
+`INBOX_INGESTION_ENABLED=false` by default → no Gmail API calls. When true, Gmail
+push + historical mail feed the SAME pipeline (same tiers/labels/alerts). Note: a
+historical backfill arrives as a burst that can look like a bomb — prefer enabling for
+the live push path.
+
+### Tunable env vars (all have documented defaults)
+| Var | Default | Meaning |
+|---|---|---|
+| `BOMBING_VOLUME_THRESHOLD` | 20 | emails in standard 5-min window |
+| `BOMBING_VELOCITY_THRESHOLD` / `_WINDOW_SECS` | 5 / 30 | fast subscription-burst window |
+| `BOMBING_SLOWDRIP_THRESHOLD` / `_WINDOW_SECS` | 100 / 3600 | slow-drip window |
+| `BOMBING_MODE_COOLDOWN_SECS` | 300 | quiet period before mode auto-exits |
+| `BOMBING_ANALYSIS_WINDOW_SECS` | 300 | buffer hold before labeled release |
+| `BOMBING_RELEASE_POLL_SECS` | 15 | release-worker poll interval |
+| `BOMBING_PROTECTED_TLDS` | .bank,.gov,… | TLDs eligible for Tier 1 (if aligned) |
+| `BOMBING_ESP_FINGERPRINTS` | mailchimp,sendgrid,… | Received-header ESP markers (Tier 2) |
+| `BOMBING_TIER2_WHOIS` / `_NEW_DOMAIN_DAYS` | false / 30 | optional new-domain WHOIS check |
+| `BOMBING_TCP_DROP_THRESHOLD` / `_WINDOW_SECS` | 3 / 60 | TCP hard-drop escalation |
+| `BOMBING_DEMO_MODE` | (off) | disable rate-limit blocking for demos |
+| `INBOX_INGESTION_ENABLED` | false | feed Gmail-ingested mail to the engine |
+
+### Troubleshooting
+- **OTP not delivered during a bomb:** confirm the sender is genuinely DMARC-aligned
+  (`critical_sender` requires a verified DKIM signature). An unauthenticated OTP is
+  Tier 3 by design — delivered but soft-labeled, look in the inbox for
+  `[Received During Mail Bomb]`.
+- **Buffered mail not releasing:** check the `bombing-release` daemon is running and
+  `bombing_release_cycle` appears in logs; verify `BOMBING_ANALYSIS_WINDOW_SECS`.
+- **Demo bomb gets 421'd:** set `BOMBING_DEMO_MODE=1` (and/or raise `SMTP_RATE_*`).
+- **"database is locked":** confirm WAL is on — `PRAGMA journal_mode` should be `wal`.
+
+---
+
 ## Routine Maintenance
 
 ### Weekly

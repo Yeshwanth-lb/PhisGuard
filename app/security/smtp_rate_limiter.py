@@ -53,6 +53,16 @@ TCP_DROP_THRESHOLD = int(_drop_os.environ.get("BOMBING_TCP_DROP_THRESHOLD", 3))
 TCP_DROP_WINDOW    = int(_drop_os.environ.get("BOMBING_TCP_DROP_WINDOW_SECS", 60))
 _drop_windows: dict[str, deque] = {}
 
+# Demo mode: disable rate-limit BLOCKING so a demo bomb actually reaches the bombing
+# detector instead of being 421'd at the door (the per-recipient 30/60s limit would
+# otherwise pre-empt a 25-email demo). Arrivals are still recorded and burst alerts
+# still fire — only the 421 is suppressed, and each would-be block is logged loudly so
+# nobody ships with this on. NEVER enable in production.
+DEMO_MODE = _drop_os.environ.get("BOMBING_DEMO_MODE", "").lower() in ("1", "true", "yes")
+if DEMO_MODE:
+    logger.warning("smtp_rate_limiter_DEMO_MODE_ON",
+                   msg="rate-limit blocking is DISABLED — demo only, never in production")
+
 # ── State ─────────────────────────────────────────────────────────────────────
 # RLock (reentrant): check() holds the lock for its whole body and calls
 # _alert_rcpt_bombing(), which re-acquires it to read/set the alert-suppress map.
@@ -82,7 +92,18 @@ def _sender_domain(sender_email: str) -> str:
     return addr.split("@")[-1] if "@" in addr else addr
 
 
-def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str, int]:
+def _block(reason_key: str, msg: str, **fields):
+    """Return the 421 block tuple — unless DEMO_MODE, in which case log loudly and
+    return None so the caller proceeds (no 421). Keeps demo bombs reaching the detector."""
+    if DEMO_MODE:
+        logger.warning("smtp_rate_limit_demo_bypass", limit=reason_key, **fields)
+        return None
+    logger.warning(f"smtp_rate_limit_{reason_key}", **fields)
+    return (False, msg, TARPIT_SECS)
+
+
+def check(peer_ip: str, sender_email: str, rcpt_to: str = "",
+          skip_recipient_limit: bool = False) -> tuple[bool, str, int]:
     """
     Return (allowed, reason, tarpit_secs).
 
@@ -92,6 +113,12 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
 
     Tarpit slows automated bombing tools: a tool sending 500 emails/min
     waits TARPIT_SECS per rejection → throughput drops to ~30/min.
+
+    skip_recipient_limit — set by the caller when the recipient is ALREADY in active
+    bombing mode. The smarter triage engine then owns that inbox's mail (Tier-1
+    fast-tracked, noise buffered), so the blunt per-recipient limit must NOT pre-empt
+    it — otherwise the limit could 421 the very OTP the bomb is trying to bury. Per-IP,
+    per-domain and global limits (and the TCP-drop) still protect the gateway.
     """
     now    = time.monotonic()
     domain = _sender_domain(sender_email)
@@ -107,8 +134,9 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
         ip_dq = _ip_windows[peer_ip]
         ip_count = _sliding_count(ip_dq, 60, now)
         if ip_count >= PER_IP_LIMIT:
-            logger.warning("smtp_rate_limit_ip", ip=peer_ip, count=ip_count)
-            return False, f"421 Rate limit exceeded — {peer_ip} sent {ip_count} emails in 60s, limit {PER_IP_LIMIT}", TARPIT_SECS
+            blocked = _block("ip", f"421 Rate limit exceeded — {peer_ip} sent {ip_count} emails in 60s, limit {PER_IP_LIMIT}", ip=peer_ip, count=ip_count)
+            if blocked:
+                return blocked
 
         # ── Per-domain ────────────────────────────────────────────────────────
         if domain not in _dom_windows:
@@ -116,27 +144,31 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
         dom_dq = _dom_windows[domain]
         dom_count = _sliding_count(dom_dq, 3600, now)
         if dom_count >= PER_DOMAIN_LIMIT:
-            logger.warning("smtp_rate_limit_domain", domain=domain, count=dom_count)
-            return False, f"421 Rate limit exceeded — {domain} sent {dom_count} emails this hour, limit {PER_DOMAIN_LIMIT}", TARPIT_SECS
+            blocked = _block("domain", f"421 Rate limit exceeded — {domain} sent {dom_count} emails this hour, limit {PER_DOMAIN_LIMIT}", domain=domain, count=dom_count)
+            if blocked:
+                return blocked
 
         # ── Per-recipient (stops distributed bombing) ─────────────────────────
-        # Skipped entirely when there is no recipient (see note above).
+        # Skipped when there is no recipient, or when the inbox is already under
+        # active bombing triage (see skip_recipient_limit in the docstring).
         rcpt_dq = None
         if rcpt:
             if rcpt not in _rcpt_windows:
                 _rcpt_windows[rcpt] = deque()
             rcpt_dq = _rcpt_windows[rcpt]
             rcpt_count = _sliding_count(rcpt_dq, 60, now)
-            if rcpt_count >= PER_RCPT_LIMIT:
-                logger.warning("smtp_rate_limit_rcpt", rcpt=rcpt, count=rcpt_count)
+            if rcpt_count >= PER_RCPT_LIMIT and not skip_recipient_limit:
                 _alert_rcpt_bombing(rcpt, rcpt_count, peer_ip, sender_email)
-                return False, f"421 Rate limit exceeded — inbox {rcpt} received {rcpt_count} emails in 60s, limit {PER_RCPT_LIMIT}", TARPIT_SECS
+                blocked = _block("rcpt", f"421 Rate limit exceeded — inbox {rcpt} received {rcpt_count} emails in 60s, limit {PER_RCPT_LIMIT}", rcpt=rcpt, count=rcpt_count)
+                if blocked:
+                    return blocked
 
         # ── Global ────────────────────────────────────────────────────────────
         global_count = _sliding_count(_global_window, 60, now)
         if global_count >= GLOBAL_LIMIT:
-            logger.warning("smtp_rate_limit_global", count=global_count)
-            return False, f"421 Service busy — global rate limit {GLOBAL_LIMIT}/min reached, try again shortly", TARPIT_SECS
+            blocked = _block("global", f"421 Service busy — global rate limit {GLOBAL_LIMIT}/min reached, try again shortly", count=global_count)
+            if blocked:
+                return blocked
 
         # ── Record this email ─────────────────────────────────────────────────
         ip_dq.append(now)
