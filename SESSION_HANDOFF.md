@@ -416,3 +416,90 @@ c560fe7 feat: Neo4j graph database + Neovis.js
 ---
 
 *Resume: read this file → `docker compose ps` (verify 15 containers healthy) → check `http://localhost:8000` Profiling tab (126 profiles live, Neo4j graph) → `python3 scripts/test_smtp_gateway.py` → press F5.*
+
+---
+
+## 13. PENDING (next session) — Email-Bombing Triage Engine rework
+
+**Status:** APPROVED to build, phased, NOT started. Was mid-audit when context ran out.
+User gave a full spec + 3 binding decisions. Build with STOP gates after each phase.
+
+### The reframe (why)
+Current bombing response = HOLD suspicious mail in Pending Review → that BURIES the OTP,
+which is exactly what the attacker wants. New design: ASYMMETRIC DEFENSE — isolate noise,
+ACCELERATE high-signal mail, NEVER drop/hold anything. Everything delivers (labeled) within
+the window. Keep existing DETECTION (volume/diversity/pattern + velocity + cold-start);
+REPLACE the RESPONSE.
+
+### Three binding user decisions
+1. **Tier-2 noise signals (CONFIRMED complete):** (a) List-Unsubscribe present, (b)
+   Precedence:bulk OR List-Id, (c) first-contact-ever sender domain, (d) ESP fingerprint in
+   Received (mailchimp/sendgrid/mailgun/amazonses/sparkpost), (e) very-new domain if WHOIS.
+   Any one → Tier 2.
+2. **DMARC — do NOT silently approximate.** Audit must report exactly what the parser
+   exposes. If only raw spf_result/dkim_result, BUILD A REAL From-domain-vs-authenticated-
+   domain alignment check (raw spf=pass does NOT catch forged From). Use checkdmarc/dkimpy
+   as fallback only when Authentication-Results header absent. If real alignment genuinely
+   out of scope → STOP and ask user, do not default to approximation.
+3. **Tier-1 evasion FIX:** subject-match ALONE does NOT qualify for Tier 1. Tier 1 (instant,
+   unbuffered, pinned) = AUTHENTICATED critical sender ONLY. Subject-only OTP/bank match from
+   unauthenticated sender → Tier 3 (delivered + soft-labeled, never buried, but NOT
+   fast-tracked/trusted). Closes throwaway-domain fake-OTP bypass.
+
+### Phase 1 (sub-split if diff too big: [detector+buffer+WAL] then [receiver+classifier+endpoints])
+- **1A Cascading windows** (bombing_detector.py): 3 concurrent windows, ANY trips bombing mode:
+  Fast 5/30s (existing velocity) · Standard score≥60 over 20 emails/5min (existing) ·
+  Slow-drip 100/1hr (NEW). Keep scoring weights + cold-start unchanged. Env-configurable.
+- **1B Durable buffer** (storage.py): PRAGMA journal_mode=WAL + synchronous=NORMAL (GLOBAL
+  change, affects all tables). Table bombing_buffer(id, recipient, scan_id, timestamp,
+  tier CHECK important/noise/uncertain, released INT DEFAULT 0, raw_email BLOB NOT NULL,
+  sender_domain, subject) + idx(recipient,released). Helpers: buffer_add, buffer_list_for_
+  recipient, buffer_mark_released, buffer_purge_expired. Survives restart. Body OUT of logs.
+  NO ack-before-persist queue (durability hole).
+- **1C critical_sender.py** (NEW): is_critical_sender(parsed)=True ONLY IF (TLD in
+  BOMBING_PROTECTED_TLDS OR domain in trusted_domains) AND DMARC-aligned pass. Claims
+  protected TLD but FAILS alignment → "spoofed_critical" → routes to PHISHING path, NOT
+  trusted. BOMBING_PROTECTED_TLDS default ".bank,.bank.in,.gov,.gov.in,.nic.in,.insurance"
+- **1D Three-tier classifier** (small testable signal fns):
+  T1 IMPORTANT (bypass buffer, instant, tag IMPORTANT_VERIFY) = is_critical_sender ONLY.
+  T2 NOISE (buffer tier='noise', deliver labeled "[Possible Bombing Noise]" after window) =
+     the 5 confirmed signals above.
+  T3 UNCERTAIN (buffer tier='uncertain', deliver labeled "[Received During Mail Bomb]") =
+     default/safety valve incl. subject-only OTP match from unauth sender. FAVOR DELIVERY.
+- **1E smtp_receiver.py:** keep rate limiter at top unchanged. ADD: IP exceeding 421
+  boundary >3 consecutive in 60s → hard-drop TCP socket (env-configurable). In bombing mode:
+  T1→deliver now skip buffer; T2/3→buffer_add (sync durable). Window-expiry worker (reuse
+  scheduler/daemon pattern) at BOMBING_ANALYSIS_WINDOW_SECS=300 releases+labels+delivers+
+  purge. Auto-exit bombing mode after BOMBING_MODE_COOLDOWN_SECS=300 no qualifying mail.
+  REMOVE old "suspicious→Pending Review" bombing branch. Normal routing unchanged.
+- **1F Surface:** extend /health with bombing state (recipients in mode, per-tier counts,
+  window countdown, which window tripped). Optional GET /api/bombing/active.
+- **Phase 1 tests:** verified .bank DMARC-aligned→T1 instant not buffered mid-bomb; spoofed
+  .bank→spoofed_critical→phishing; List-Unsub+first-contact+ESP→T2; non-English→T3 delivered;
+  slow-drip 120/1hr→hourly window; window expiry releases; buffer PERSISTS across restart
+  (WAL); mode exits after cooldown; existing 21 detector tests still pass. Mock Gmail/network.
+
+### Phase 2 — dormant Gmail ingestion (flag-gated, write+test NOW)
+INBOX_INGESTION_ENABLED=false default. Refactor detection+windows+tiering into a SHARED
+component both smtp_receiver AND pubsub_watcher/historical_scanner call. Flag off=fully
+dormant (no Gmail calls/errors). Flag on=feeds shared pipeline identically. Mock Gmail API.
+
+### Phase 3 — docs/reconciliation
+Document rate-limiter (per-rcpt 30/60s) vs bombing-windows interaction in RUNBOOK so they
+don't mask each other. Demo-safety env to raise/disable rate limits + warn if 421s appear.
+Update SESSION_HANDOFF/PROJECT_CONTEXT/RUNBOOK.
+
+### Global constraints
+Match style/structlog/async/Pydantic. Do NOT change rate-limiter behavior (counters/421/
+tarpit) beyond the TCP-drop. Don't break normal routing. NEVER buffer/delay Tier-1.
+Nothing dropped/held-indefinitely. Durable-before-ack. Body out of logs. All thresholds env-
+configurable w/ documented defaults. No real Gmail/network in tests.
+
+### Audit state when context ran out (RESUME HERE)
+First STOP gate not yet delivered. Still need to: read app/parser/email_parser.py (DMARC/
+spf/dkim exposure — answer audit Q-a), app/storage.py (journal mode + body-in-logs privacy
+rule — answer audit Q-b), bombing_detector.py, smtp_receiver.py, test_bombing_detector.py,
+pubsub_watcher.py, historical_scanner.py. Then output: (1) state-diff spec-vs-code,
+(2) phased plan, (3) audit answers (a)(b). STOP for approval before ANY code.
+Parser files that reference dmarc/spf/dkim: app/parser/email_parser.py, app/models.py,
+app/pipeline.py, app/layer1/osint_v2.py, app/layer0/pre_filter.py, app/layer2_ai/structural.py.
