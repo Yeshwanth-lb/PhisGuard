@@ -152,3 +152,82 @@ class TestVelocityDetection:
             )
         # No velocity trigger — subject doesn't match pattern
         assert not any([bd.is_under_attack("victim@co.com")])
+
+
+class TestSlowDripWindow:
+    """Cascading window #3 — low-and-slow flood under the 5-min volume gate."""
+
+    def setup_method(self): _reset()
+
+    def test_slow_drip_triggers_over_hour(self, monkeypatch):
+        """100 non-pattern emails spread 30s apart over ~50 min → hourly window fires,
+        even though no 5-min slice ever reaches VOLUME_THRESHOLD and velocity never trips."""
+        clock = {"t": 10_000.0}
+        monkeypatch.setattr(bd, "_now", lambda: clock["t"])
+        detected = False
+        for i in range(bd.SLOWDRIP_THRESHOLD):
+            _, new = bd.record("victim@co.com", f"x@d{i}.com", "Daily news digest")
+            detected = detected or new
+            clock["t"] += 30   # 100×30s = 3000s < 1h retained; ~10 per 5-min slice (<20)
+        assert detected
+        assert bd.is_under_attack("victim@co.com")
+
+    def test_slow_drip_below_threshold_does_not_fire(self, monkeypatch):
+        """One under the hourly threshold, spaced out → no detection by any window."""
+        clock = {"t": 5_000.0}
+        monkeypatch.setattr(bd, "_now", lambda: clock["t"])
+        for i in range(bd.SLOWDRIP_THRESHOLD - 1):
+            _, new = bd.record("v2@co.com", f"x@d{i}.com", "Weekly summary")
+            assert not new
+            clock["t"] += 30
+        assert not bd.is_under_attack("v2@co.com")
+
+    def test_stats_exposes_slowdrip_window(self):
+        s = bd.stats()
+        assert s["thresholds"]["slowdrip_window_secs"] == bd.SLOWDRIP_WINDOW_SECS
+        assert s["thresholds"]["slowdrip_threshold"] == bd.SLOWDRIP_THRESHOLD
+
+
+class TestSlidingCooldownAndFirstContact:
+    def setup_method(self): _reset()
+
+    def test_first_contact_true_then_false(self):
+        assert bd.is_first_contact("v@co.com", "a@new.com") is True
+        bd.record("v@co.com", "a@new.com", "hi")
+        assert bd.is_first_contact("v@co.com", "a@new.com") is False
+
+    def _trigger_bomb(self, rcpt):
+        for i in range(bd.VELOCITY_THRESHOLD):
+            bd.record(rcpt, f"x@d{i}.com", "Confirm your email")
+
+    def test_cooldown_refreshes_on_noise(self, monkeypatch):
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(bd, "_now", lambda: clock["t"])
+        self._trigger_bomb("v@co.com")
+        assert bd.is_under_attack("v@co.com")
+        clock["t"] += bd.COOLDOWN_SECS - 10
+        bd.record("v@co.com", "x@late.com", "Confirm your email")   # noise → refreshes
+        clock["t"] += bd.COOLDOWN_SECS - 10                          # would expire w/o refresh
+        assert bd.is_under_attack("v@co.com")
+
+    def test_cooldown_expires_when_quiet(self, monkeypatch):
+        clock = {"t": 2000.0}
+        monkeypatch.setattr(bd, "_now", lambda: clock["t"])
+        self._trigger_bomb("v2@co.com")
+        assert bd.is_under_attack("v2@co.com")
+        clock["t"] += bd.COOLDOWN_SECS + 1
+        assert not bd.is_under_attack("v2@co.com")
+
+    def test_high_signal_does_not_refresh_cooldown(self, monkeypatch):
+        """A lone OTP (the buried alert) must not keep bombing mode alive on its own."""
+        clock = {"t": 3000.0}
+        monkeypatch.setattr(bd, "_now", lambda: clock["t"])
+        self._trigger_bomb("v3@co.com")
+        assert bd.is_under_attack("v3@co.com")
+        clock["t"] += bd.COOLDOWN_SECS - 5
+        bd.record("v3@co.com", "alerts@bank.com", "Your one-time password is 1234")
+        clock["t"] += 10                                            # past original cooldown
+        assert not bd.is_under_attack("v3@co.com")
+
+    def test_stats_exposes_cooldown(self):
+        assert bd.stats()["thresholds"]["mode_cooldown_secs"] == bd.COOLDOWN_SECS

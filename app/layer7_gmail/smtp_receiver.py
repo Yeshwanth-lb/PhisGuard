@@ -95,6 +95,18 @@ class PhishGuardSMTPHandler:
                            rcpt=rcpt_str, tarpit=tarpit, reason=reason)
             if tarpit:
                 await asyncio.sleep(tarpit)   # slow down the bombing tool
+            # TCP hard-drop escalation: an IP that keeps blowing past the 421 limit
+            # is a tool ignoring backoff — drop the socket so it can't exhaust the
+            # connection pool. 421 + tarpit behavior above is unchanged.
+            from app.security.smtp_rate_limiter import note_rejection as _note_rej
+            if _note_rej(peer_ip):
+                try:
+                    transport = getattr(server, "transport", None)
+                    if transport:
+                        transport.close()
+                    logger.warning("smtp_tcp_dropped", peer=peer_ip)
+                except Exception:
+                    pass
             return reason  # 421 = temporary failure, MTA will retry
 
         logger.info("smtp_received", peer=str(session.peer),
@@ -103,7 +115,10 @@ class PhishGuardSMTPHandler:
         # ── Bombing detection ─────────────────────────────────────────────────
         # Parse subject from raw bytes before running pipeline so we can
         # score the subscription-pattern signal immediately on arrival.
-        from app.security.bombing_detector import record as _bomb_record
+        from app.security.bombing_detector import (
+            record as _bomb_record,
+            is_first_contact as _is_first_contact,
+        )
         try:
             from email import message_from_bytes as _mfb
             from email.policy import compat32 as _c32
@@ -112,6 +127,8 @@ class PhishGuardSMTPHandler:
         except Exception:
             _subject_preview = ""
         _rcpt_for_bomb = original_rcpts[0] if original_rcpts else ""
+        # Capture first-contact BEFORE record() — record() adds the domain to history.
+        _first_contact = _is_first_contact(_rcpt_for_bomb, mail_from)
         _under_attack, _newly_detected = _bomb_record(
             _rcpt_for_bomb, mail_from, _subject_preview
         )
@@ -137,49 +154,61 @@ class PhishGuardSMTPHandler:
         l2_verdict = result.get("l2", {}).get("verdict", final_verdict) if result.get("l2") else final_verdict
         routing_verdict = l2_verdict if l2_verdict in ("suspicious", "phishing") else final_verdict
 
-        # ── Smart bombing response ────────────────────────────────────────────
-        # During an active bombing attack the inbox is under attack to bury
-        # a critical alert. Routing logic:
-        #
-        #   is_high_signal + pipeline says clean/suspicious
-        #     → SURFACE (override suspicious — the bomb exists to hide this)
-        #   is_high_signal + pipeline says phishing
-        #     → keep as PHISHING (strong pipeline signal; don't override)
-        #   is_subscription + pipeline says clean
-        #     → HOLD (confirmed noise)
-        #   neither / unmatched
-        #     → keep pipeline verdict unchanged (default: err toward delivery)
-        if _under_attack:
-            from app.security.bombing_detector import (
-                is_high_signal as _is_high_signal,
-                _matches_subscription_pattern as _is_subscription,
-            )
-            if _is_high_signal(_subject_preview):
-                # Surface regardless of pipeline verdict during an active bombing attack.
-                # The bombing context changes the threat model: the attacker started the
-                # flood specifically to bury this kind of email. A genuine OTP or bank
-                # alert from an unfamiliar domain scores "suspicious" or even "phishing"
-                # (new domain + banking subject = phishing-pattern to Claude) but must
-                # still reach the user. L1 hard hits (VirusTotal, URLhaus, PhishTank)
-                # are not affected — if L1 already quarantined the email, the pipeline
-                # never reaches this code. We only override L2/ML verdicts here.
-                routing_verdict = "clean"
-                logger.info("smtp_bombing_high_signal_delivered",
-                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60],
-                            pipeline_was=l2_verdict)
-            elif _is_subscription(_subject_preview) and routing_verdict == "clean":
-                routing_verdict = "suspicious"
-                logger.info("smtp_bombing_subscription_held",
-                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
-            elif routing_verdict == "clean":
-                # Unmatched subject, clean verdict — surface by default.
-                logger.info("smtp_bombing_unmatched_surfaced",
-                            rcpt=_rcpt_for_bomb, subject=_subject_preview[:60])
-
-        # Extract metadata for logging/queue
+        # Extract metadata for logging/queue/buffer (needed by the triage block below)
         parsed  = result.get("parsed") or {}
         sender  = str(parsed.get("from_header", mail_from) or mail_from)
         subject = str(parsed.get("subject", "") or "")
+        sender_domain = str(parsed.get("sender_domain", "") or "")
+
+        # ── Bombing triage (asymmetric response) ──────────────────────────────
+        # During an active bomb the inbox is flooded to bury one real alert. We
+        # accelerate authenticated high-signal mail (Tier 1), buffer the structural
+        # noise (Tier 2) and the ambiguous remainder (Tier 3) for labeled release —
+        # nothing is dropped or held for a human. Normal (non-bombing) routing below
+        # is untouched. See app/security/bombing_triage.py.
+        if _under_attack:
+            from app.security.bombing_triage import classify as _classify
+            tri = _classify(parsed, raw_bytes, _first_contact)
+            logger.info("smtp_bombing_triage", rcpt=_rcpt_for_bomb,
+                        action=tri.action, tier=tri.tier, reason=tri.reason,
+                        subject=subject[:60])
+
+            if tri.action == "deliver_now":
+                # TIER 1 — authenticated critical sender. Deliver instantly, tagged,
+                # NEVER buffered, regardless of L2/ML verdict. L1 hard hits never reach
+                # here (the pipeline would have quarantined first).
+                try:
+                    storage.save_scan(scan_id, result, parsed)
+                except Exception as _exc:
+                    logger.warning("smtp_scan_save_err", error=str(_exc))
+                tagged = _tag_subject(raw_bytes, tri.label)
+                from app.layer7_gmail.gmail_client import deliver_to_inbox
+                if not deliver_to_inbox(self.settings, tagged, "PhishGuard-Priority"):
+                    await _relay_raw(tagged, mail_from, original_rcpts, self.settings)
+                logger.info("smtp_bombing_priority_delivered", rcpt=_rcpt_for_bomb,
+                            subject=subject[:60])
+                return "250 OK"
+
+            if tri.action == "buffer":
+                # TIER 2/3 — park in the durable buffer; the window worker releases it
+                # labeled. Synchronous write BEFORE acknowledging — no ack-before-persist.
+                try:
+                    storage.save_scan(scan_id, result, parsed)
+                except Exception as _exc:
+                    logger.warning("smtp_scan_save_err", error=str(_exc))
+                storage.buffer_add(
+                    buffer_id=str(_uuid.uuid4()),
+                    recipient=_rcpt_for_bomb, scan_id=scan_id, tier=tri.tier,
+                    raw_email=raw_bytes, sender_domain=sender_domain, subject=subject,
+                )
+                logger.info("smtp_bombing_buffered", rcpt=_rcpt_for_bomb, tier=tri.tier)
+                return "250 OK"
+
+            # tri.action == "phishing" — protected-TLD spoof (claimed but failed DMARC
+            # alignment). Fall through to normal routing as phishing → quarantine.
+            routing_verdict = "phishing"
+            logger.warning("smtp_bombing_spoofed_critical", rcpt=_rcpt_for_bomb,
+                           sender=sender, subject=subject[:60])
 
         # Screenshot path if sandbox ran
         screenshot_path = f"data/screenshots/{scan_id}.png"
@@ -262,6 +291,89 @@ async def start_smtp_server(analyze_fn, settings) -> object | None:
     except Exception as exc:
         logger.warning("smtp_start_failed", error=str(exc))
         return None
+
+
+# ── Bombing buffer release worker ──────────────────────────────────────────────
+# Buffered Tier-2/3 mail is released — labeled — once it has aged past the analysis
+# window. Runs as a background daemon so release is automatic and independent of
+# inbound traffic; the buffer is durable (SQLite) so nothing is lost across restarts.
+import os as _rel_os
+
+RELEASE_WINDOW_SECS = int(_rel_os.environ.get("BOMBING_ANALYSIS_WINDOW_SECS", 300))
+RELEASE_POLL_SECS   = int(_rel_os.environ.get("BOMBING_RELEASE_POLL_SECS", 15))
+
+_TIER_LABELS = {
+    "noise":     "[Possible Bombing Noise]",
+    "uncertain": "[Received During Mail Bomb]",
+}
+
+
+def _parse_mail_from(raw: bytes) -> str:
+    import re as _re
+    try:
+        msg = message_from_bytes(raw, policy=compat32)
+        m = _re.search(r"[\w.+-]+@[\w.-]+", str(msg.get("From", "") or ""))
+        return m.group(0) if m else ""
+    except Exception:
+        return ""
+
+
+def _release_due(settings) -> int:
+    """Release every buffered message older than the window, labeled by tier.
+    Returns how many were released. Idempotent and safe to call repeatedly."""
+    from app import storage
+    from app.layer7_gmail.gmail_client import deliver_to_inbox
+
+    try:
+        due = storage.buffer_list_due(RELEASE_WINDOW_SECS)
+    except Exception as exc:
+        logger.warning("bombing_release_list_err", error=str(exc))
+        return 0
+
+    released = 0
+    for row in due:
+        try:
+            label  = _TIER_LABELS.get(row.get("tier"), _TIER_LABELS["uncertain"])
+            tagged = _tag_subject(row["raw_email"], label)
+            ok = deliver_to_inbox(settings, tagged, "PhishGuard-Released")
+            if not ok:
+                mail_from = _parse_mail_from(row["raw_email"])
+                try:
+                    asyncio.run(_relay_raw(tagged, mail_from, [row["recipient"]], settings))
+                except Exception as exc:
+                    logger.warning("bombing_release_relay_err", id=row.get("id"),
+                                   error=str(exc))
+            storage.buffer_mark_released(row["id"])
+            released += 1
+        except Exception as exc:
+            logger.warning("bombing_release_item_err", id=row.get("id"), error=str(exc))
+
+    if released:
+        try:
+            storage.buffer_purge_expired()
+        except Exception as exc:
+            logger.warning("bombing_release_purge_err", error=str(exc))
+        logger.info("bombing_release_cycle", released=released)
+    return released
+
+
+def start_release_worker(settings):
+    """Daemon thread that releases buffered bombing mail past the analysis window."""
+    import threading
+    stop = threading.Event()
+
+    def _loop():
+        while not stop.is_set():
+            try:
+                _release_due(settings)
+            except Exception as exc:
+                logger.warning("bombing_release_loop_err", error=str(exc))
+            stop.wait(RELEASE_POLL_SECS)
+
+    threading.Thread(target=_loop, daemon=True, name="bombing-release").start()
+    logger.info("bombing_release_worker_started",
+                window_secs=RELEASE_WINDOW_SECS, poll_secs=RELEASE_POLL_SECS)
+    return stop
 
 
 async def deliver_pending(pending_id: str, settings, reviewed_by: str = "soc") -> dict:

@@ -72,12 +72,33 @@ VOLUME_THRESHOLD       = _int  ("BOMBING_VOLUME_THRESHOLD",       20)
 DIVERSITY_RATIO        = _float("BOMBING_DIVERSITY_RATIO",       0.70)
 PATTERN_RATIO          = _float("BOMBING_PATTERN_RATIO",         0.60)
 DETECT_SCORE_THRESHOLD = _int  ("BOMBING_DETECT_SCORE",           60)
-HOLD_MINUTES           = _int  ("BOMBING_HOLD_MINUTES",           20)
+HOLD_MINUTES           = _int  ("BOMBING_HOLD_MINUTES",           20)   # legacy, informational
+# Bombing MODE is now a sliding cooldown, not a fixed hold: it tracks the actual
+# attack. Mode stays active while qualifying (bombing-ish) mail keeps arriving and
+# auto-exits after COOLDOWN_SECS of quiet. This replaces the old fixed HOLD window
+# so mode neither ends mid-attack nor lingers after a short burst.
+COOLDOWN_SECS          = _int  ("BOMBING_MODE_COOLDOWN_SECS",    300)
 ALERT_SUPPRESS_SECS    = _int  ("BOMBING_ALERT_SUPPRESS_SECS",   600)
 VELOCITY_WINDOW        = _int  ("BOMBING_VELOCITY_WINDOW_SECS",   30)
 VELOCITY_THRESHOLD     = _int  ("BOMBING_VELOCITY_THRESHOLD",      5)
+# Slow-drip window: a single 5-min window is evadable by throttling just under the
+# volume threshold. The hourly window catches a low-and-slow flood that never trips
+# the fast or standard windows. Detection fires if ANY of the three windows crosses.
+SLOWDRIP_WINDOW_SECS   = _int  ("BOMBING_SLOWDRIP_WINDOW_SECS", 3600)
+SLOWDRIP_THRESHOLD     = _int  ("BOMBING_SLOWDRIP_THRESHOLD",    100)
 COLD_START_MIN_HISTORY = _int  ("BOMBING_COLD_START_MIN_HISTORY", 10)
 MAX_SEEN_DOMAINS       = _int  ("BOMBING_MAX_SEEN_DOMAINS",      500)
+
+# Arrivals are retained for the widest window so all three can be evaluated from one
+# deque. The standard/velocity windows take time-bounded subsets of it.
+RETENTION_SECS = max(WINDOW_SECS, SLOWDRIP_WINDOW_SECS, VELOCITY_WINDOW)
+
+
+# Clock seam — indirection so tests can drive the three time windows without
+# real-time waits (e.g. simulating a 1-hour slow-drip). Production calls
+# time.monotonic() exactly as before.
+def _now() -> float:
+    return time.monotonic()
 
 # ── Subscription subject patterns (confidence booster, not hard gate) ─────────
 _SUBSCRIPTION_RES = [
@@ -191,7 +212,9 @@ def _get_or_create(rcpt: str) -> _RecipientState:
 
 
 def _prune(arrivals: deque, now: float) -> None:
-    while arrivals and arrivals[0][0] < now - WINDOW_SECS:
+    # Retain to the widest window so the standard and velocity windows can be
+    # taken as time-bounded subsets, and the slow-drip window sees the full hour.
+    while arrivals and arrivals[0][0] < now - RETENTION_SECS:
         arrivals.popleft()
 
 
@@ -211,17 +234,22 @@ def record(rcpt: str, sender_email: str, subject: str) -> tuple[bool, bool]:
     rcpt       = rcpt.strip().lower()
     domain     = _sender_domain(sender_email)
     is_pattern = _matches_subscription_pattern(subject or "")
-    now        = time.monotonic()
+    now        = _now()
 
     with _lock:
         st = _get_or_create(rcpt)
         _prune(st.arrivals, now)
 
-        # Already under attack — don't re-evaluate, just report
+        # Already under attack — don't re-evaluate, just report. Sliding cooldown:
+        # qualifying (bombing-ish) mail refreshes the window so mode tracks the live
+        # attack. A high-signal email (likely the real OTP the bomb is burying) does
+        # NOT extend mode, so a lone trickle of alerts can't keep triage alive.
         if now < st.under_attack_until:
             st.arrivals.append((now, domain, is_pattern))
             if len(st.seen_domains) < MAX_SEEN_DOMAINS:
                 st.seen_domains.add(domain)
+            if not is_high_signal(subject or ""):
+                st.under_attack_until = now + COOLDOWN_SECS
             return True, False
 
         # Record this email
@@ -229,14 +257,24 @@ def record(rcpt: str, sender_email: str, subject: str) -> tuple[bool, bool]:
         if len(st.seen_domains) < MAX_SEEN_DOMAINS:
             st.seen_domains.add(domain)
 
-        # ── Early velocity path ───────────────────────────────────────────────
+        # ── Window 1 — Fast / velocity (30s) ──────────────────────────────────
+        # Bot-speed subscription burst. Pattern still required to avoid flagging a
+        # legitimate human burst (company all-hands CC).
         vel_emails  = [e for e in st.arrivals if e[0] >= now - VELOCITY_WINDOW]
         vel_pattern = sum(1 for _, _, p in vel_emails if p)
         if vel_pattern >= VELOCITY_THRESHOLD:
             return _trigger(st, rcpt, len(vel_emails), 1.0, 0.0, now, "velocity")
 
-        # ── Full scoring path ─────────────────────────────────────────────────
-        window = list(st.arrivals)
+        # ── Window 3 — Slow-drip (1h) ─────────────────────────────────────────
+        # Checked independently of the standard volume gate: a low-and-slow flood
+        # may never put VOLUME_THRESHOLD emails inside any 5-min window yet still
+        # cross SLOWDRIP_THRESHOLD over the hour. Pure count — language-independent.
+        if len(st.arrivals) >= SLOWDRIP_THRESHOLD:
+            return _trigger(st, rcpt, len(st.arrivals), 0.0, 0.0, now, "slowdrip")
+
+        # ── Window 2 — Standard scoring (5min) ────────────────────────────────
+        # Score only the last WINDOW_SECS slice, not the full retained hour.
+        window = [e for e in st.arrivals if e[0] >= now - WINDOW_SECS]
         n      = len(window)
 
         if n < VOLUME_THRESHOLD:
@@ -262,13 +300,13 @@ def record(rcpt: str, sender_email: str, subject: str) -> tuple[bool, bool]:
 def _trigger(st: _RecipientState, rcpt: str, count: int,
              pattern_ratio: float, diversity_ratio: float,
              now: float, trigger: str) -> tuple[bool, bool]:
-    st.under_attack_until = now + HOLD_MINUTES * 60
+    st.under_attack_until = now + COOLDOWN_SECS
     logger.warning(
         "inbox_bombing_detected",
         rcpt=rcpt, emails=count, trigger=trigger,
         pattern_pct=round(pattern_ratio * 100),
         diversity_pct=round(diversity_ratio * 100),
-        hold_mins=HOLD_MINUTES,
+        cooldown_secs=COOLDOWN_SECS,
     )
     if now - st.last_alerted > ALERT_SUPPRESS_SECS:
         st.last_alerted = now
@@ -280,10 +318,27 @@ def is_under_attack(rcpt: str) -> bool:
     if not rcpt:
         return False
     rcpt = rcpt.strip().lower()
-    now  = time.monotonic()
+    now  = _now()
     with _lock:
         st = _state.get(rcpt)
         return bool(st and now < st.under_attack_until)
+
+
+def is_first_contact(rcpt: str, sender_email: str) -> bool:
+    """True if this sender domain has NOT been seen for this recipient before.
+
+    Read-only — must be called BEFORE record() (which adds the domain to history).
+    Used by the triage classifier as a Tier-2 (bombing-noise) signal.
+    """
+    if not rcpt:
+        return False
+    rcpt   = rcpt.strip().lower()
+    domain = _sender_domain(sender_email)
+    if not domain:
+        return False
+    with _lock:
+        st = _state.get(rcpt)
+        return not (st and domain in st.seen_domains)
 
 
 def clear_attack(rcpt: str) -> None:
@@ -296,7 +351,7 @@ def clear_attack(rcpt: str) -> None:
 
 
 def active_attacks() -> list[dict]:
-    now = time.monotonic()
+    now = _now()
     out = []
     with _lock:
         for rcpt, st in _state.items():
@@ -314,7 +369,7 @@ def active_attacks() -> list[dict]:
 
 
 def stats() -> dict:
-    now = time.monotonic()
+    now = _now()
     with _lock:
         attacks = [r for r, st in _state.items() if now < st.under_attack_until]
         return {
@@ -330,6 +385,9 @@ def stats() -> dict:
                 "hold_minutes":            HOLD_MINUTES,
                 "velocity_window_secs":    VELOCITY_WINDOW,
                 "velocity_threshold":      VELOCITY_THRESHOLD,
+                "slowdrip_window_secs":    SLOWDRIP_WINDOW_SECS,
+                "slowdrip_threshold":      SLOWDRIP_THRESHOLD,
+                "mode_cooldown_secs":      COOLDOWN_SECS,
                 "cold_start_min_history":  COLD_START_MIN_HISTORY,
             },
         }

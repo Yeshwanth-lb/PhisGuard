@@ -44,8 +44,21 @@ TARPIT_SECS      = 2     # seconds to sleep before returning 421 (slows bombing 
 
 ALERT_SUPPRESS   = 300   # seconds — don't re-alert same source within 5 min
 
+# TCP hard-drop escalation: an IP that keeps blowing past the 421 boundary is a bombing
+# tool ignoring backoff. After TCP_DROP_THRESHOLD rejections within TCP_DROP_WINDOW the
+# caller drops the socket to stop it exhausting the connection pool. The 421 + tarpit
+# behavior is unchanged — this is a layer on top, only for repeat offenders.
+import os as _drop_os
+TCP_DROP_THRESHOLD = int(_drop_os.environ.get("BOMBING_TCP_DROP_THRESHOLD", 3))
+TCP_DROP_WINDOW    = int(_drop_os.environ.get("BOMBING_TCP_DROP_WINDOW_SECS", 60))
+_drop_windows: dict[str, deque] = {}
+
 # ── State ─────────────────────────────────────────────────────────────────────
-_lock           = threading.Lock()
+# RLock (reentrant): check() holds the lock for its whole body and calls
+# _alert_rcpt_bombing(), which re-acquires it to read/set the alert-suppress map.
+# With a plain Lock that self-deadlocks the SMTP handler — and it only triggers once
+# an inbox crosses the per-recipient limit, i.e. precisely during a distributed bomb.
+_lock           = threading.RLock()
 _ip_windows:   dict[str, deque] = {}
 _dom_windows:  dict[str, deque] = {}
 _rcpt_windows: dict[str, deque] = {}
@@ -82,7 +95,10 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
     """
     now    = time.monotonic()
     domain = _sender_domain(sender_email)
-    rcpt   = rcpt_to.strip().lower() if rcpt_to else "unknown"
+    # Empty string when there is genuinely no recipient. A real SMTP envelope always
+    # carries one; we do NOT lump no-rcpt mail into a shared "unknown" bucket, which
+    # would collectively throttle unrelated mail (false positive).
+    rcpt   = rcpt_to.strip().lower() if rcpt_to else ""
 
     with _lock:
         # ── Per-IP ────────────────────────────────────────────────────────────
@@ -104,14 +120,17 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
             return False, f"421 Rate limit exceeded — {domain} sent {dom_count} emails this hour, limit {PER_DOMAIN_LIMIT}", TARPIT_SECS
 
         # ── Per-recipient (stops distributed bombing) ─────────────────────────
-        if rcpt not in _rcpt_windows:
-            _rcpt_windows[rcpt] = deque()
-        rcpt_dq = _rcpt_windows[rcpt]
-        rcpt_count = _sliding_count(rcpt_dq, 60, now)
-        if rcpt_count >= PER_RCPT_LIMIT:
-            logger.warning("smtp_rate_limit_rcpt", rcpt=rcpt, count=rcpt_count)
-            _alert_rcpt_bombing(rcpt, rcpt_count, peer_ip, sender_email)
-            return False, f"421 Rate limit exceeded — inbox {rcpt} received {rcpt_count} emails in 60s, limit {PER_RCPT_LIMIT}", TARPIT_SECS
+        # Skipped entirely when there is no recipient (see note above).
+        rcpt_dq = None
+        if rcpt:
+            if rcpt not in _rcpt_windows:
+                _rcpt_windows[rcpt] = deque()
+            rcpt_dq = _rcpt_windows[rcpt]
+            rcpt_count = _sliding_count(rcpt_dq, 60, now)
+            if rcpt_count >= PER_RCPT_LIMIT:
+                logger.warning("smtp_rate_limit_rcpt", rcpt=rcpt, count=rcpt_count)
+                _alert_rcpt_bombing(rcpt, rcpt_count, peer_ip, sender_email)
+                return False, f"421 Rate limit exceeded — inbox {rcpt} received {rcpt_count} emails in 60s, limit {PER_RCPT_LIMIT}", TARPIT_SECS
 
         # ── Global ────────────────────────────────────────────────────────────
         global_count = _sliding_count(_global_window, 60, now)
@@ -122,11 +141,13 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
         # ── Record this email ─────────────────────────────────────────────────
         ip_dq.append(now)
         dom_dq.append(now)
-        rcpt_dq.append(now)
+        if rcpt_dq is not None:
+            rcpt_dq.append(now)
         _global_window.append(now)
+        _drop_windows.pop(peer_ip, None)   # legitimate email → reset TCP-drop streak
 
-        # ── Burst detection (per IP, domain, and recipient) ───────────────────
-        for source_key in (peer_ip, domain, rcpt):
+        # ── Burst detection (per IP, domain, and recipient when present) ───────
+        for source_key in (peer_ip, domain, *( (rcpt,) if rcpt else () )):
             if source_key not in _burst_windows:
                 _burst_windows[source_key] = deque()
             burst_dq = _burst_windows[source_key]
@@ -146,6 +167,26 @@ def check(peer_ip: str, sender_email: str, rcpt_to: str = "") -> tuple[bool, str
                     _alert_bombing_async(source_key, burst_count, peer_ip, sender_email)
 
     return True, "", 0
+
+
+def note_rejection(peer_ip: str) -> bool:
+    """Record a 421 rejection for an IP. Returns True when the IP has crossed the
+    421 boundary more than TCP_DROP_THRESHOLD times within TCP_DROP_WINDOW — the
+    caller should then hard-drop the TCP socket. Reset by a subsequent allowed email
+    (see check())."""
+    if not peer_ip:
+        return False
+    now = time.monotonic()
+    with _lock:
+        dq = _drop_windows.setdefault(peer_ip, deque())
+        while dq and dq[0] < now - TCP_DROP_WINDOW:
+            dq.popleft()
+        dq.append(now)
+        if len(dq) > TCP_DROP_THRESHOLD:
+            logger.warning("smtp_tcp_drop", ip=peer_ip, rejections=len(dq),
+                           window_secs=TCP_DROP_WINDOW)
+            return True
+    return False
 
 
 def _alert_bombing_async(source: str, count: int, peer_ip: str, sender: str) -> None:

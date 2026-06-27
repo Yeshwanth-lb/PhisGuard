@@ -61,6 +61,12 @@ cryptography==42.0.8
 dnspython==2.8.0
 dkimpy==1.1.8
 
+# Bombing triage — critical-sender DMARC alignment.
+# dkimpy (above) does the real cryptographic DKIM-alignment check. checkdmarc is an
+# OPTIONAL corroborator (published-policy lookup only); critical_sender.py imports it
+# gracefully and works without it, so this line can be omitted in minimal installs.
+checkdmarc==5.7.4
+
 # Layer 2 NLP - Gemini SDK
 google-genai==0.8.0
 

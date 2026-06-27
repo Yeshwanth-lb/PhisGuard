@@ -41,6 +41,12 @@ async def _lifespan(app):
             _smtp_ctrl = await _sss(_aeb, settings)
         except Exception as _e:
             logger.warning("smtp_autostart_failed", error=str(_e))
+    # Start the bombing-buffer release worker (releases Tier-2/3 mail past the window)
+    try:
+        from app.layer7_gmail.smtp_receiver import start_release_worker as _srw
+        _srw(settings)
+    except Exception as _e:
+        logger.warning("bombing_release_worker_start_failed", error=str(_e))
     # Auto-start pull subscriber if enabled
     from app.layer7_gmail.pubsub_watcher import start_pull_subscriber as _sps
     from app.layer7_gmail.pubsub_watcher import stop_pull_subscriber as _stp
@@ -201,10 +207,20 @@ async def health():
     ml_ok = _os.path.exists(ml_path)
     from app.security.smtp_rate_limiter import stats as _smtp_rl_stats
     from app.security.bombing_detector import stats as _bomb_stats
+    # Per-recipient buffered-mail breakdown (Tier 2/3 awaiting labeled release)
+    _buf_state = {}
+    try:
+        import app.storage as _stg
+        from app.layer7_gmail.smtp_receiver import RELEASE_WINDOW_SECS as _rwin
+        _recips = {r: _stg.buffer_counts_by_tier(r) for r in _stg.buffer_active_recipients()}
+        _buf_state = {'recipients': _recips, 'release_window_secs': _rwin}
+    except Exception as _be:
+        _buf_state = {'error': str(_be)}
     return {
         'status': 'ok',
         'smtp_rate_limiter': _smtp_rl_stats(),
         'bombing_detector': _bomb_stats(),
+        'bombing_buffer': _buf_state,
         'virustotal_api': 'ok' if settings.virustotal_api_key else 'unconfigured',
         'abuseipdb_api': 'ok' if settings.abuseipdb_api_key else 'unconfigured',
         'urlhaus_api': 'ok',
@@ -353,6 +369,31 @@ async def bombing_status(current_user: dict = Depends(require_auth)):
     """Return active inbox bombing attacks and detector thresholds."""
     from app.security.bombing_detector import stats as _bomb_stats
     return _bomb_stats()
+
+
+@app.get('/api/bombing/active')
+async def bombing_active(current_user: dict = Depends(require_auth)):
+    """Active bombing events with per-recipient buffered-mail tier breakdown.
+
+    Powers a dashboard banner: which inboxes are mid-bomb, how much noise/uncertain
+    mail is buffered for each, and when it releases.
+    """
+    from app.security.bombing_detector import active_attacks as _active
+    import app.storage as _stg
+    from app.layer7_gmail.smtp_receiver import RELEASE_WINDOW_SECS as _rwin
+
+    events = _active()                    # recipients currently in bombing mode
+    by_rcpt = {e['rcpt']: e for e in events}
+    # Fold in buffered counts for every recipient with held mail (mode may have
+    # just exited while mail still awaits release).
+    for rcpt in _stg.buffer_active_recipients():
+        ev = by_rcpt.setdefault(rcpt, {'rcpt': rcpt})
+        ev['buffered'] = _stg.buffer_counts_by_tier(rcpt)
+    return {
+        'active': list(by_rcpt.values()),
+        'count': len(by_rcpt),
+        'release_window_secs': _rwin,
+    }
 
 
 @app.post('/api/bombing/{rcpt}/clear')

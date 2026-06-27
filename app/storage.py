@@ -13,6 +13,20 @@ def _conn():
     os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
     c = sqlite3.connect(_DB_PATH, check_same_thread=False)
     c.row_factory = sqlite3.Row
+    # WAL lets readers and a writer proceed concurrently and survives process
+    # crashes without corruption — essential under a mail-bomb flood where the
+    # Docker container and local scripts hit the same DB file (gotcha #1).
+    # synchronous=NORMAL is durable under WAL (data is fsynced at checkpoint;
+    # only the last transaction can be lost on an OS-level crash, never on a
+    # plain process restart). journal_mode is persisted at the DB level on first
+    # set; synchronous is per-connection, so we set both every open. ":memory:"
+    # DBs ignore WAL — guard so unit tests on in-memory DBs don't error.
+    if _DB_PATH != ":memory:":
+        try:
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            pass
     return c
 
 
@@ -65,6 +79,26 @@ def init_db():
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_ts ON scans(ts DESC)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_verdict ON scans(verdict)')
+        # Durable staging buffer for the bombing triage engine. Tier-2 (noise) and
+        # Tier-3 (uncertain) mail is parked here during an active bomb and released
+        # — labeled — when the window expires. NOTHING is held indefinitely. Buffer
+        # is SQLite-backed (not in-memory) specifically so it survives a restart
+        # mid-bomb. raw_email is stored so the message can be delivered intact;
+        # bodies are never logged (see privacy rule), only stored at rest like
+        # pending_review already does.
+        c.execute('''CREATE TABLE IF NOT EXISTS bombing_buffer (
+            id TEXT PRIMARY KEY,
+            recipient TEXT NOT NULL,
+            scan_id TEXT,
+            timestamp REAL NOT NULL,
+            tier TEXT CHECK(tier IN ('important','noise','uncertain')),
+            released INTEGER DEFAULT 0,
+            raw_email BLOB NOT NULL,
+            sender_domain TEXT,
+            subject TEXT
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_buffer_recipient_released '
+                  'ON bombing_buffer(recipient, released)')
         c.commit()
         c.close()
 
@@ -271,6 +305,119 @@ def save_feedback(scan_id: str, original_verdict: str, corrected_verdict: str,
             return False
         finally:
             c.close()
+
+
+# ── Bombing triage buffer ──────────────────────────────────────────────────────
+# Helpers for the durable staging buffer (see bombing_buffer table in init_db).
+# tier is one of: 'important' | 'noise' | 'uncertain'. Tier-1 ('important') mail is
+# delivered instantly and normally never buffered; the column is permitted for
+# completeness / audit. Writes persist synchronously before the SMTP receipt is
+# acknowledged — no ack-before-persist.
+
+_BUFFER_COLS = ["id", "recipient", "scan_id", "timestamp", "tier",
+                "released", "raw_email", "sender_domain", "subject"]
+
+
+def buffer_add(buffer_id: str, recipient: str, scan_id: str, tier: str,
+               raw_email: bytes, sender_domain: str = "", subject: str = "",
+               timestamp: float | None = None) -> bool:
+    with _lock:
+        c = _conn()
+        try:
+            c.execute('''INSERT OR REPLACE INTO bombing_buffer
+                (id, recipient, scan_id, timestamp, tier, released, raw_email, sender_domain, subject)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)''',
+                (buffer_id, (recipient or "").strip().lower(), scan_id,
+                 timestamp if timestamp is not None else time.time(),
+                 tier, raw_email, sender_domain, subject))
+            c.commit()
+            return True
+        except Exception as exc:
+            import structlog
+            structlog.get_logger().warning("buffer_add_err", error=str(exc))
+            return False
+        finally:
+            c.close()
+
+
+def buffer_list_for_recipient(recipient: str, released: int = 0) -> list[dict]:
+    """Buffered messages for a recipient, oldest first. released=0 → still held."""
+    with _lock:
+        c = _conn()
+        rows = c.execute(
+            '''SELECT id, recipient, scan_id, timestamp, tier, released,
+               raw_email, sender_domain, subject
+               FROM bombing_buffer WHERE recipient = ? AND released = ?
+               ORDER BY timestamp ASC''',
+            ((recipient or "").strip().lower(), released),
+        ).fetchall()
+        c.close()
+        return [dict(zip(_BUFFER_COLS, r)) for r in rows]
+
+
+def buffer_mark_released(buffer_id: str) -> bool:
+    with _lock:
+        c = _conn()
+        c.execute("UPDATE bombing_buffer SET released = 1 WHERE id = ?", (buffer_id,))
+        c.commit()
+        c.close()
+        return True
+
+
+def buffer_purge_expired(older_than_secs: float = 86400) -> int:
+    """Delete already-released buffer rows older than the cutoff. Returns count."""
+    with _lock:
+        c = _conn()
+        cutoff = time.time() - older_than_secs
+        cur = c.execute(
+            "DELETE FROM bombing_buffer WHERE released = 1 AND timestamp < ?",
+            (cutoff,),
+        )
+        n = cur.rowcount
+        c.commit()
+        c.close()
+        return n
+
+
+def buffer_list_due(older_than_secs: float) -> list[dict]:
+    """Unreleased buffered mail older than the window, across ALL recipients,
+    oldest first — the release worker's work-list."""
+    with _lock:
+        c = _conn()
+        cutoff = time.time() - older_than_secs
+        rows = c.execute(
+            '''SELECT id, recipient, scan_id, timestamp, tier, released,
+               raw_email, sender_domain, subject
+               FROM bombing_buffer WHERE released = 0 AND timestamp < ?
+               ORDER BY timestamp ASC''',
+            (cutoff,),
+        ).fetchall()
+        c.close()
+        return [dict(zip(_BUFFER_COLS, r)) for r in rows]
+
+
+def buffer_active_recipients() -> list[str]:
+    """Recipients with at least one unreleased buffered message (for surfacing)."""
+    with _lock:
+        c = _conn()
+        rows = c.execute(
+            "SELECT DISTINCT recipient FROM bombing_buffer WHERE released = 0"
+        ).fetchall()
+        c.close()
+        return [r[0] for r in rows]
+
+
+def buffer_counts_by_tier(recipient: str, released: int = 0) -> dict:
+    """Per-tier counts of buffered mail for a recipient (for /health surfacing)."""
+    with _lock:
+        c = _conn()
+        rows = c.execute(
+            '''SELECT tier, COUNT(*) FROM bombing_buffer
+               WHERE recipient = ? AND released = ? GROUP BY tier''',
+            ((recipient or "").strip().lower(), released),
+        ).fetchall()
+        c.close()
+        return {r[0]: r[1] for r in rows}
 
 
 init_db()
