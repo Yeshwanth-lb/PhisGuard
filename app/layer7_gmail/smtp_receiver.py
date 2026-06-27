@@ -112,29 +112,10 @@ class PhishGuardSMTPHandler:
         logger.info("smtp_received", peer=str(session.peer),
                     size=len(raw_bytes), rcpt=original_rcpts)
 
-        # ── Bombing detection ─────────────────────────────────────────────────
-        # Parse subject from raw bytes before running pipeline so we can
-        # score the subscription-pattern signal immediately on arrival.
-        from app.security.bombing_detector import (
-            record as _bomb_record,
-            is_first_contact as _is_first_contact,
-        )
-        try:
-            from email import message_from_bytes as _mfb
-            from email.policy import compat32 as _c32
-            _msg_preview = _mfb(raw_bytes[:4096], policy=_c32)
-            _subject_preview = str(_msg_preview.get("Subject", "") or "")
-        except Exception:
-            _subject_preview = ""
+        # Recipient key for bombing detection. Detection + triage run AFTER the
+        # pipeline via the shared bombing pipeline (app/security/bombing_pipeline.py),
+        # so the SMTP gateway and Gmail ingestion run byte-for-byte identical logic.
         _rcpt_for_bomb = original_rcpts[0] if original_rcpts else ""
-        # Capture first-contact BEFORE record() — record() adds the domain to history.
-        _first_contact = _is_first_contact(_rcpt_for_bomb, mail_from)
-        _under_attack, _newly_detected = _bomb_record(
-            _rcpt_for_bomb, mail_from, _subject_preview
-        )
-        if _newly_detected:
-            logger.warning("inbox_bombing_started", rcpt=_rcpt_for_bomb,
-                           sender=mail_from)
 
         # ── Run the full detection pipeline ──────────────────────────────
         try:
@@ -166,14 +147,16 @@ class PhishGuardSMTPHandler:
         # noise (Tier 2) and the ambiguous remainder (Tier 3) for labeled release —
         # nothing is dropped or held for a human. Normal (non-bombing) routing below
         # is untouched. See app/security/bombing_triage.py.
-        if _under_attack:
-            from app.security.bombing_triage import classify as _classify
-            tri = _classify(parsed, raw_bytes, _first_contact)
+        from app.security import bombing_pipeline as _bp
+        decision = _bp.evaluate(_rcpt_for_bomb, mail_from, parsed, raw_bytes)
+        if decision.newly_detected:
+            logger.warning("inbox_bombing_started", rcpt=_rcpt_for_bomb, sender=mail_from)
+        if decision.under_attack:
             logger.info("smtp_bombing_triage", rcpt=_rcpt_for_bomb,
-                        action=tri.action, tier=tri.tier, reason=tri.reason,
-                        subject=subject[:60])
+                        action=decision.action, tier=decision.tier,
+                        reason=decision.reason, subject=subject[:60])
 
-            if tri.action == "deliver_now":
+            if decision.action == "deliver_now":
                 # TIER 1 — authenticated critical sender. Deliver instantly, tagged,
                 # NEVER buffered, regardless of L2/ML verdict. L1 hard hits never reach
                 # here (the pipeline would have quarantined first).
@@ -181,7 +164,7 @@ class PhishGuardSMTPHandler:
                     storage.save_scan(scan_id, result, parsed)
                 except Exception as _exc:
                     logger.warning("smtp_scan_save_err", error=str(_exc))
-                tagged = _tag_subject(raw_bytes, tri.label)
+                tagged = _tag_subject(raw_bytes, decision.label)
                 from app.layer7_gmail.gmail_client import deliver_to_inbox
                 if not deliver_to_inbox(self.settings, tagged, "PhishGuard-Priority"):
                     await _relay_raw(tagged, mail_from, original_rcpts, self.settings)
@@ -189,23 +172,20 @@ class PhishGuardSMTPHandler:
                             subject=subject[:60])
                 return "250 OK"
 
-            if tri.action == "buffer":
+            if decision.action == "buffer":
                 # TIER 2/3 — park in the durable buffer; the window worker releases it
                 # labeled. Synchronous write BEFORE acknowledging — no ack-before-persist.
                 try:
                     storage.save_scan(scan_id, result, parsed)
                 except Exception as _exc:
                     logger.warning("smtp_scan_save_err", error=str(_exc))
-                storage.buffer_add(
-                    buffer_id=str(_uuid.uuid4()),
-                    recipient=_rcpt_for_bomb, scan_id=scan_id, tier=tri.tier,
-                    raw_email=raw_bytes, sender_domain=sender_domain, subject=subject,
-                )
-                logger.info("smtp_bombing_buffered", rcpt=_rcpt_for_bomb, tier=tri.tier)
+                _bp.buffer(decision, _rcpt_for_bomb, scan_id, raw_bytes,
+                           sender_domain, subject)
+                logger.info("smtp_bombing_buffered", rcpt=_rcpt_for_bomb, tier=decision.tier)
                 return "250 OK"
 
-            # tri.action == "phishing" — protected-TLD spoof (claimed but failed DMARC
-            # alignment). Fall through to normal routing as phishing → quarantine.
+            # decision.action == "phishing" — protected-TLD spoof (claimed but failed
+            # DMARC alignment). Fall through to normal routing as phishing → quarantine.
             routing_verdict = "phishing"
             logger.warning("smtp_bombing_spoofed_critical", rcpt=_rcpt_for_bomb,
                            sender=sender, subject=subject[:60])

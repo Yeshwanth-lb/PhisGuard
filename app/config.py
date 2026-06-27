@@ -99,6 +99,10 @@ class Settings(BaseSettings):
     gmail_queue_subscription: str = Field(default="phishguard-gmail-sub")
     gmail_push_endpoint: str = Field(default="")
     gmail_enable_pull_subscriber: bool = Field(default=False)
+    # When true, Gmail-ingested mail (push + historical) is fed through the SAME
+    # bombing detection+triage pipeline as the SMTP gateway. Default off: fully
+    # dormant — no Gmail API calls, no startup errors — production is a one-flag flip.
+    inbox_ingestion_enabled: bool = Field(default=False)
 
     # ── SMTP inbound gateway ──────────────────────────────────────────────────
     smtp_listen_host: str = Field(default="0.0.0.0")

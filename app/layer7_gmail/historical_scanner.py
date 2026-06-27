@@ -113,6 +113,16 @@ async def scan_inbox(
                 result["email_id"] = email_id
                 result["ingestion_source"] = "gmail_historical"
                 result["gmail_message_id"] = msg_id
+
+                # Feed the SAME bombing pipeline as the SMTP gateway (dormant unless
+                # INBOX_INGESTION_ENABLED). NOTE: a historical backfill arrives as one
+                # burst, which can look like a bomb — enabling ingestion is intended
+                # mainly for the live push path; gated + best-effort here.
+                try:
+                    from app.security.bombing_pipeline import ingest_gmail_message
+                    ingest_gmail_message(parsed, raw, settings, scan_id=email_id)
+                except Exception as exc:
+                    logger.warning("gmail_bombing_ingest_err", msg_id=msg_id, error=str(exc))
                 try:
                     storage.save_scan(email_id, result, parsed)
                 except Exception as exc:

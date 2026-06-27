@@ -58,6 +58,14 @@ async def handle_push_notification(push_body: dict, analyze_fn: Callable, settin
         try:
             result = await analyze_fn(raw, settings)
             verdict = result.get("verdict", "unknown")
+            # Feed through the SAME bombing pipeline as the SMTP gateway (dormant
+            # unless INBOX_INGESTION_ENABLED). No-op + no Gmail calls when disabled.
+            try:
+                from app.security.bombing_pipeline import ingest_gmail_message
+                ingest_gmail_message(result.get("parsed") or {}, raw, settings,
+                                     scan_id=result.get("email_id", msg_id))
+            except Exception as _be:
+                logger.warning("gmail_bombing_ingest_err", msg_id=msg_id, error=str(_be))
             label = settings.gmail_quarantine_label if verdict == "phishing" else settings.gmail_scanned_label
             apply_label(settings, msg_id, label)
             results.append({"msg_id": msg_id, "verdict": verdict})
