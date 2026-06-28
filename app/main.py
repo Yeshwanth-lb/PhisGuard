@@ -32,6 +32,10 @@ from contextlib import asynccontextmanager as _acm
 
 @_acm
 async def _lifespan(app):
+    # Fail fast if the JWT signing secret is unset/default — otherwise anyone could
+    # forge an admin token. (Set ALLOW_INSECURE_JWT_SECRET=true for local dev.)
+    from app.security.auth import assert_secure_secret
+    assert_secure_secret()
     # Auto-start SMTP receiver if enabled
     from app.layer7_gmail.smtp_receiver import start_smtp_server as _sss
     from app.pipeline import analyze_email as _aeb
@@ -144,13 +148,27 @@ async def dashboard():
     return FileResponse('app/templates/index.html')
 
 
+def _role_for_api_key(ak: str):
+    """Resolve the role for an API key SERVER-SIDE. Returns None if the key is unknown.
+    The role is never taken from the client request (that let the shared key mint admin)."""
+    if not ak:
+        return None
+    for pair in (getattr(settings, 'api_key_roles', '') or '').split(','):
+        if ':' in pair:
+            k, r = pair.split(':', 1)
+            if ak == k.strip():
+                return r.strip()
+    if ak == getattr(settings, 'api_key', '') and getattr(settings, 'api_key', ''):
+        return getattr(settings, 'api_key_role', 'analyst')
+    return None
+
+
 @app.post('/token')
 async def get_token(body: dict):
     ak = body.get('api_key', '')
-    expected = getattr(settings, 'api_key', '')
-    if not expected or ak != expected:
+    role = _role_for_api_key(ak)          # server decides the role, not the client
+    if role is None:
         raise HTTPException(status_code=401, detail='Unauthorized')
-    role = body.get('role', 'analyst')
     sub = body.get('sub', 'api-client')
     return create_token_pair(sub=sub, role=role)
 

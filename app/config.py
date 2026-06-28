@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     # ── Auth ──────────────────────────────────────────────────────────────────
     phishguard_api_key: str = Field(default="dev-key")
     api_key: str = Field(default="dev-key")
+    # Role granted to holders of the single shared api_key (server-decided, never
+    # chosen by the client). Optional per-key map: "keyA:admin,keyB:analyst".
+    api_key_role: str = Field(default="analyst")
+    api_key_roles: str = Field(default="")
     jwt_secret: str = Field(default="change-me-in-production")
 
     # ── LLM provider (used by all AI layers) ─────────────────────────────────
