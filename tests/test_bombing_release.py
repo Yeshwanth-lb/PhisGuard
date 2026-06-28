@@ -77,6 +77,40 @@ def test_release_skips_already_claimed_row(tmp_path, monkeypatch):
     assert delivered == []                    # we did NOT double-deliver
 
 
+def test_reclaim_stale_recovers_crashed_claim(tmp_path, monkeypatch):
+    """A row claimed but never delivered (worker crashed) is reclaimed for retry."""
+    _tmp(tmp_path, monkeypatch)
+    storage.buffer_add("b1", "v@co.com", "s", "noise", b"X", timestamp=1.0)
+    assert storage.buffer_claim("b1") is True           # claimed (delivered_at NULL)
+    assert storage.buffer_claim("b1") is False           # can't double-claim
+    # stale_secs=-1 makes any claim "stale" → reclaimed back to unreleased
+    assert storage.buffer_reclaim_stale(-1) == 1
+    assert storage.buffer_claim("b1") is True             # claimable again → not lost
+
+
+def test_delivered_row_not_reclaimed(tmp_path, monkeypatch):
+    _tmp(tmp_path, monkeypatch)
+    storage.buffer_add("b1", "v@co.com", "s", "noise", b"X", timestamp=1.0)
+    storage.buffer_claim("b1")
+    storage.buffer_mark_released("b1")                    # truly delivered
+    assert storage.buffer_reclaim_stale(-1) == 0          # delivered rows are never reclaimed
+
+
+def test_release_recovers_then_delivers_crashed_claim(tmp_path, monkeypatch):
+    """End-to-end: a crashed claim is recovered and delivered on the next cycle."""
+    _tmp(tmp_path, monkeypatch)
+    delivered = []
+    _mock_deliver(monkeypatch, delivered)
+    monkeypatch.setattr(rcv, "CLAIM_STALE_SECS", -1)      # treat the claim as stale immediately
+    storage.buffer_add("b1", "v@co.com", "s", "noise",
+                       b"From: a@x.com\r\nSubject: S\r\n\r\nb", "x.com", "S", timestamp=1.0)
+    storage.buffer_claim("b1")                            # simulate a crash mid-delivery
+    n = rcv._release_due(object())                        # next cycle reclaims + delivers
+    assert n == 1
+    assert delivered                                     # actually delivered, not dropped
+    assert storage.buffer_list_for_recipient("v@co.com", released=0) == []
+
+
 def test_release_unclaims_on_delivery_failure(tmp_path, monkeypatch):
     """If both delivery paths fail, the claim is reverted so it retries — no drop."""
     _tmp(tmp_path, monkeypatch)

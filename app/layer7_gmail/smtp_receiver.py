@@ -186,9 +186,20 @@ class PhishGuardSMTPHandler:
                     storage.save_scan(scan_id, result, parsed)
                 except Exception as _exc:
                     logger.warning("smtp_scan_save_err", error=str(_exc))
-                _bp.buffer(decision, _rcpt_for_bomb, scan_id, raw_bytes,
-                           sender_domain, subject)
-                logger.info("smtp_bombing_buffered", rcpt=_rcpt_for_bomb, tier=decision.tier)
+                if _bp.buffer_is_full(_rcpt_for_bomb):
+                    # Overflow valve: buffer is at capacity for this inbox — deliver now,
+                    # labeled, instead of buffering. Bounds storage, still never drops.
+                    tagged = _tag_subject(raw_bytes, _TIER_LABELS.get(decision.tier,
+                                                                      _TIER_LABELS["uncertain"]))
+                    from app.layer7_gmail.gmail_client import deliver_to_inbox
+                    if not deliver_to_inbox(self.settings, tagged, "PhishGuard-Released"):
+                        await _relay_raw(tagged, mail_from, original_rcpts, self.settings)
+                    logger.warning("smtp_bombing_buffer_overflow_delivered",
+                                   rcpt=_rcpt_for_bomb, tier=decision.tier)
+                else:
+                    _bp.buffer(decision, _rcpt_for_bomb, scan_id, raw_bytes,
+                               sender_domain, subject)
+                    logger.info("smtp_bombing_buffered", rcpt=_rcpt_for_bomb, tier=decision.tier)
                 return "250 OK"
 
             # decision.action == "phishing" — protected-TLD spoof (claimed but failed
@@ -305,11 +316,23 @@ def _parse_mail_from(raw: bytes) -> str:
         return ""
 
 
+# A claim held this long without delivery means a worker crashed mid-delivery; reclaim it.
+CLAIM_STALE_SECS = int(_rel_os.environ.get("BOMBING_CLAIM_STALE_SECS", 120))
+
+
 def _release_due(settings) -> int:
     """Release every buffered message older than the window, labeled by tier.
-    Returns how many were released. Idempotent and safe to call repeatedly."""
+    Returns how many were delivered. Idempotent and safe to call repeatedly."""
     from app import storage
     from app.layer7_gmail.gmail_client import deliver_to_inbox
+
+    # Recover any rows claimed-but-never-delivered by a worker that died mid-delivery,
+    # so nothing is stuck "claimed" forever (and thus dropped). Runs every cycle, so it
+    # also covers crash recovery on the first cycle after a restart.
+    try:
+        storage.buffer_reclaim_stale(CLAIM_STALE_SECS)
+    except Exception as exc:
+        logger.warning("bombing_reclaim_err", error=str(exc))
 
     try:
         due = storage.buffer_list_due(RELEASE_WINDOW_SECS)
@@ -332,6 +355,7 @@ def _release_due(settings) -> int:
                 mail_from = _parse_mail_from(row["raw_email"])
                 ok = bool(asyncio.run(_relay_raw(tagged, mail_from, [row["recipient"]], settings)))
             if ok:
+                storage.buffer_mark_released(row["id"])   # stamp delivered_at (only now purgeable)
                 released += 1
             else:
                 # Neither path delivered → revert the claim so it retries next cycle.

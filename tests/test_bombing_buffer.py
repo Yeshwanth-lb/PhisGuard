@@ -76,6 +76,19 @@ def test_buffer_counts_by_tier(tmp_path, monkeypatch):
     assert counts == {"noise": 2, "uncertain": 1}
 
 
+def test_buffer_count_and_is_full(tmp_path, monkeypatch):
+    _use_tmp_db(tmp_path, monkeypatch)
+    import app.security.bombing_pipeline as bp
+    monkeypatch.setattr(bp, "MAX_BUFFER_PER_RCPT", 2)
+    assert bp.buffer_is_full("v@co.com") is False
+    storage.buffer_add("b1", "v@co.com", "s", "noise", b"X")
+    storage.buffer_add("b2", "v@co.com", "s", "noise", b"Y")
+    assert storage.buffer_count_for_recipient("v@co.com") == 2
+    assert bp.buffer_is_full("v@co.com") is True
+    storage.buffer_mark_released("b1")                 # delivered → no longer counts
+    assert bp.buffer_is_full("v@co.com") is False
+
+
 def test_buffer_tier_check_constraint(tmp_path, monkeypatch):
     """The CHECK constraint rejects an invalid tier (buffer_add returns False)."""
     _use_tmp_db(tmp_path, monkeypatch)

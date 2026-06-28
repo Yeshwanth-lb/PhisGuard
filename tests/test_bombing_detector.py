@@ -231,3 +231,27 @@ class TestSlidingCooldownAndFirstContact:
 
     def test_stats_exposes_cooldown(self):
         assert bd.stats()["thresholds"]["mode_cooldown_secs"] == bd.COOLDOWN_SECS
+
+    def test_seen_domains_lru_evicts(self, monkeypatch):
+        _reset()
+        monkeypatch.setattr(bd, "MAX_SEEN_DOMAINS", 3)
+        for i in range(5):
+            bd.record("v@co.com", f"x@d{i}.com", "hello there")
+        st = bd._state["v@co.com"]
+        assert len(st.seen_domains) <= 3
+        assert bd.is_first_contact("v@co.com", "x@d0.com") is True   # evicted (LRU)
+        assert bd.is_first_contact("v@co.com", "x@d4.com") is False  # still known
+
+    def test_attack_backstop_caps_mode_duration(self, monkeypatch):
+        _reset()
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(bd, "_now", lambda: clock["t"])
+        monkeypatch.setattr(bd, "ATTACK_MAX_SECS", 100)
+        for i in range(bd.VELOCITY_THRESHOLD):
+            bd.record("v@co.com", f"x@d{i}.com", "Confirm your email")
+        assert bd.is_under_attack("v@co.com")
+        started = bd._state["v@co.com"].attack_started_at
+        clock["t"] = started + bd.ATTACK_MAX_SECS + 1     # past the backstop
+        bd.record("v@co.com", "x@late.com", "Confirm your email")   # must NOT refresh now
+        clock["t"] += bd.COOLDOWN_SECS + 1
+        assert not bd.is_under_attack("v@co.com")          # mode lapsed despite ongoing noise

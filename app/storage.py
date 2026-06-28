@@ -95,10 +95,18 @@ def init_db():
             released INTEGER DEFAULT 0,
             raw_email BLOB NOT NULL,
             sender_domain TEXT,
-            subject TEXT
+            subject TEXT,
+            claimed_at REAL,
+            delivered_at REAL
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_buffer_recipient_released '
                   'ON bombing_buffer(recipient, released)')
+        # Migrate older buffer tables that predate the claimed_at/delivered_at columns.
+        _cols = {r[1] for r in c.execute("PRAGMA table_info(bombing_buffer)").fetchall()}
+        if "claimed_at" not in _cols:
+            c.execute("ALTER TABLE bombing_buffer ADD COLUMN claimed_at REAL")
+        if "delivered_at" not in _cols:
+            c.execute("ALTER TABLE bombing_buffer ADD COLUMN delivered_at REAL")
         c.commit()
         c.close()
 
@@ -356,24 +364,31 @@ def buffer_list_for_recipient(recipient: str, released: int = 0) -> list[dict]:
 
 
 def buffer_mark_released(buffer_id: str) -> bool:
+    """Mark a row as truly DELIVERED (released + delivered_at set). Only delivered rows
+    are eligible for purge."""
     with _lock:
         c = _conn()
-        c.execute("UPDATE bombing_buffer SET released = 1 WHERE id = ?", (buffer_id,))
+        c.execute("UPDATE bombing_buffer SET released = 1, "
+                  "claimed_at = COALESCE(claimed_at, ?), delivered_at = ? WHERE id = ?",
+                  (time.time(), time.time(), buffer_id))
         c.commit()
         c.close()
         return True
 
 
 def buffer_claim(buffer_id: str) -> bool:
-    """Atomically claim a buffered row for release (flip released 0→1). Returns True
-    only if THIS caller won the claim. Safe across concurrent release workers /
-    uvicorn worker processes: the conditional UPDATE is serialized by SQLite, so
-    exactly one caller sees rowcount==1 — preventing double-delivery."""
+    """Atomically claim a buffered row for release (flip released 0→1 + stamp claimed_at).
+    Returns True only if THIS caller won the claim. Safe across concurrent release workers
+    / uvicorn worker processes: the conditional UPDATE is serialized by SQLite, so exactly
+    one caller sees rowcount==1 — preventing double-delivery. A claim is NOT a delivery;
+    delivered_at stays NULL until buffer_mark_released, so a crash between claim and
+    delivery is recoverable via buffer_reclaim_stale (no silent drop)."""
     with _lock:
         c = _conn()
         cur = c.execute(
-            "UPDATE bombing_buffer SET released = 1 WHERE id = ? AND released = 0",
-            (buffer_id,),
+            "UPDATE bombing_buffer SET released = 1, claimed_at = ? "
+            "WHERE id = ? AND released = 0",
+            (time.time(), buffer_id),
         )
         c.commit()
         won = cur.rowcount == 1
@@ -382,23 +397,47 @@ def buffer_claim(buffer_id: str) -> bool:
 
 
 def buffer_unclaim(buffer_id: str) -> bool:
-    """Revert a claim (released 1→0) so the message is retried next cycle — used when
-    delivery fails after claiming, so nothing is dropped."""
+    """Revert a claim (released 1→0, clear claimed_at) so the message is retried next
+    cycle — used when delivery fails after claiming, so nothing is dropped."""
     with _lock:
         c = _conn()
-        c.execute("UPDATE bombing_buffer SET released = 0 WHERE id = ?", (buffer_id,))
+        c.execute("UPDATE bombing_buffer SET released = 0, claimed_at = NULL "
+                  "WHERE id = ? AND delivered_at IS NULL", (buffer_id,))
         c.commit()
         c.close()
         return True
 
 
+def buffer_reclaim_stale(stale_secs: float) -> int:
+    """Recover rows claimed but never delivered (a worker crashed mid-delivery): reset
+    them to unreleased so the next cycle retries. Returns how many were reclaimed.
+    This is what makes the durable-buffer 'never drop' guarantee hold across crashes."""
+    with _lock:
+        c = _conn()
+        cutoff = time.time() - stale_secs
+        cur = c.execute(
+            "UPDATE bombing_buffer SET released = 0, claimed_at = NULL "
+            "WHERE released = 1 AND delivered_at IS NULL AND claimed_at < ?",
+            (cutoff,),
+        )
+        n = cur.rowcount
+        c.commit()
+        c.close()
+        if n:
+            import structlog
+            structlog.get_logger().warning("buffer_reclaimed_stale", count=n)
+        return n
+
+
 def buffer_purge_expired(older_than_secs: float = 86400) -> int:
-    """Delete already-released buffer rows older than the cutoff. Returns count."""
+    """Delete only truly-DELIVERED buffer rows older than the cutoff. Claimed-but-not-
+    delivered rows (delivered_at IS NULL) are never purged — they get reclaimed instead,
+    so nothing is dropped. Returns count."""
     with _lock:
         c = _conn()
         cutoff = time.time() - older_than_secs
         cur = c.execute(
-            "DELETE FROM bombing_buffer WHERE released = 1 AND timestamp < ?",
+            "DELETE FROM bombing_buffer WHERE delivered_at IS NOT NULL AND timestamp < ?",
             (cutoff,),
         )
         n = cur.rowcount
@@ -433,6 +472,19 @@ def buffer_active_recipients() -> list[str]:
         ).fetchall()
         c.close()
         return [r[0] for r in rows]
+
+
+def buffer_count_for_recipient(recipient: str, released: int = 0) -> int:
+    """Number of buffered (default: unreleased) messages held for a recipient — used to
+    bound the buffer per inbox (overflow valve)."""
+    with _lock:
+        c = _conn()
+        n = c.execute(
+            "SELECT COUNT(*) FROM bombing_buffer WHERE recipient = ? AND released = ?",
+            ((recipient or "").strip().lower(), released),
+        ).fetchone()[0]
+        c.close()
+        return int(n)
 
 
 def buffer_counts_by_tier(recipient: str, released: int = 0) -> dict:

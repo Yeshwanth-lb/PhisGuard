@@ -64,6 +64,19 @@ def test_flag_on_feeds_detector_and_tiers(tmp_path, monkeypatch):
     assert held and all(h["tier"] in ("noise", "uncertain") for h in held)
 
 
+def test_recipient_resolved_per_mailbox_not_collapsed(tmp_path, monkeypatch):
+    """Detection must key on the ACTUAL delivered-to mailbox (To/Delivered-To), not
+    collapse every message onto the impersonation account."""
+    _tmp(tmp_path, monkeypatch)
+    s = _Settings(enabled=True, impersonate="admin@corp.com")
+    raw = (b"From: x@promo.com\r\nTo: realvictim@corp.com\r\n"
+           b"Subject: Confirm your email\r\n\r\nbody")
+    bp.ingest_gmail_message(_parsed("promo.com", "Confirm your email"), raw, s, scan_id="g1")
+    # Recorded under the real recipient, NOT the impersonation account.
+    assert bd.is_first_contact("realvictim@corp.com", "x@promo.com") is False
+    assert bd.is_first_contact("admin@corp.com", "x@promo.com") is True
+
+
 def test_pubsub_path_calls_shared_pipeline_when_enabled(tmp_path, monkeypatch):
     _tmp(tmp_path, monkeypatch)
     s = _Settings(enabled=True)

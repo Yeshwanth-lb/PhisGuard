@@ -14,8 +14,12 @@ Flow (identical for SMTP and Gmail):
     else:
         normal routing (caller-specific)
 """
+import os
+import re
 import uuid
 from collections import namedtuple
+from email import message_from_bytes
+from email.policy import compat32
 
 import structlog
 
@@ -59,6 +63,17 @@ def evaluate(recipient: str, mail_from: str, parsed: dict,
                            tri.signal, tri.reason)
 
 
+# Per-recipient buffer ceiling. Once an inbox is under attack the SMTP per-recipient
+# rate limit is bypassed, so the buffer needs its own bound. On overflow the caller
+# delivers immediately-labeled instead of buffering — bounds storage, never drops.
+MAX_BUFFER_PER_RCPT = int(os.environ.get("BOMBING_MAX_BUFFER_PER_RCPT", 500))
+
+
+def buffer_is_full(recipient: str) -> bool:
+    from app import storage
+    return storage.buffer_count_for_recipient(recipient) >= MAX_BUFFER_PER_RCPT
+
+
 def buffer(decision: BombingDecision, recipient: str, scan_id: str,
            raw_bytes: bytes, sender_domain: str = "", subject: str = "") -> bool:
     """Park a Tier-2/3 message in the durable buffer (released labeled by the worker).
@@ -73,18 +88,23 @@ def buffer(decision: BombingDecision, recipient: str, scan_id: str,
 
 # ── Gmail ingestion adapter ────────────────────────────────────────────────────
 
-def _gmail_recipient(parsed: dict, settings) -> str:
-    """Resolve the mailbox the message landed in. Prefer the impersonated user
-    (the inbox we ingest on behalf of); fall back to the To header."""
-    rcpt = getattr(settings, "google_admin_impersonate_email", "") or ""
-    if rcpt:
-        return rcpt
-    to = ""
+def _gmail_recipient(parsed: dict, raw_bytes: bytes, settings) -> str:
+    """Resolve the ACTUAL mailbox this message was delivered to, so detection and
+    buffering are keyed per real inbox — not collapsed onto one shared bucket (which
+    would false-fire detection and release buffered mail to the wrong mailbox).
+
+    Prefer the delivered-to headers (Delivered-To / X-Original-To / To); fall back to
+    the impersonated account only if none are present."""
     try:
-        to = (parsed.get("headers", {}) or {}).get("To", "") or parsed.get("to", "")
-    except Exception:
-        to = ""
-    return (to or "gmail-inbox").strip().lower()
+        msg = message_from_bytes(raw_bytes or b"", policy=compat32)
+        for hdr in ("Delivered-To", "X-Original-To", "To"):
+            m = re.search(r"[\w.+-]+@[\w.-]+", str(msg.get(hdr, "") or ""))
+            if m:
+                return m.group(0).strip().lower()
+    except Exception as exc:
+        logger.info("gmail_recipient_parse_err", error=str(exc))
+    rcpt = getattr(settings, "google_admin_impersonate_email", "") or ""
+    return (rcpt or "gmail-inbox").strip().lower()
 
 
 def ingest_gmail_message(parsed: dict, raw_bytes: bytes, settings,
@@ -99,7 +119,7 @@ def ingest_gmail_message(parsed: dict, raw_bytes: bytes, settings,
         return None
 
     parsed = parsed or {}
-    recipient = _gmail_recipient(parsed, settings)
+    recipient = _gmail_recipient(parsed, raw_bytes, settings)
     mail_from = parsed.get("sender_email") or parsed.get("from_header", "") or ""
 
     decision = evaluate(recipient, mail_from, parsed, raw_bytes)
@@ -109,7 +129,19 @@ def ingest_gmail_message(parsed: dict, raw_bytes: bytes, settings,
         logger.info("gmail_bombing_triage", rcpt=recipient, action=decision.action,
                     tier=decision.tier, reason=decision.reason)
         if decision.action == "buffer":
-            buffer(decision, recipient, scan_id, raw_bytes,
-                   str(parsed.get("sender_domain", "") or ""),
-                   str(parsed.get("subject", "") or ""))
+            if buffer_is_full(recipient):
+                # Overflow valve: deliver immediately-labeled instead of buffering.
+                try:
+                    from app.layer7_gmail.gmail_client import deliver_to_inbox
+                    from app.layer7_gmail.smtp_receiver import _TIER_LABELS, _tag_subject
+                    deliver_to_inbox(settings, _tag_subject(
+                        raw_bytes, _TIER_LABELS.get(decision.tier, _TIER_LABELS["uncertain"])),
+                        "PhishGuard-Released")
+                    logger.warning("gmail_bombing_buffer_overflow_delivered", rcpt=recipient)
+                except Exception as exc:
+                    logger.warning("gmail_overflow_deliver_err", error=str(exc))
+            else:
+                buffer(decision, recipient, scan_id, raw_bytes,
+                       str(parsed.get("sender_domain", "") or ""),
+                       str(parsed.get("subject", "") or ""))
     return decision._asdict()
