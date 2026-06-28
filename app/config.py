@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     api_key_role: str = Field(default="analyst")
     api_key_roles: str = Field(default="")
     jwt_secret: str = Field(default="change-me-in-production")
+    # Allowed CORS origins for the dashboard (comma-separated). Wildcard '*' with
+    # credentials is unsafe, so default to the local dashboard origins.
+    cors_allow_origins: str = Field(default="http://localhost:8000,http://127.0.0.1:8000")
 
     # ── LLM provider (used by all AI layers) ─────────────────────────────────
     # auto = detect from whichever key is set (claude → openai → gemini → heuristic)

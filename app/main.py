@@ -100,12 +100,14 @@ async def _lifespan(app):
 app = FastAPI(title='PhishGuard', version='1.5.0', docs_url='/api/docs', lifespan=_lifespan)
 _rate_limit = get_rate_limiter(limit=120, window=60)
 
+_cors_origins = [o.strip() for o in getattr(settings, 'cors_allow_origins', '').split(',') if o.strip()] \
+    or ['http://localhost:8000', 'http://127.0.0.1:8000']
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
+    allow_origins=_cors_origins,            # no wildcard with credentials
     allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
+    allow_methods=['GET', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+    allow_headers=['Authorization', 'Content-Type'],
 )
 
 app.add_middleware(AuditMiddleware)
