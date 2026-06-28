@@ -7,6 +7,17 @@ import pytest
 import app.security.smtp_rate_limiter as rl
 
 
+@pytest.fixture(autouse=True)
+def _pin_limits(monkeypatch):
+    """Pin limit constants to known defaults so tests don't depend on ambient env
+    (e.g. SMTP_RATE_PER_IP from a loaded .env), which made them env-fragile."""
+    monkeypatch.setattr(rl, "PER_IP_LIMIT", 10)
+    monkeypatch.setattr(rl, "PER_DOMAIN_LIMIT", 20)
+    monkeypatch.setattr(rl, "PER_RCPT_LIMIT", 30)
+    monkeypatch.setattr(rl, "GLOBAL_LIMIT", 60)
+    monkeypatch.setattr(rl, "DEMO_MODE", False)
+
+
 def _reset():
     """Clear all in-memory state between tests."""
     rl._ip_windows.clear()
@@ -15,6 +26,7 @@ def _reset():
     rl._global_window.clear()
     rl._burst_windows.clear()
     rl._alerted_at.clear()
+    rl._drop_windows.clear()
 
 
 class TestPerIPLimit:

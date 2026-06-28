@@ -97,8 +97,9 @@ def test_no_alert_empty_zones_moderate():
 
 
 @pytest.mark.asyncio
-async def test_alert_skips_when_no_webhook(mocker):
+async def test_alert_skips_when_no_webhook(mocker, monkeypatch):
     """No webhook URL → silent skip, no HTTP call."""
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)   # don't fall back to ambient env
     mock_post = mocker.patch("httpx.AsyncClient.post")
     result = await alert_if_critical(_cluster(), _profile(surface_zones=["ground_station_ingress"]), webhook_url="")
     assert result is False

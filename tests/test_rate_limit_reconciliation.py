@@ -4,7 +4,19 @@
   pre-empt it (otherwise it could 421 the OTP the bomb is burying).
 - BOMBING_DEMO_MODE disables rate-limit blocking so a demo bomb reaches the detector.
 """
+import pytest
+
 import app.security.smtp_rate_limiter as rl
+
+
+@pytest.fixture(autouse=True)
+def _pin_limits(monkeypatch):
+    """Deterministic limits regardless of ambient env (.env SMTP_RATE_* leakage)."""
+    monkeypatch.setattr(rl, "PER_IP_LIMIT", 10)
+    monkeypatch.setattr(rl, "PER_DOMAIN_LIMIT", 20)
+    monkeypatch.setattr(rl, "PER_RCPT_LIMIT", 30)
+    monkeypatch.setattr(rl, "GLOBAL_LIMIT", 60)
+    monkeypatch.setattr(rl, "DEMO_MODE", False)
 
 
 def _reset():
