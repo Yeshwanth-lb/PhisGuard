@@ -23,8 +23,11 @@ services:
       - AUDIT_LOG_FILE=/app/data/audit.jsonl
       - MISP_URL=https://misp
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
-    user: "0"
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+    # Runs as the Dockerfile's non-root 'phishguard' user (was user:"0" = root, a
+    # container-escape risk given the docker.sock mount). Socket access is granted by
+    # the post-restart `chmod 666 /var/run/docker.sock` step; volume ownership is
+    # fixed to the app user on deploy. See RUNBOOK deploy steps.
     ports:
       - "8000:8000"
       - "8025:8025"
@@ -216,7 +219,7 @@ services:
       - APP__BASE_URL=http://localhost:8080
       - APP__ADMIN__EMAIL=admin@phishguard.local
       - APP__ADMIN__PASSWORD=changeme123
-      - APP__ADMIN__TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - APP__ADMIN__TOKEN=${OPENCTI_TOKEN}
       - APP__APP_LOGS__LOGS_LEVEL=error
       - REDIS__HOSTNAME=redis
       - REDIS__PORT=6379
@@ -263,14 +266,14 @@ services:
     restart: unless-stopped
     environment:
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
       - CONNECTOR_ID=misp-connector-phishguard
       - CONNECTOR_NAME=MISP PhishGuard
       - CONNECTOR_SCOPE=misp-galaxy,misp-attack-pattern,misp-course-of-action,misp-intrusion-set,misp-malware,misp-tool,misp-vulnerability
       - CONNECTOR_LOG_LEVEL=error
       - MISP_URL=https://misp
       - MISP_REFERENCE_URL=http://localhost:8888
-      - MISP_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
+      - MISP_KEY=${MISP_KEY}
       - MISP_SSL=false
       - MISP_SSL_VERIFY=false
       - MISP_VERIFYCERT=false
@@ -298,7 +301,7 @@ services:
     restart: unless-stopped
     environment:
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
       - WORKER_LOG_LEVEL=error
     depends_on:
       - opencti
