@@ -36,10 +36,13 @@ BombingDecision = namedtuple(
 
 
 def evaluate(recipient: str, mail_from: str, parsed: dict,
-             raw_bytes: bytes) -> BombingDecision:
+             raw_bytes: bytes, peer_ip: str | None = None) -> BombingDecision:
     """Record the arrival, run cascading-window detection, and — if the recipient is
     under attack — triage this email into a tier. Call this for EVERY ingested email
-    (detection needs to see all arrivals, not just ones during an active bomb)."""
+    (detection needs to see all arrivals, not just ones during an active bomb).
+
+    peer_ip is the connecting SMTP client IP — enables real SPF alignment in Tier-1
+    classification. Omitted by the Gmail path (no live peer IP); DKIM still applies."""
     parsed = parsed or {}
     subject = str(parsed.get("subject", "") or "")
 
@@ -50,7 +53,8 @@ def evaluate(recipient: str, mail_from: str, parsed: dict,
     if not under_attack:
         return BombingDecision(False, newly, None, None, None, None, "not_under_attack")
 
-    tri = triage.classify(parsed, raw_bytes, first_contact)
+    tri = triage.classify(parsed, raw_bytes, first_contact,
+                          peer_ip=peer_ip, envelope_from=mail_from)
     return BombingDecision(True, newly, tri.action, tri.tier, tri.label,
                            tri.signal, tri.reason)
 

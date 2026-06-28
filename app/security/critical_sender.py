@@ -23,14 +23,13 @@ WHY WE COMPUTE ALIGNMENT OURSELVES (not parsed['dmarc_result']):
   MTA stamped Authentication-Results, and a forged header cannot fake a valid
   cryptographic signature.
 
-SPF ALIGNMENT — DELIBERATELY NOT TRUST-GRANTING (yet):
-  A raw spf=pass does NOT catch a forged From, and on our gateway the scraped
-  Received-SPF/Authentication-Results is itself forgeable. A correct SPF check
-  needs the live connecting peer IP, which is not plumbed to this layer in 1A.
-  So SPF is reported for transparency but never grants Tier 1 on its own. Live
-  peer-IP SPF is a documented follow-up (Phase 3). This is fail-closed: a bank
-  that only passes SPF (no DKIM) lands in Tier 3 — delivered + soft-labeled,
-  still visible — never falsely fast-tracked.
+SPF ALIGNMENT — real DMARC SPF-alignment (not a bare spf=pass):
+  We perform a live SPF check against the connecting peer IP (passed in from the SMTP
+  session) for the envelope MAIL FROM, AND require that envelope domain to align
+  organizationally with the From domain. A bare spf=pass on a non-aligned domain does
+  NOT count (that's how forged-From mail can pass SPF). The peer IP is only available
+  on the SMTP path; Gmail-ingested mail has none, so SPF contributes nothing there and
+  DKIM alignment carries the decision. Trust = DKIM-aligned OR SPF-aligned. Fail-closed.
 
 CHECKDMARC (optional corroborator):
   If the `checkdmarc` library is installed, we annotate whether the From org-domain
@@ -152,17 +151,38 @@ def _dkim_aligned(raw_bytes: bytes | None, from_org: str) -> bool:
     return False
 
 
-def _spf_info(parsed: dict, from_org: str) -> dict:
-    """Report SPF result + envelope alignment for transparency. NOT trust-granting
-    (see module docstring)."""
-    spf = (parsed.get("spf_result") or "unknown").lower()
-    rp = parsed.get("return_path") or ""
-    m = re.search(r"@([\w.-]+)", rp)
-    env_org = organizational_domain(m.group(1)) if m else ""
-    return {
-        "spf_result": spf,
-        "envelope_aligned": bool(env_org) and env_org == from_org,
-    }
+def _envelope_domain(envelope_from: str) -> str:
+    addr = (envelope_from or "").strip().strip("<>").lower()
+    m = re.search(r"@([\w.-]+)", addr)
+    if m:
+        return m.group(1)
+    return addr if "." in addr else ""
+
+
+def _spf_aligned(peer_ip: str | None, envelope_from: str | None, from_org: str) -> bool:
+    """True only if SPF PASSES for the connecting IP AND the SPF-authenticated domain
+    (the envelope MAIL FROM) organizationally aligns with the From domain — i.e. real
+    DMARC SPF-alignment, not a bare spf=pass.
+
+    Requires the live connecting peer IP, so it only contributes on the SMTP path
+    (Gmail-ingested mail has no peer IP → returns False, DKIM still applies). Fail-closed
+    on any missing data, missing pyspf, or DNS error."""
+    if not peer_ip or not envelope_from or not from_org:
+        return False
+    env_domain = _envelope_domain(envelope_from)
+    if not env_domain or organizational_domain(env_domain) != from_org:
+        return False   # SPF would authenticate a non-aligned domain → not DMARC-aligned
+    try:
+        import spf  # pyspf — performs the SPF DNS lookup
+    except Exception:
+        logger.warning("critical_sender_spf_unavailable")
+        return False
+    try:
+        result, _ = spf.check2(i=peer_ip, s=envelope_from.strip().strip("<>"), h=env_domain)
+    except Exception as exc:
+        logger.info("critical_sender_spf_err", error=str(exc))
+        return False
+    return result == "pass"
 
 
 def _published_dmarc(from_org: str) -> str | None:
@@ -184,10 +204,15 @@ def _published_dmarc(from_org: str) -> str | None:
 
 def is_critical_sender(parsed: dict | None,
                        raw_bytes: bytes | None = None,
-                       trusted_domains: set[str] | None = None) -> CriticalResult:
+                       trusted_domains: set[str] | None = None,
+                       peer_ip: str | None = None,
+                       envelope_from: str | None = None) -> CriticalResult:
     """Decide whether an email is from an authenticated critical sender.
 
-    Returns a CriticalResult. Use ``.is_critical`` for the Tier-1 gate and
+    Trust = real DMARC alignment: DKIM-aligned (signature verified + signing domain
+    aligns) OR SPF-aligned (SPF passes for the peer IP + envelope domain aligns).
+    peer_ip/envelope_from enable the SPF path (SMTP only); without them DKIM still
+    applies. Returns a CriticalResult — use ``.is_critical`` for the Tier-1 gate and
     ``.signal == 'spoofed_critical'`` to route a protected-TLD spoof to phishing.
     """
     parsed = parsed or {}
@@ -202,14 +227,16 @@ def is_critical_sender(parsed: dict | None,
     if not _is_protected_domain(from_domain, trusted):
         return CriticalResult(False, None, from_domain, False, "not_protected")
 
-    aligned = _dkim_aligned(raw_bytes, from_org)
-    spf = _spf_info(parsed, from_org)
-    detail = {"dkim_aligned": aligned, **spf, "published_dmarc": _published_dmarc(from_org)}
+    dkim_ok = _dkim_aligned(raw_bytes, from_org)
+    spf_ok  = _spf_aligned(peer_ip, envelope_from, from_org)
+    aligned = dkim_ok or spf_ok
+    detail = {"dkim_aligned": dkim_ok, "spf_aligned": spf_ok,
+              "published_dmarc": _published_dmarc(from_org)}
 
     if aligned:
         return CriticalResult(True, "critical", from_domain, True, detail)
 
-    # Claimed a protected TLD / trusted domain but no cryptographically aligned
-    # authentication → treat as a spoof. PHISHING indicator, never trusted.
+    # Claimed a protected TLD / trusted domain but neither DKIM nor SPF aligns →
+    # treat as a spoof. PHISHING indicator, never trusted.
     logger.warning("critical_sender_spoofed", from_domain=from_domain, detail=detail)
     return CriticalResult(False, "spoofed_critical", from_domain, False, detail)

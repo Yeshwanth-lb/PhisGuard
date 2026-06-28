@@ -62,9 +62,11 @@ dnspython==2.8.0
 dkimpy==1.1.8
 
 # Bombing triage — critical-sender DMARC alignment.
-# dkimpy (above) does the real cryptographic DKIM-alignment check. checkdmarc is an
-# OPTIONAL corroborator (published-policy lookup only); critical_sender.py imports it
-# gracefully and works without it, so this line can be omitted in minimal installs.
+# dkimpy (above) does the real cryptographic DKIM-alignment check; pyspf does the real
+# SPF check (against the live SMTP peer IP). Trust = DKIM-aligned OR SPF-aligned.
+# checkdmarc is an OPTIONAL corroborator (published-policy lookup only); critical_sender.py
+# imports each gracefully and works without it, so these can be omitted in minimal installs.
+pyspf==2.0.14
 checkdmarc==5.7.4
 
 # Layer 2 NLP - Gemini SDK

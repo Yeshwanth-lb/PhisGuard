@@ -155,7 +155,7 @@ class PhishGuardSMTPHandler:
         # nothing is dropped or held for a human. Normal (non-bombing) routing below
         # is untouched. See app/security/bombing_triage.py.
         from app.security import bombing_pipeline as _bp
-        decision = _bp.evaluate(_rcpt_for_bomb, mail_from, parsed, raw_bytes)
+        decision = _bp.evaluate(_rcpt_for_bomb, mail_from, parsed, raw_bytes, peer_ip=peer_ip)
         if decision.newly_detected:
             logger.warning("inbox_bombing_started", rcpt=_rcpt_for_bomb, sender=mail_from)
         if decision.under_attack:

@@ -111,14 +111,19 @@ def _tier2_signals(msg, sender_domain: str, first_contact: bool) -> list[str]:
 
 
 def classify(parsed: dict, raw_bytes: bytes, first_contact: bool,
-             trusted_domains: set[str] | None = None) -> TriageResult:
-    """Triage one email arriving during active bombing mode. See module docstring."""
+             trusted_domains: set[str] | None = None,
+             peer_ip: str | None = None, envelope_from: str | None = None) -> TriageResult:
+    """Triage one email arriving during active bombing mode. See module docstring.
+
+    peer_ip/envelope_from feed real SPF alignment in the Tier-1 authentication check
+    (SMTP path); without them, DKIM alignment alone decides."""
     parsed = parsed or {}
     subject = str(parsed.get("subject", "") or "")
     sender_domain = (parsed.get("sender_domain") or "").lower()
 
     # ── Tier 1 / spoofed_critical — authentication decides, not the subject ─────
-    crit = critical_sender.is_critical_sender(parsed, raw_bytes, trusted_domains)
+    crit = critical_sender.is_critical_sender(parsed, raw_bytes, trusted_domains,
+                                              peer_ip=peer_ip, envelope_from=envelope_from)
     if crit.signal == "spoofed_critical":
         # Claimed a protected/trusted identity but failed cryptographic alignment.
         return TriageResult("phishing", None, "", "spoofed_critical",

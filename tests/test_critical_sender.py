@@ -6,7 +6,16 @@ cryptographically aligned. A protected-TLD claim that fails alignment is the dis
 
 DKIM verification is mocked — no real network/keys are touched.
 """
+import sys
+import types
+
 import app.security.critical_sender as cs
+
+
+def _fake_spf(result="pass"):
+    m = types.ModuleType("spf")
+    m.check2 = lambda i, s, h: (result, "")
+    return m
 
 
 def _raw(from_addr: str, dkim_domain: str | None = None) -> bytes:
@@ -119,3 +128,52 @@ class TestCriticalSender:
         )
         assert res.is_critical is False
         assert res.signal == "spoofed_critical"
+
+
+class TestSpfAlignment:
+    """SPF path: trust = DKIM-aligned OR SPF-aligned (real DMARC alignment)."""
+
+    def test_spf_aligned_grants_tier1_without_dkim(self, monkeypatch):
+        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)   # no DKIM
+        monkeypatch.setitem(sys.modules, "spf", _fake_spf("pass"))
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+                                    trusted_domains=set(), peer_ip="203.0.113.5",
+                                    envelope_from="bounce@hdfc.bank")
+        assert res.is_critical is True and res.signal == "critical"
+        assert res.detail["spf_aligned"] is True and res.detail["dkim_aligned"] is False
+
+    def test_spf_pass_but_not_aligned_is_spoofed(self, monkeypatch):
+        """spf=pass on a NON-aligned envelope domain must not grant trust."""
+        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
+        monkeypatch.setitem(sys.modules, "spf", _fake_spf("pass"))
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+                                    trusted_domains=set(), peer_ip="203.0.113.5",
+                                    envelope_from="bounce@random-mailer.com")
+        assert res.is_critical is False and res.signal == "spoofed_critical"
+        assert res.detail["spf_aligned"] is False
+
+    def test_spf_softfail_is_spoofed(self, monkeypatch):
+        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
+        monkeypatch.setitem(sys.modules, "spf", _fake_spf("softfail"))
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+                                    trusted_domains=set(), peer_ip="203.0.113.5",
+                                    envelope_from="bounce@hdfc.bank")
+        assert res.is_critical is False and res.signal == "spoofed_critical"
+
+    def test_spf_skipped_without_peer_ip(self, monkeypatch):
+        """No peer IP (e.g. Gmail-ingested mail) → SPF can't run; DKIM alone decides."""
+        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
+        monkeypatch.setitem(sys.modules, "spf", _fake_spf("pass"))
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+                                    trusted_domains=set(), peer_ip=None,
+                                    envelope_from="bounce@hdfc.bank")
+        assert res.is_critical is False and res.detail["spf_aligned"] is False
+
+    def test_dkim_wins_even_if_spf_fails(self, monkeypatch):
+        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
+        monkeypatch.setitem(sys.modules, "spf", _fake_spf("fail"))
+        res = cs.is_critical_sender(_parsed("hdfc.bank"),
+                                    _raw("a@hdfc.bank", dkim_domain="hdfc.bank"),
+                                    trusted_domains=set(), peer_ip="203.0.113.5",
+                                    envelope_from="bounce@hdfc.bank")
+        assert res.is_critical is True   # DKIM-aligned OR SPF-aligned
