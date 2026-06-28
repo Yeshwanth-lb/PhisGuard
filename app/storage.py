@@ -364,6 +364,34 @@ def buffer_mark_released(buffer_id: str) -> bool:
         return True
 
 
+def buffer_claim(buffer_id: str) -> bool:
+    """Atomically claim a buffered row for release (flip released 0→1). Returns True
+    only if THIS caller won the claim. Safe across concurrent release workers /
+    uvicorn worker processes: the conditional UPDATE is serialized by SQLite, so
+    exactly one caller sees rowcount==1 — preventing double-delivery."""
+    with _lock:
+        c = _conn()
+        cur = c.execute(
+            "UPDATE bombing_buffer SET released = 1 WHERE id = ? AND released = 0",
+            (buffer_id,),
+        )
+        c.commit()
+        won = cur.rowcount == 1
+        c.close()
+        return won
+
+
+def buffer_unclaim(buffer_id: str) -> bool:
+    """Revert a claim (released 1→0) so the message is retried next cycle — used when
+    delivery fails after claiming, so nothing is dropped."""
+    with _lock:
+        c = _conn()
+        c.execute("UPDATE bombing_buffer SET released = 0 WHERE id = ?", (buffer_id,))
+        c.commit()
+        c.close()
+        return True
+
+
 def buffer_purge_expired(older_than_secs: float = 86400) -> int:
     """Delete already-released buffer rows older than the cutoff. Returns count."""
     with _lock:

@@ -319,20 +319,27 @@ def _release_due(settings) -> int:
 
     released = 0
     for row in due:
+        # Atomically claim before delivering so concurrent release workers (the app
+        # runs uvicorn --workers) never double-deliver the same message. If we don't
+        # win the claim, another worker owns this row — skip it.
+        if not storage.buffer_claim(row["id"]):
+            continue
         try:
             label  = _TIER_LABELS.get(row.get("tier"), _TIER_LABELS["uncertain"])
             tagged = _tag_subject(row["raw_email"], label)
-            ok = deliver_to_inbox(settings, tagged, "PhishGuard-Released")
+            ok = bool(deliver_to_inbox(settings, tagged, "PhishGuard-Released"))
             if not ok:
                 mail_from = _parse_mail_from(row["raw_email"])
-                try:
-                    asyncio.run(_relay_raw(tagged, mail_from, [row["recipient"]], settings))
-                except Exception as exc:
-                    logger.warning("bombing_release_relay_err", id=row.get("id"),
-                                   error=str(exc))
-            storage.buffer_mark_released(row["id"])
-            released += 1
+                ok = bool(asyncio.run(_relay_raw(tagged, mail_from, [row["recipient"]], settings)))
+            if ok:
+                released += 1
+            else:
+                # Neither path delivered → revert the claim so it retries next cycle.
+                # Nothing is dropped (honors the no-drop guarantee).
+                storage.buffer_unclaim(row["id"])
+                logger.warning("bombing_release_undelivered", id=row.get("id"))
         except Exception as exc:
+            storage.buffer_unclaim(row["id"])
             logger.warning("bombing_release_item_err", id=row.get("id"), error=str(exc))
 
     if released:
