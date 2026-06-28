@@ -290,18 +290,18 @@ async def get_quarantine(page: int = 1, limit: int = 50):
 
 
 @app.get('/api/quarantine')
-async def list_quarantine(limit: int = 50, offset: int = 0):
+async def list_quarantine(limit: int = 50, offset: int = 0, _auth: dict = Depends(require_auth)):
     return {'items': storage.list_scans(limit=limit, offset=offset, only_quarantined=True)}
 
 
 @app.get('/api/scans')
-async def list_scans(limit: int = 50, offset: int = 0, verdict: str = None, hours: int = None):
+async def list_scans(limit: int = 50, offset: int = 0, verdict: str = None, hours: int = None, _auth: dict = Depends(require_auth)):
     since = (time.time() - hours * 3600) if hours else None
     return {'items': storage.list_scans(limit=limit, offset=offset, verdict_filter=verdict, since_ts=since)}
 
 
 @app.get('/api/scan/{scan_id}')
-async def get_scan_detail(scan_id: str):
+async def get_scan_detail(scan_id: str, _auth: dict = Depends(require_auth)):
     s = storage.get_scan(scan_id)
     if not s:
         raise HTTPException(status_code=404, detail='Scan not found')
@@ -316,19 +316,19 @@ async def get_scan_detail(scan_id: str):
 
 
 @app.post('/api/scan/{scan_id}/release')
-async def release_scan(scan_id: str):
+async def release_scan(scan_id: str, _auth: dict = Depends(require_permission('release'))):
     storage.release_scan(scan_id)
     return {'ok': True}
 
 
 @app.delete('/api/scan/{scan_id}')
-async def delete_scan(scan_id: str):
+async def delete_scan(scan_id: str, _auth: dict = Depends(require_permission('quarantine'))):
     storage.delete_scan(scan_id)
     return {'ok': True}
 
 
 @app.get('/api/stats')
-async def get_stats(hours: int = None):
+async def get_stats(hours: int = None, _auth: dict = Depends(require_auth)):
     since = (time.time() - hours * 3600) if hours else None
     return storage.get_stats(since_ts=since)
 
@@ -338,7 +338,7 @@ from app.layer4_soar import denylist as _deny
 
 
 @app.get('/api/denylist')
-async def list_denylist(kind: str = None, only_active: bool = True, limit: int = 200):
+async def list_denylist(kind: str = None, only_active: bool = True, limit: int = 200, _auth: dict = Depends(require_auth)):
     return {
         'items': _deny.list_entries(kind=kind, only_active=only_active, limit=limit),
         'stats': _deny.stats(),
@@ -346,7 +346,7 @@ async def list_denylist(kind: str = None, only_active: bool = True, limit: int =
 
 
 @app.post('/api/denylist')
-async def add_denylist(body: dict):
+async def add_denylist(body: dict, _auth: dict = Depends(require_permission('denylist_write'))):
     kind = (body.get('kind') or '').strip().lower()
     value = (body.get('value') or '').strip().lower()
     reason = body.get('reason') or 'manual'
@@ -359,7 +359,7 @@ async def add_denylist(body: dict):
 
 
 @app.delete('/api/denylist/{kind}/{value:path}')
-async def remove_denylist(kind: str, value: str):
+async def remove_denylist(kind: str, value: str, _auth: dict = Depends(require_permission('denylist_write'))):
     ok = _deny.remove_entry(kind, value)
     return {'ok': ok}
 
@@ -428,7 +428,7 @@ async def send_digest_now(current_user: dict = Depends(require_permission('soar'
 
 
 @app.get('/api/soar/status')
-async def soar_status():
+async def soar_status(_auth: dict = Depends(require_auth)):
     """Show which SOAR integrations are configured and reachable."""
     out = []
     es_url = getattr(settings, 'elasticsearch_url', '')
@@ -460,7 +460,7 @@ async def soar_status():
 
 
 @app.get('/api/soar/audit')
-async def soar_audit(limit: int = 50):
+async def soar_audit(limit: int = 50, _auth: dict = Depends(require_permission('audit'))):
     """Recent SOAR actions sourced from ES."""
     es_url = getattr(settings, 'elasticsearch_url', '')
     if not es_url:
@@ -484,7 +484,7 @@ async def soar_audit(limit: int = 50):
 
 
 @app.get('/api/soar/test')
-async def soar_test():
+async def soar_test(_auth: dict = Depends(require_permission('soar'))):
     return await _run_soar_dryrun()
 
 
@@ -561,7 +561,7 @@ async def patch_settings(body: dict, current_user: dict = Depends(require_permis
 
 
 @app.get('/api/settings')
-async def get_settings():
+async def get_settings(_auth: dict = Depends(require_permission('settings'))):
     overrides = _load_overrides()
     items = []
     keys = [
@@ -655,7 +655,7 @@ async def download_evidence(
 
 
 @app.get('/api/scan/{scan_id}/screenshot')
-async def get_screenshot(scan_id: str):
+async def get_screenshot(scan_id: str, _auth: dict = Depends(require_auth)):
     import os
     path = f'data/screenshots/{scan_id}.png'
     if not os.path.exists(path):
