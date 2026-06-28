@@ -70,4 +70,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fs http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Single worker: the app holds in-process singletons (SMTP gateway on :8025, the
+# bombing detector + rate-limiter state, and the daemon schedulers). With >1 worker
+# only one binds SMTP, detector/rate-limiter state splits per-process (so /api/bombing
+# stats read wrong on the other worker), and schedulers double-run. FastAPI is async,
+# so one worker still serves many concurrent dashboard requests.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
