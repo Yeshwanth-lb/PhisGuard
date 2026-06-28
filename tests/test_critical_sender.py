@@ -1,10 +1,12 @@
-"""Tests for the DMARC-aligned critical-sender recognizer (Phase 1A).
+"""Tests for the DMARC-aligned critical-sender recognizer.
 
-The throughline: a sender is Tier-1 'critical' ONLY when it is a protected type AND
-cryptographically aligned. A protected-TLD claim that fails alignment is the distinct
-'spoofed_critical' phishing signal — never trusted. Everything fails CLOSED.
+A sender is Tier-1 'critical' ONLY when it is a protected type AND cryptographically
+aligned (DKIM-aligned OR SPF-aligned). A protected-TLD claim that fails alignment is the
+distinct 'spoofed_critical' phishing signal — never trusted. Everything fails CLOSED.
 
-DKIM verification is mocked — no real network/keys are touched.
+DKIM and SPF are mocked — no real network/keys are touched. DKIM is verified PER
+SIGNATURE (dkim.DKIM().verify(idx)), so we mock that class to control each signature's
+verification result, signing domain, and signed-headers (h=).
 """
 import sys
 import types
@@ -18,13 +20,33 @@ def _fake_spf(result="pass"):
     return m
 
 
-def _raw(from_addr: str, dkim_domain: str | None = None) -> bytes:
+def _raw(from_addr: str, n_sigs: int = 0) -> bytes:
+    """Build a raw message with `n_sigs` DKIM-Signature headers (content irrelevant —
+    the DKIM class is mocked; only the header COUNT drives the per-signature loop)."""
     h = f"From: {from_addr}\r\n"
-    if dkim_domain:
-        h += (f"DKIM-Signature: v=1; a=rsa-sha256; d={dkim_domain}; s=sel; "
+    for i in range(n_sigs):
+        h += (f"DKIM-Signature: v=1; a=rsa-sha256; d=sig{i}.example; s=sel; "
               f"h=from:subject; bh=abc; b=def\r\n")
     h += "Subject: Your statement is ready\r\n\r\nbody\r\n"
     return h.encode()
+
+
+def _install_fake_dkim(monkeypatch, sigs):
+    """sigs: list of (verified: bool, signing_domain: str, h_tag: str) per signature idx."""
+    import dkim
+
+    class _FakeDKIM:
+        def __init__(self, raw, *a, **k):
+            self.domain = b""
+            self.signature_fields = {}
+
+        def verify(self, idx=0, **k):
+            ok, dom, h = sigs[idx]
+            self.domain = dom.encode()
+            self.signature_fields = {b"h": h.encode()}
+            return ok
+
+    monkeypatch.setattr(dkim, "DKIM", _FakeDKIM)
 
 
 def _parsed(domain: str, return_path: str = "", spf: str = "unknown") -> dict:
@@ -50,130 +72,113 @@ class TestOrganizationalDomain:
 
 class TestCriticalSender:
     def test_protected_tld_aligned_dkim_is_critical(self, monkeypatch):
-        """Protected TLD + DKIM verifies + signing domain aligns → Tier 1."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
-        res = cs.is_critical_sender(
-            _parsed("hdfc.bank"), _raw("a@hdfc.bank", dkim_domain="hdfc.bank"),
-            trusted_domains=set(),
-        )
-        assert res.is_critical is True
-        assert res.signal == "critical"
-        assert res.aligned is True
+        _install_fake_dkim(monkeypatch, [(True, "hdfc.bank", "from:subject")])
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 1),
+                                    trusted_domains=set())
+        assert res.is_critical is True and res.signal == "critical" and res.aligned is True
 
     def test_protected_tld_dkim_fails_is_spoofed(self, monkeypatch):
-        """Claims .bank but the DKIM signature does not verify → spoofed_critical."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
-        res = cs.is_critical_sender(
-            _parsed("hdfc.bank"), _raw("a@hdfc.bank", dkim_domain="hdfc.bank"),
-            trusted_domains=set(),
-        )
-        assert res.is_critical is False
-        assert res.signal == "spoofed_critical"
+        _install_fake_dkim(monkeypatch, [(False, "hdfc.bank", "from:subject")])
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 1),
+                                    trusted_domains=set())
+        assert res.is_critical is False and res.signal == "spoofed_critical"
 
-    def test_protected_tld_signing_domain_misaligned_is_spoofed(self, monkeypatch):
-        """DKIM verifies but signs as attacker.com (not aligned to From) → spoofed."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
-        res = cs.is_critical_sender(
-            _parsed("hdfc.bank"), _raw("a@hdfc.bank", dkim_domain="attacker.com"),
-            trusted_domains=set(),
-        )
-        assert res.is_critical is False
-        assert res.signal == "spoofed_critical"
+    def test_signing_domain_misaligned_is_spoofed(self, monkeypatch):
+        _install_fake_dkim(monkeypatch, [(True, "attacker.com", "from:subject")])
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 1),
+                                    trusted_domains=set())
+        assert res.is_critical is False and res.signal == "spoofed_critical"
 
-    def test_protected_tld_no_raw_fails_closed(self):
-        """No raw message to verify → cannot align → spoofed_critical (fail-closed)."""
+    def test_multi_signature_spoof_is_rejected(self, monkeypatch):
+        """THE bypass: a valid throwaway sig (idx0) + a bogus d=<victim> sig (idx1).
+        Only the verified sig's d= may be trusted, and it doesn't align → spoofed."""
+        _install_fake_dkim(monkeypatch, [
+            (True,  "attacker.com", "from:subject"),   # verifies, but not aligned
+            (False, "hdfc.bank",    "from:subject"),   # claims victim, does NOT verify
+        ])
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 2),
+                                    trusted_domains=set())
+        assert res.is_critical is False and res.signal == "spoofed_critical"
+
+    def test_aligned_but_from_not_signed_is_spoofed(self, monkeypatch):
+        """Verified + aligned d=, but the signature does not cover From → meaningless."""
+        _install_fake_dkim(monkeypatch, [(True, "hdfc.bank", "subject:date")])
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 1),
+                                    trusted_domains=set())
+        assert res.is_critical is False and res.signal == "spoofed_critical"
+
+    def test_no_raw_fails_closed(self):
         res = cs.is_critical_sender(_parsed("treasury.gov"), None, trusted_domains=set())
-        assert res.is_critical is False
-        assert res.signal == "spoofed_critical"
+        assert res.is_critical is False and res.signal == "spoofed_critical"
 
     def test_dkim_verify_raises_fails_closed(self, monkeypatch):
-        def _boom(*a, **k):
-            raise RuntimeError("dns timeout")
-        monkeypatch.setattr("dkim.verify", _boom)
-        res = cs.is_critical_sender(
-            _parsed("x.bank"), _raw("a@x.bank", dkim_domain="x.bank"),
-            trusted_domains=set(),
-        )
-        assert res.is_critical is False
-        assert res.signal == "spoofed_critical"
+        import dkim
+
+        class _BoomDKIM:
+            def __init__(self, raw, *a, **k): pass
+            def verify(self, idx=0, **k): raise RuntimeError("dns timeout")
+        monkeypatch.setattr(dkim, "DKIM", _BoomDKIM)
+        res = cs.is_critical_sender(_parsed("x.bank"), _raw("a@x.bank", 1), trusted_domains=set())
+        assert res.is_critical is False and res.signal == "spoofed_critical"
 
     def test_non_protected_domain_is_not_critical(self, monkeypatch):
-        """An ordinary domain is neither critical nor spoofed — just not protected."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
-        res = cs.is_critical_sender(
-            _parsed("newsletter.example.com"),
-            _raw("a@newsletter.example.com", dkim_domain="example.com"),
-            trusted_domains=set(),
-        )
-        assert res.is_critical is False
-        assert res.signal is None
+        _install_fake_dkim(monkeypatch, [(True, "example.com", "from")])
+        res = cs.is_critical_sender(_parsed("newsletter.example.com"),
+                                    _raw("a@newsletter.example.com", 1), trusted_domains=set())
+        assert res.is_critical is False and res.signal is None
 
     def test_trusted_table_domain_aligned_is_critical(self, monkeypatch):
-        """Domain in the trusted_domains table (not a protected TLD) + aligned → Tier 1."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
-        res = cs.is_critical_sender(
-            _parsed("mycreditunion.com"),
-            _raw("a@mycreditunion.com", dkim_domain="mycreditunion.com"),
-            trusted_domains={"mycreditunion.com"},
-        )
-        assert res.is_critical is True
-        assert res.signal == "critical"
+        _install_fake_dkim(monkeypatch, [(True, "mycreditunion.com", "from")])
+        res = cs.is_critical_sender(_parsed("mycreditunion.com"),
+                                    _raw("a@mycreditunion.com", 1),
+                                    trusted_domains={"mycreditunion.com"})
+        assert res.is_critical is True and res.signal == "critical"
 
     def test_trusted_table_domain_unaligned_is_spoofed(self, monkeypatch):
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
-        res = cs.is_critical_sender(
-            _parsed("mycreditunion.com"),
-            _raw("a@mycreditunion.com", dkim_domain="mycreditunion.com"),
-            trusted_domains={"mycreditunion.com"},
-        )
-        assert res.is_critical is False
-        assert res.signal == "spoofed_critical"
+        _install_fake_dkim(monkeypatch, [(False, "mycreditunion.com", "from")])
+        res = cs.is_critical_sender(_parsed("mycreditunion.com"),
+                                    _raw("a@mycreditunion.com", 1),
+                                    trusted_domains={"mycreditunion.com"})
+        assert res.is_critical is False and res.signal == "spoofed_critical"
 
 
 class TestSpfAlignment:
     """SPF path: trust = DKIM-aligned OR SPF-aligned (real DMARC alignment)."""
 
     def test_spf_aligned_grants_tier1_without_dkim(self, monkeypatch):
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)   # no DKIM
         monkeypatch.setitem(sys.modules, "spf", _fake_spf("pass"))
-        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 0),
                                     trusted_domains=set(), peer_ip="203.0.113.5",
                                     envelope_from="bounce@hdfc.bank")
         assert res.is_critical is True and res.signal == "critical"
         assert res.detail["spf_aligned"] is True and res.detail["dkim_aligned"] is False
 
     def test_spf_pass_but_not_aligned_is_spoofed(self, monkeypatch):
-        """spf=pass on a NON-aligned envelope domain must not grant trust."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
         monkeypatch.setitem(sys.modules, "spf", _fake_spf("pass"))
-        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 0),
                                     trusted_domains=set(), peer_ip="203.0.113.5",
                                     envelope_from="bounce@random-mailer.com")
         assert res.is_critical is False and res.signal == "spoofed_critical"
         assert res.detail["spf_aligned"] is False
 
     def test_spf_softfail_is_spoofed(self, monkeypatch):
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
         monkeypatch.setitem(sys.modules, "spf", _fake_spf("softfail"))
-        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 0),
                                     trusted_domains=set(), peer_ip="203.0.113.5",
                                     envelope_from="bounce@hdfc.bank")
         assert res.is_critical is False and res.signal == "spoofed_critical"
 
     def test_spf_skipped_without_peer_ip(self, monkeypatch):
-        """No peer IP (e.g. Gmail-ingested mail) → SPF can't run; DKIM alone decides."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
         monkeypatch.setitem(sys.modules, "spf", _fake_spf("pass"))
-        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank"),
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 0),
                                     trusted_domains=set(), peer_ip=None,
                                     envelope_from="bounce@hdfc.bank")
         assert res.is_critical is False and res.detail["spf_aligned"] is False
 
     def test_dkim_wins_even_if_spf_fails(self, monkeypatch):
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
+        _install_fake_dkim(monkeypatch, [(True, "hdfc.bank", "from:subject")])
         monkeypatch.setitem(sys.modules, "spf", _fake_spf("fail"))
-        res = cs.is_critical_sender(_parsed("hdfc.bank"),
-                                    _raw("a@hdfc.bank", dkim_domain="hdfc.bank"),
+        res = cs.is_critical_sender(_parsed("hdfc.bank"), _raw("a@hdfc.bank", 1),
                                     trusted_domains=set(), peer_ip="203.0.113.5",
                                     envelope_from="bounce@hdfc.bank")
         assert res.is_critical is True   # DKIM-aligned OR SPF-aligned

@@ -23,9 +23,25 @@ def _parsed(domain: str = "promo.com", subject: str = "Hello", spf: str = "unkno
             "subject": subject, "return_path": "", "spf_result": spf}
 
 
+def _install_fake_dkim(monkeypatch, verified, signing_domain, h="from:subject"):
+    """Mock the per-signature DKIM verifier for a single signature."""
+    import dkim
+
+    class _FakeDKIM:
+        def __init__(self, raw, *a, **k):
+            self.domain = b""
+            self.signature_fields = {}
+
+        def verify(self, idx=0, **k):
+            self.domain = signing_domain.encode()
+            self.signature_fields = {b"h": h.encode()}
+            return verified
+    monkeypatch.setattr(dkim, "DKIM", _FakeDKIM)
+
+
 class TestTier1AndSpoofed:
     def test_authenticated_critical_is_tier1(self, monkeypatch):
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
+        _install_fake_dkim(monkeypatch, True, "hdfc.bank")
         r = bt.classify(_parsed("hdfc.bank", "Your OTP"),
                         _raw(from_addr="a@hdfc.bank", subject="Your OTP", dkim_domain="hdfc.bank"),
                         first_contact=True, trusted_domains=set())
@@ -35,7 +51,7 @@ class TestTier1AndSpoofed:
 
     def test_spoofed_protected_routes_phishing(self, monkeypatch):
         """Claims .bank, DKIM fails → phishing route, never trusted (closes spoofing)."""
-        monkeypatch.setattr("dkim.verify", lambda *a, **k: False)
+        _install_fake_dkim(monkeypatch, False, "hdfc.bank")
         r = bt.classify(_parsed("hdfc.bank", "Your OTP"),
                         _raw(from_addr="a@hdfc.bank", subject="Your OTP", dkim_domain="hdfc.bank"),
                         first_contact=True, trusted_domains=set())

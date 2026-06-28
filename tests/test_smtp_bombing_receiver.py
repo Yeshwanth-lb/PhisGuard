@@ -45,7 +45,14 @@ def _mock_deliver(monkeypatch, sink):
 def test_tier1_authenticated_delivered_not_buffered(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     monkeypatch.setattr(bd, "is_first_contact", lambda *a, **k: False)
-    monkeypatch.setattr("dkim.verify", lambda *a, **k: True)
+    import dkim
+
+    class _FakeDKIM:
+        def __init__(self, raw, *a, **k):
+            self.domain = b"hdfc.bank"; self.signature_fields = {b"h": b"from"}
+        def verify(self, idx=0, **k):
+            self.domain = b"hdfc.bank"; self.signature_fields = {b"h": b"from"}; return True
+    monkeypatch.setattr(dkim, "DKIM", _FakeDKIM)
     delivered = []
     _mock_deliver(monkeypatch, delivered)
 

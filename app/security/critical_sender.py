@@ -114,40 +114,47 @@ def _is_protected_domain(domain: str, trusted: set[str]) -> bool:
     return domain in trusted or organizational_domain(domain) in trusted
 
 
-def _dkim_signing_domains(raw_bytes: bytes) -> list[str]:
-    """Extract every `d=` signing domain from the message's DKIM-Signature header(s)."""
-    out: list[str] = []
+def _sig_covers_from(dkim_obj) -> bool:
+    """True if the DKIM signature's h= tag actually includes the From header — an
+    alignment claim is meaningless if the signature doesn't even sign From."""
     try:
-        msg = message_from_bytes(raw_bytes, policy=compat32)
-        for sig in msg.get_all("DKIM-Signature", []):
-            m = re.search(r"\bd=([^;\s]+)", str(sig), re.IGNORECASE)
-            if m:
-                out.append(m.group(1).strip().lower().rstrip("."))
-    except Exception as exc:
-        logger.info("critical_sender_dkim_header_parse_err", error=str(exc))
-    return out
+        h = dkim_obj.signature_fields.get(b"h", b"")
+        h = h.decode() if isinstance(h, (bytes, bytearray)) else str(h)
+        return "from" in [x.strip().lower() for x in h.split(":")]
+    except Exception:
+        return False
 
 
 def _dkim_aligned(raw_bytes: bytes | None, from_org: str) -> bool:
-    """True only if the DKIM signature verifies cryptographically AND its signing
-    domain organizationally aligns with the From domain. Fail-closed."""
+    """True only if a DKIM signature CRYPTOGRAPHICALLY VERIFIES *and* that same verified
+    signature's d= organizationally aligns with the From domain *and* it signs From.
+
+    Critically, we verify EACH signature individually and only trust the d= of one that
+    actually passed. dkim.verify() validates only the topmost signature, so trusting a
+    d= scraped from any header let an attacker attach a valid throwaway signature plus a
+    bogus d=<victim> header and forge alignment. Fail-closed."""
     if not raw_bytes or not from_org:
         return False
     try:
-        import dkim  # dkimpy — verifies the signature, fetching the public key via DNS
+        import dkim  # dkimpy
     except Exception:
         logger.warning("critical_sender_dkim_unavailable")
         return False
     try:
-        verified = bool(dkim.verify(raw_bytes))
-    except Exception as exc:
-        logger.info("critical_sender_dkim_verify_err", error=str(exc))
-        return False
-    if not verified:
-        return False
-    for d in _dkim_signing_domains(raw_bytes):
-        if organizational_domain(d) == from_org:
-            return True
+        n_sigs = len(message_from_bytes(raw_bytes, policy=compat32).get_all("DKIM-Signature", []))
+    except Exception:
+        n_sigs = 0
+    for i in range(n_sigs):
+        try:
+            d = dkim.DKIM(raw_bytes)
+            if not d.verify(idx=i):          # cryptographically verify THIS signature
+                continue
+            signing = d.domain.decode() if isinstance(d.domain, (bytes, bytearray)) else str(d.domain or "")
+            if signing and organizational_domain(signing) == from_org and _sig_covers_from(d):
+                return True
+        except Exception as exc:
+            logger.info("critical_sender_dkim_verify_err", idx=i, error=str(exc))
+            continue
     return False
 
 
