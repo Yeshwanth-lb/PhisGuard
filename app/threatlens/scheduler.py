@@ -50,8 +50,16 @@ def _run_one_tick() -> None:
 
 
 async def _do_run() -> None:
+    from app.threatlens import actor_clusterer
     from app.threatlens.orchestrator import run_cycle
     from app.threatlens.org_assessor import assess
+    # Rebuild clusters from current phishing/suspicious scans BEFORE profiling, so new
+    # attacks are actually clustered (run_cycle/assess only operate on existing clusters).
+    try:
+        clusters = actor_clusterer.refresh()
+        logger.info("threatlens_clusters_refreshed", active=len(clusters))
+    except Exception as exc:
+        logger.warning("threatlens_cluster_refresh_err", error=str(exc))
     await run_cycle()
     await assess()
 

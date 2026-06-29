@@ -755,6 +755,14 @@ async def run_intel_cycle(current_user: dict = Depends(require_admin())):
             status_code=503,
             detail='ThreatLens is disabled. Set INTEL_ENABLED=true to activate.',
         )
+    # Rebuild clusters from current scans first, so a manual run picks up new attacks
+    # (run_cycle only profiles existing clusters). Best-effort, off the event loop.
+    try:
+        import asyncio as _asyncio
+        from app.threatlens import actor_clusterer
+        await _asyncio.get_event_loop().run_in_executor(None, actor_clusterer.refresh)
+    except Exception as _exc:
+        logger.warning("intel_cluster_refresh_err", error=str(_exc))
     from app.threatlens.orchestrator import run_cycle
     result = await run_cycle()
     return result
