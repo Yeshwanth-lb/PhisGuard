@@ -1,17 +1,13 @@
 """Demo: a REALISTIC mixed email bomb against the live gateway (port 8025).
 
-Sends a variety of mail during the flood so the demo shows the engine's ASYMMETRIC
-triage — each category lands in a different tier with a different outcome:
+Sends realistic-looking mail (real service signup confirmations, OTP/security codes,
+spoofed bank alerts, business mail) so the inbox shows authentic-looking bombing traffic
+— PhishGuard then prepends its own tier label. Each category lands in a different tier:
 
-  SUBSCRIPTION  -> Tier 2 noise      -> buffered, "[Possible Bombing Noise]"
-  OTP/SECURITY  -> Tier 3 uncertain  -> buffered, "[Received During Mail Bomb]"
-     (high-signal SUBJECT but UNauthenticated sender — delivered + soft-labeled,
-      NOT fast-tracked: this is the throwaway-domain fake-OTP being denied trust)
+  SUBSCRIPTION  -> Tier 2 noise      -> "[Possible Bombing Noise]"
+  OTP/SECURITY  -> Tier 3 uncertain  -> "[Received During Mail Bomb]" (not fast-tracked)
   SPOOFED BANK  -> spoofed_critical  -> QUARANTINED (claims .bank, no valid DKIM)
-  BUSINESS      -> Tier 3 uncertain  -> delivered, "[Received During Mail Bomb]"
-
-Phase 1 fires the subscription burst to trip detection; phase 2 fires the mix so it's
-triaged while the inbox is in bombing mode.
+  BUSINESS      -> Tier 3 uncertain  -> "[Received During Mail Bomb]"
 """
 import argparse
 import smtplib
@@ -19,55 +15,83 @@ import threading
 import time
 from email.mime.text import MIMEText
 
+# (from, subject, body) — realistic signup/confirmation traffic an email bomb produces
 SUBSCRIPTION = [
-    ("noreply@amazon-deals.shop",     "Confirm your email address"),
-    ("verify@github-mailer.io",       "Please verify your email"),
-    ("welcome@shopify-store.co",      "Welcome to our store"),
-    ("hello@medium-digest.net",       "Thanks for signing up"),
-    ("signup@coursera-mail.org",      "Complete your registration"),
-    ("activate@spotify-promo.com",    "Activate your account"),
-    ("noreply@netflix-offers.tv",     "Confirm your subscription"),
-    ("welcome@linkedin-jobs.biz",     "Welcome — please verify your email"),
-    ("verify@reddit-updates.app",     "Verify your account now"),
-    ("noreply@pinterest-pins.co",     "One more step to finish signup"),
-    ("hello@canva-design.io",         "Confirm your email to get started"),
-    ("signup@duolingo-learn.net",     "Thanks for joining — verify your account"),
-    ("welcome@notion-team.so",        "Welcome! Confirm your registration"),
-    ("noreply@figma-files.design",    "Please confirm your email"),
-    ("activate@dropbox-share.cloud",  "Activate your new account"),
+    ("no-reply@accounts.spotify.com", "Confirm your email address",
+     "Welcome to Spotify! Please confirm your email address to activate your account."),
+    ("newsletter@e.medium.com", "Welcome to Medium",
+     "Thanks for joining Medium. Confirm your email to start reading stories tailored to you."),
+    ("no-reply@substack.com", "Confirm your subscription",
+     "You're almost there — confirm your subscription to start receiving posts."),
+    ("hello@mail.canva.com", "Verify your email to get started",
+     "Welcome to Canva! Verify your email to start creating designs."),
+    ("no-reply@quora.com", "Please confirm your email",
+     "Confirm your email address to complete your Quora sign-up."),
+    ("updates@reddit.com", "Verify your Reddit email address",
+     "Verify your email to secure your account and get personalized feeds."),
+    ("no-reply@coursera.org", "Welcome to Coursera — confirm your email",
+     "Thanks for signing up. Confirm your email to start learning today."),
+    ("team@notion.so", "Confirm your email",
+     "Welcome to Notion. Confirm your email to set up your workspace."),
+    ("no-reply@duolingo.com", "Confirm your email and start learning",
+     "Welcome! Confirm your email to begin your first lesson."),
+    ("hello@figma.com", "Verify your Figma account",
+     "Please verify your email address to activate your Figma account."),
+    ("no-reply@dropbox.com", "Please verify your email",
+     "Verify your email to finish setting up your Dropbox."),
+    ("newsletter@nytimes.com", "Welcome to The Morning",
+     "Thanks for subscribing. Confirm to start receiving The Morning newsletter."),
+    ("no-reply@grammarly.com", "Activate your Grammarly account",
+     "Activate your account to start writing with confidence."),
+    ("welcome@mail.airbnb.com", "Confirm your email address",
+     "Confirm your email to complete your Airbnb account setup."),
+    ("no-reply@account.booking.com", "Verify your email address",
+     "Verify your email address to manage your bookings."),
 ]
 OTP_SECURITY = [
-    ("otp@paytm-secure.app",          "Your OTP code is 482913"),
-    ("noreply@razorpay-auth.io",      "Your verification code: 90210"),
-    ("security@google-accounts.co",   "Security alert: new sign-in to your account"),
-    ("no-reply@apple-id.support",     "Your Apple ID one-time passcode is 771234"),
-    ("alerts@bank-notify.net",        "Password reset requested for your account"),
+    ("security@paypal.com", "Your PayPal security code is 928174",
+     "Your one-time security code is 928174. It expires in 5 minutes. Do not share it."),
+    ("no-reply@accounts.google.com", "Your Google verification code",
+     "Your verification code is 471920. Don't share this code with anyone."),
+    ("alert@chase.com", "Your one-time passcode",
+     "Your Chase one-time passcode is 552081. It expires in 10 minutes."),
+    ("verify@coinbase.com", "Your Coinbase verification code",
+     "Use code 330145 to verify your identity. This code expires shortly."),
+    ("account-security@microsoft.com", "Security alert: new sign-in",
+     "We detected a new sign-in to your Microsoft account. If this wasn't you, secure your account."),
 ]
 SPOOFED_BANK = [
-    ("alerts@hdfcbank.bank",          "Your OTP for the transaction is 553210"),
-    ("security@sbi.bank",             "Unusual activity detected on your account"),
+    ("alerts@icicibank.bank", "Your account OTP is 663201",
+     "Your OTP for the transaction of Rs.45,000 is 663201. Valid for 3 minutes."),
+    ("security@hdfc.bank", "Unusual activity detected on your account",
+     "We noticed a login from a new device. Verify your identity immediately to avoid suspension."),
 ]
 BUSINESS = [
-    ("alice@partnerco.com",           "Re: Q3 budget review"),
-    ("bob@vendor-supply.io",          "Can we reschedule Thursday's call?"),
-    ("pm@bigclient.com",              "Project status update — week 26"),
+    ("rohan.mehta@infosys.com", "Re: Q3 partnership review",
+     "Hi, following up on the Q3 partnership numbers — can we sync sometime this week?"),
+    ("priya.sharma@deloitte.com", "Contract draft for your review",
+     "Please find the draft contract attached. Let me know your comments by Friday."),
+    ("ops@company.com", "Team offsite — logistics & agenda",
+     "Sharing the offsite agenda and travel details for next month. Please review."),
 ]
 
 
-def _send(host, port, frm, rcpt, subject, tag):
-    msg = MIMEText(f"PhishGuard mixed-bomb demo ({tag}) — safe to delete.")
+def _send(host, port, frm, rcpt, subject, body):
+    from email.utils import formatdate
+    msg = MIMEText(body)
     msg["From"] = frm
     msg["To"] = rcpt
+    msg["Date"] = formatdate(localtime=True)
     msg["Subject"] = subject
     try:
         with smtplib.SMTP(host, port, timeout=60) as s:
             s.sendmail(frm, [rcpt], msg.as_bytes())
     except Exception as e:
-        print(f"  ERR {tag} {frm}: {e}")
+        print(f"  ERR {frm}: {e}")
 
 
 def _blast(host, port, rcpt, batch, tag):
-    ts = [threading.Thread(target=_send, args=(host, port, f, rcpt, s, tag)) for f, s in batch]
+    ts = [threading.Thread(target=_send, args=(host, port, f, rcpt, s, b)) for f, s, b in batch]
     for t in ts:
         t.start()
     for t in ts:
@@ -84,12 +108,12 @@ def main():
 
     print(f"MIXED BOMB -> {args.host}:{args.port} -> {args.rcpt}\n")
     print("Phase 1: subscription burst (trips detection)")
-    _blast(args.host, args.port, args.rcpt, SUBSCRIPTION, "SUBSCRIPTION->Tier2 noise")
-    time.sleep(3)   # let bombing mode engage
+    _blast(args.host, args.port, args.rcpt, SUBSCRIPTION, "subscription confirmations")
+    time.sleep(3)
     print("Phase 2: the mix (triaged while under attack)")
-    _blast(args.host, args.port, args.rcpt, OTP_SECURITY, "OTP/SECURITY->Tier3 (not fast-tracked)")
-    _blast(args.host, args.port, args.rcpt, SPOOFED_BANK, "SPOOFED .bank->QUARANTINE")
-    _blast(args.host, args.port, args.rcpt, BUSINESS, "BUSINESS->Tier3 uncertain")
+    _blast(args.host, args.port, args.rcpt, OTP_SECURITY, "OTP / security codes")
+    _blast(args.host, args.port, args.rcpt, SPOOFED_BANK, "spoofed .bank alerts")
+    _blast(args.host, args.port, args.rcpt, BUSINESS, "business mail")
     total = len(SUBSCRIPTION) + len(OTP_SECURITY) + len(SPOOFED_BANK) + len(BUSINESS)
     print(f"\nDone — {total} emails sent. Watch: curl -s localhost:8000/health | python3 -m json.tool")
 

@@ -24,16 +24,17 @@ VICTIM = "victim@company.com"
 G = "\033[92m"; Y = "\033[93m"; R = "\033[0m"; B = "\033[1m"
 
 
-def raw(frm, subject, extra=b"", dkim=None):
-    h = f"From: {frm}\r\nTo: {VICTIM}\r\nSubject: [PG-DEMO] {subject}\r\n".encode()
+def raw(frm, subject, body="", extra=b"", dkim=None):
+    from email.utils import formatdate
+    h = f"From: {frm}\r\nTo: {VICTIM}\r\nDate: {formatdate(localtime=True)}\r\nSubject: {subject}\r\n".encode()
     if dkim:
         h += f"DKIM-Signature: v=1; a=rsa-sha256; d={dkim}; s=sel; h=from; bh=a; b=b\r\n".encode()
-    return h + extra + b"\r\nThis is a PhishGuard demo email. Safe to delete.\r\n"
+    return h + extra + b"\r\n" + (body or "(message body)").encode() + b"\r\n"
 
 
-def parsed(domain, subject):
-    return {"sender_domain": domain, "from_header": f"x@{domain}",
-            "subject": f"[PG-DEMO] {subject}", "sender_email": f"x@{domain}",
+def parsed(domain, subject, frm=None):
+    return {"sender_domain": domain, "from_header": frm or f"x@{domain}",
+            "subject": subject, "sender_email": frm or f"x@{domain}",
             "return_path": "", "spf_result": "unknown"}
 
 
@@ -61,6 +62,14 @@ def main():
 
     print(f"{B}REAL end-to-end bombing test → delivering to yeshwanthlb0@gmail.com{R}")
 
+    # Pre-establish a KNOWN business contact so during the bomb it lands in Tier 3
+    # (uncertain) rather than first-contact Tier-2 noise — gives a [Received During
+    # Mail Bomb] example. (Real inboxes have prior correspondents.)
+    bp.evaluate(VICTIM, "rohan.mehta@infosys.com",
+                parsed("infosys.com", "Earlier thread", "rohan.mehta@infosys.com"),
+                raw("rohan.mehta@infosys.com", "Earlier thread"))
+    bd.clear_attack(VICTIM)
+
     # 1) Trigger bombing mode (6 subscription emails → velocity window).
     for i in range(6):
         bp.evaluate(VICTIM, f"x@noise{i}.com", parsed(f"noise{i}.com", "Confirm your email"),
@@ -68,22 +77,28 @@ def main():
     assert bd.is_under_attack(VICTIM), "detection did not fire"
     print(f"{G}✓ bombing mode active{R}")
 
-    # 2) Tier 1 — authenticated critical sender → delivered NOW (real).
-    d = bp.evaluate(VICTIM, "alerts@trust.bank", parsed("trust.bank", "Unusual sign-in to your account"),
-                    raw("alerts@trust.bank", "Unusual sign-in to your account", dkim="trust.bank"))
+    # 2) Tier 1 — authenticated critical sender (DKIM-aligned bank) → delivered NOW.
+    bank_from = "alert@axisbank.bank"
+    bank_subj = "Your OTP for fund transfer is 778451"
+    bank_body = "Your OTP for the fund transfer of Rs.1,20,000 is 778451. Valid for 5 minutes. Do not share it."
+    bank_raw = raw(bank_from, bank_subj, bank_body, dkim="axisbank.bank")
+    d = bp.evaluate(VICTIM, bank_from, parsed("axisbank.bank", bank_subj, bank_from), bank_raw)
     assert d.action == "deliver_now", d
-    tagged = receiver._tag_subject(raw("alerts@trust.bank", "Unusual sign-in to your account", dkim="trust.bank"), d.label)
     from app.layer7_gmail.gmail_client import deliver_to_inbox
-    ok = deliver_to_inbox(settings, tagged, "PhishGuard-Priority")
+    ok = deliver_to_inbox(settings, receiver._tag_subject(bank_raw, d.label), "PhishGuard-Priority")
     print(f"   Tier 1 (authenticated bank)  → delivered now: {G if ok else Y}{ok}{R}  {d.label}")
 
     # 3) Tier 2 / Tier 3 → buffered (real durable buffer).
-    for frm, subj, extra, dom in [
-        ("newsletter@promo-mailer.com", "Big sale this weekend", b"List-Unsubscribe: <mailto:u@promo-mailer.com>\r\n", "promo-mailer.com"),
-        ("alice@partnerco.com", "Can we reschedule Thursdays call", b"", "partnerco.com"),
+    for frm, subj, body, extra, dom in [
+        ("newsletter@e.medium.com", "Welcome to Medium",
+         "Thanks for joining Medium. Confirm your email to start reading.",
+         b"List-Unsubscribe: <mailto:u@e.medium.com>\r\n", "e.medium.com"),
+        ("rohan.mehta@infosys.com", "Re: Q3 partnership review",
+         "Following up on the Q3 numbers — can we sync this week?", b"", "infosys.com"),
     ]:
-        dd = bp.evaluate(VICTIM, frm, parsed(dom, subj), raw(frm, subj, extra))
-        bp.buffer(dd, VICTIM, "demo", raw(frm, subj, extra), dom, f"[PG-DEMO] {subj}")
+        rb = raw(frm, subj, body, extra)
+        dd = bp.evaluate(VICTIM, frm, parsed(dom, subj, frm), rb)
+        bp.buffer(dd, VICTIM, "demo", rb, dom, subj)
         print(f"   {dd.tier:<9} ({dom}) → buffered")
 
     # 4) Window expired → release worker delivers buffered mail LABELED (real).
@@ -91,9 +106,9 @@ def main():
     n = receiver._release_due(settings)
     print(f"{G}✓ released {n} buffered message(s) to the inbox, labeled{R}")
     print(f"\n{B}Check yeshwanthlb0@gmail.com — you should now see:{R}")
-    print("   • [PhishGuard-Priority] [PG-DEMO] Unusual sign-in to your account")
-    print("   • [Possible Bombing Noise] [PG-DEMO] Big sale this weekend")
-    print("   • [Received During Mail Bomb] [PG-DEMO] Can we reschedule Thursdays call")
+    print("   • [PhishGuard-Priority] Your OTP for fund transfer is 778451")
+    print("   • [Possible Bombing Noise] Welcome to Medium")
+    print("   • [Received During Mail Bomb] Re: Q3 partnership review")
 
 
 if __name__ == "__main__":
