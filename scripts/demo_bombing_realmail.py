@@ -38,8 +38,26 @@ def parsed(domain, subject):
 
 
 def main():
+    # Simulate cryptographic DKIM verification offline (real deployment verifies the
+    # signature against the signer's DNS public key). The engine verifies EACH signature
+    # via dkim.DKIM().verify(idx), so we stub that class: a message carrying a
+    # DKIM-Signature is treated as validly signed by its d= domain, signing From.
     import dkim
-    dkim.verify = lambda message, **k: b"DKIM-Signature" in (message if isinstance(message, bytes) else b"")
+    import re as _re
+
+    class _FakeDKIM:
+        def __init__(self, message, *a, **k):
+            self._m = message if isinstance(message, bytes) else b""
+            self.domain = b""
+            self.signature_fields = {}
+
+        def verify(self, idx=0, **k):
+            m = _re.search(rb"\bd=([^;\s]+)", self._m)
+            self.domain = m.group(1) if m else b""
+            self.signature_fields = {b"h": b"from:subject"}
+            return b"DKIM-Signature" in self._m
+
+    dkim.DKIM = _FakeDKIM
 
     print(f"{B}REAL end-to-end bombing test → delivering to yeshwanthlb0@gmail.com{R}")
 
