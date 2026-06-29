@@ -747,7 +747,7 @@ function setTimeRange(hours, btn){
 async function loadStats(){
   const qs = _currentHours ? "?hours=" + _currentHours : "";
   try{
-    const r = await fetch(API + "/api/stats" + qs);
+    const r = await api("/api/stats" + qs);   // authed (was raw fetch -> 401 after auth hardening)
     if(!r.ok) throw new Error("stats " + r.status);
     const s = await r.json();
     document.getElementById("st-total").textContent = s.total || 0;
