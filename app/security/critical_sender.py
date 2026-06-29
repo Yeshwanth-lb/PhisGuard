@@ -209,6 +209,26 @@ def _published_dmarc(from_org: str) -> str | None:
         return None
 
 
+def is_dmarc_aligned(parsed: dict | None, raw_bytes: bytes | None = None,
+                     peer_ip: str | None = None, envelope_from: str | None = None) -> bool:
+    """General DMARC alignment for ANY From domain (not just protected TLDs): True if the
+    message is DKIM-aligned OR SPF-aligned to its From domain. Used by the pipeline to
+    fast-pass *authenticated* senders.
+
+    IMPORTANT: alignment only proves the From domain isn't spoofed — it does NOT imply the
+    domain is reputable (a phisher can DKIM-sign their own throwaway domain). Callers must
+    pair this with a reputation check (domain age / OSINT / allowlist)."""
+    parsed = parsed or {}
+    from_domain = (parsed.get("sender_domain") or "").strip().lower()
+    if not from_domain:
+        m = re.search(r"@([\w.-]+)", parsed.get("from_header") or "")
+        from_domain = m.group(1).lower() if m else ""
+    from_org = organizational_domain(from_domain)
+    if not from_org:
+        return False
+    return _dkim_aligned(raw_bytes, from_org) or _spf_aligned(peer_ip, envelope_from, from_org)
+
+
 def is_critical_sender(parsed: dict | None,
                        raw_bytes: bytes | None = None,
                        trusted_domains: set[str] | None = None,

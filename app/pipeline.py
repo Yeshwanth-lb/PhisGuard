@@ -132,6 +132,36 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
         }
         return await _post_actions(final, settings, raw_eml)
 
+    # ── Authenticated-sender fast-pass (reduces OTP/transactional false positives) ──
+    # If the message is DMARC-aligned to its From domain AND the domain is established
+    # (not newly registered) AND the sending IP isn't flagged abusive, deliver it: legit
+    # OTP/verify/transactional mail shares phishing's surface features (urgency, links,
+    # "verify"), so content tactics must not condemn an AUTHENTICATED, reputable sender.
+    # SAFETY: alignment alone is insufficient (a phisher can sign their own domain), so
+    # this is gated on reputation — a brand-new aligned domain or an abusive IP does NOT
+    # pass. L1 hard hits (denylist/VirusTotal/URLhaus/…) already quarantined above and are
+    # unaffected.
+    if getattr(settings, "auth_sender_fastpass", True):
+        try:
+            from app.security import critical_sender as _cs
+            _aligned = _cs.is_dmarc_aligned(parsed, raw_eml)
+            _new_domain = any(w.get("source") == "domain_age" for w in l1.get("weak_hits", []))
+            _ip_abuse = l1.get("abuse_max_score", 0) >= getattr(settings, "l1_abuseipdb_threshold", 25)
+            if _aligned and not _new_domain and not _ip_abuse:
+                logger.info("authenticated_sender_fast_pass",
+                            sender=parsed.get("from_header", "")[:60])
+                final = {
+                    "verdict": "clean",
+                    "confidence": 0.05,
+                    "blocked_at": None,
+                    "authenticated_sender": True,
+                    "l1": l1,
+                    "parsed": parsed,
+                }
+                return await _post_actions(final, settings, raw_eml)
+        except Exception as _exc:
+            logger.warning("auth_fastpass_err", error=str(_exc))
+
     # Ensure sender_email is the clean address (e.g. alice@example.com),
     # not the full From header (e.g. "Alice Smith <alice@example.com>").
     # The parser already extracts this as sender_email; only fall back to

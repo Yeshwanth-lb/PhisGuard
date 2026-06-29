@@ -153,6 +153,10 @@ class Settings(BaseSettings):
     l2_baseline_min_emails: int = Field(default=20)
     l2_domain_age_threshold_days: int = Field(default=30)
     l2_typosquatting_distance: int = Field(default=2)
+    # Authenticated-sender fast-pass: a DMARC-aligned message from an established,
+    # non-abusive domain isn't condemned by content tactics (urgency/verify/link) —
+    # reduces false positives on legit OTP/transactional mail. Reputation-gated.
+    auth_sender_fastpass: bool = Field(default=True)
 
     # Engine 3 cold start
     l2_global_iso_model_path: str = Field(default="models/global_iso_v1.pkl")
