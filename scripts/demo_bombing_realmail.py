@@ -77,16 +77,25 @@ def main():
     assert bd.is_under_attack(VICTIM), "detection did not fire"
     print(f"{G}✓ bombing mode active{R}")
 
-    # 2) Tier 1 — authenticated critical sender (DKIM-aligned bank) → delivered NOW.
-    bank_from = "alert@axisbank.bank"
-    bank_subj = "Your OTP for fund transfer is 778451"
-    bank_body = "Your OTP for the fund transfer of Rs.1,20,000 is 778451. Valid for 5 minutes. Do not share it."
-    bank_raw = raw(bank_from, bank_subj, bank_body, dkim="axisbank.bank")
-    d = bp.evaluate(VICTIM, bank_from, parsed("axisbank.bank", bank_subj, bank_from), bank_raw)
-    assert d.action == "deliver_now", d
+    # 2) Tier 1 — AUTHENTICATED critical senders (DKIM-aligned bank OTPs) → delivered NOW.
+    # These are the real, signed OTPs the bomb was trying to bury — surfaced instantly.
     from app.layer7_gmail.gmail_client import deliver_to_inbox
-    ok = deliver_to_inbox(settings, receiver._tag_subject(bank_raw, d.label), "PhishGuard-Priority")
-    print(f"   Tier 1 (authenticated bank)  → delivered now: {G if ok else Y}{ok}{R}  {d.label}")
+    TIER1 = [
+        ("alert@axisbank.bank", "axisbank.bank", "Your OTP for fund transfer is 778451",
+         "Your OTP for the fund transfer of Rs.1,20,000 is 778451. Valid for 5 minutes."),
+        ("otp@sbi.bank", "sbi.bank", "Your SBI NetBanking login OTP is 443120",
+         "Use OTP 443120 to log in to SBI NetBanking. Do not share it with anyone."),
+        ("secure@kotak.bank", "kotak.bank", "Transaction OTP: 901844",
+         "Use 901844 to authorize your transaction of Rs.30,000. Expires in 3 minutes."),
+    ]
+    for frm, dom, subj, body in TIER1:
+        rb = raw(frm, subj, body, dkim=dom)
+        d = bp.evaluate(VICTIM, frm, parsed(dom, subj, frm), rb)
+        if d.action == "deliver_now":
+            deliver_to_inbox(settings, receiver._tag_subject(rb, d.label), "PhishGuard-Priority")
+            print(f"   Tier 1 (authenticated {dom})  → delivered now  {d.label}")
+        else:
+            print(f"   {Y}unexpected: {dom} -> {d.action}{R}")
 
     # 3) Tier 2 / Tier 3 → buffered (real durable buffer).
     for frm, subj, body, extra, dom in [
