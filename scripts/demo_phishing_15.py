@@ -52,18 +52,20 @@ CLEAN = [
 ]
 
 SUSPICIOUS = [
-    ("support@account-update-center.com", "Action required: confirm your billing details",
-     "We were unable to process your last payment. Please update your billing information to avoid interruption. Click here: http://account-update-center.com/billing"),
+    # ── Verified-reliable: calibrated 3/3 to 'suspicious' (~0.43). Used by --no-calibrate. ──
     ("noreply@delivery-notice.net", "Your package could not be delivered",
      "We attempted delivery but no one was available. Reschedule your delivery here: http://delivery-notice.net/reschedule within 48 hours."),
     ("alerts@my-account-security.com", "Unusual sign-in detected",
      "We noticed a new sign-in to your account from an unrecognized device. If this wasn't you, review your activity: http://my-account-security.com/review"),
-    ("team@docs-shared.net", "A document has been shared with you",
-     "A document titled 'Q3 Budget' has been shared with you. View it here: http://docs-shared.net/open?id=8841"),
     ("rewards@survey-prize.co", "You're eligible for a $50 reward",
      "Thanks for being a valued customer. Complete a short survey to claim your $50 reward: http://survey-prize.co/claim"),
     ("billing@subscription-renew.info", "Your subscription is expiring soon",
      "Your subscription expires in 2 days. Renew now to keep your benefits: http://subscription-renew.info/renew"),
+    ("info@parcel-customs.net", "Customs fee required to release your parcel",
+     "Your parcel is held at customs. A small clearance fee is required to release it for delivery: http://parcel-customs.net/clear?ref=77120"),
+    # ── Spares (calibration may grade these clean — kept for the --send calibration pass). ──
+    ("team@docs-shared.net", "A document has been shared with you",
+     "A document titled 'Q3 Budget' has been shared with you. View it here: http://docs-shared.net/open?id=8841"),
     ("no-reply@verify-mail.app", "Please verify your email address",
      "To finish setting up your account, please verify your email address by clicking the link: http://verify-mail.app/confirm?u=4471"),
     ("notice@invoice-portal.org", "Invoice #4471 is ready for review",
@@ -116,7 +118,7 @@ def send_smtp(frm, rcpt, subject, body):
 # skip the slow /analyze pass and send a deterministic 5/5/5 that lands in each bucket.
 CURATED = {
     "clean":      CLEAN[:5],
-    "suspicious": SUSPICIOUS[1:6],   # SUSPICIOUS[0] sits on the phishing line; skip it
+    "suspicious": SUSPICIOUS[:5],    # first 5 are calibrated-reliable (3/3 -> suspicious)
     "phishing":   PHISHING[:5],
 }
 
