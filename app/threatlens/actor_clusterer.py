@@ -27,7 +27,8 @@ _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 #   shared_ip + shared_asn = 0.45 + 0.30 = 0.75 ≥ 0.72  (shared C2 infrastructure clusters)
 #   domain_base alone      = 0.40 < 0.72  (different-intent same-domain stays separate)
 _W_DOMAIN = 0.40
-_W_INTENT = 0.35
+_W_INTENT = 0.75   # intent-dominant: same attack-playbook merges into one campaign even
+                   # across different sender domains (consolidates tiny near-duplicate clusters)
 _W_IP     = 0.45
 _W_ASN    = 0.30
 
