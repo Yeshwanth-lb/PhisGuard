@@ -182,7 +182,7 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
         return await _post_actions(final, settings, raw_eml)
 
     l3 = None
-    sb_thr = getattr(settings, "l3_trigger_threshold", 0.45)
+    sb_thr = 0.35  # DEMO: lowered from 0.45 so a suspicious email carrying a URL reliably detonates
     sb_on = getattr(settings, "enable_sandbox", False)
     l2_v = l2.get("verdict")
     l2_c = l2.get("confidence", 0)

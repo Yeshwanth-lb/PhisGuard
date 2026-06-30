@@ -678,9 +678,17 @@ async def download_evidence(
 async def get_screenshot(scan_id: str, _auth: dict = Depends(require_auth)):
     import os
     path = f'data/screenshots/{scan_id}.png'
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail='No screenshot available')
-    return FileResponse(path, media_type='image/png')
+    if os.path.exists(path):
+        return FileResponse(path, media_type='image/png')
+    # Fallback: the L3 sandbox stores the screenshot as base64 in the scan data
+    # (no PNG file is written to disk), so serve it from there when present.
+    s = storage.get_scan(scan_id)
+    b64 = (((s or {}).get('data') or {}).get('l3') or {}).get('screenshot_b64') if s else None
+    if b64:
+        import base64 as _b64
+        from fastapi import Response as _Response
+        return _Response(content=_b64.b64decode(b64), media_type='image/png')
+    raise HTTPException(status_code=404, detail='No screenshot available')
 
 
 # ---------------------------------------------------------------------------

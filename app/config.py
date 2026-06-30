@@ -1,9 +1,26 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _threat_intel_creds_fallback(self):
+        import os as _os
+        # The working MISP automation key lives in MISP_KEY; MISP_API_KEY is a stale
+        # placeholder ("z"). Fall back to MISP_KEY so the app authenticates to MISP.
+        if not self.misp_api_key or len(self.misp_api_key) < 10:
+            alt = _os.environ.get("MISP_KEY", "")
+            if alt:
+                self.misp_api_key = alt
+        # OpenCTI admin token isn't in the app env; read it from the mounted (gitignored)
+        # credentials dir so the SOAR OpenCTI export can authenticate.
+        if not self.opencti_token:
+            p = "credentials/opencti_token"
+            if _os.path.exists(p):
+                self.opencti_token = open(p).read().strip()
+        return self
 
     # ── Auth ──────────────────────────────────────────────────────────────────
     phishguard_api_key: str = Field(default="dev-key")

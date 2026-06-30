@@ -120,8 +120,8 @@ def _dns_txt_sync(name):
     try:
         import dns.resolver
         res = dns.resolver.Resolver()
-        res.timeout = 8
-        res.lifetime = 12
+        res.timeout = 2
+        res.lifetime = 3
         answers = res.resolve(name, "TXT")
         records = []
         for rdata in answers:

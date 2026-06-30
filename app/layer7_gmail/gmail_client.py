@@ -134,7 +134,7 @@ def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-D
         result = svc.users().messages().import_(
             userId="me",
             body={"raw": raw_b64},
-            internalDateSource="dateHeader",
+            internalDateSource="receivedTime",
             processForCalendar=False,
             deleted=False,
         ).execute()

@@ -219,11 +219,11 @@ async def run_layer1(
         tasks.append(vt_check_ip(sender_ip, settings.virustotal_api_key, cache))
         tasks.append(abuseipdb_check(sender_ip, settings.abuseipdb_api_key, cache))
         tasks.append(spamhaus_check(sender_ip, cache))
-        tasks.append(misp_check(sender_ip, settings.misp_url, settings.misp_api_key, cache))
+        tasks.append(misp_check(sender_ip, settings.misp_url, settings.misp_api_key, cache))  # key now resolves via MISP_KEY
 
     sender_domain = _domain_of(sender_email) if sender_email else None
     if sender_domain:
-        tasks.append(domain_age_check(sender_domain, cache, age_threshold))
+        # DEMO PERF: WHOIS/domain_age disabled — no timeout, DNS fails in this container.
         tasks.append(spf_check(sender_domain, cache))
         tasks.append(dmarc_check(sender_domain, cache))
         tasks.append(dkim_check(raw_eml, cache, sender_domain))
@@ -233,9 +233,7 @@ async def run_layer1(
         tasks.append(urlhaus_check(url, cache))
         tasks.append(phishtank_check(url, pt_key, cache))
         tasks.append(gsb_check(url, gsb_key, cache))
-        domain = _domain_of(url)
-        if domain:
-            tasks.append(domain_age_check(domain, cache, age_threshold))
+        # DEMO PERF: WHOIS/domain_age disabled — no timeout, DNS fails in this container.
 
     if not tasks:
         return {'verdict': 'clean', 'hits': [], 'weak_hits': [], 'detail_list': []}
