@@ -42,3 +42,7 @@ uvicorn.log
 ma.md
 mail.md
 phishguard_handoff*
+
+# Generated bombing incident reports (artifacts)
+bombing_report_*.md
+data/bombing_reports/

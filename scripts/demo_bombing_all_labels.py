@@ -212,6 +212,52 @@ def main():
     print(f"\n{B}🧠 AI analyst summary:{R}")
     print(f"   {C}{narrative}{R}")
 
+    # ── Write a persistent, shareable Markdown report (plain text, no ANSI) ────
+    import os as _os
+    from datetime import datetime as _dt
+    now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    fname_ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+    lines = [
+        "# PhishGuard — Email-Bombing Incident Report",
+        f"_Generated: {now_str}_",
+        "",
+        "## Detection",
+        f"- Target inbox: `{VICTIM}`",
+        "- Bombing mode: **ACTIVE** (velocity trigger)",
+        f"- Emails delivered during flood: **{total}**",
+        "",
+        "## Asymmetric response — tier breakdown",
+        "| Tier | Label | Count |",
+        "|------|-------|-------|",
+        f"| Priority — surfaced instantly | `[PhishGuard-Priority]` | {tally.get('priority',0)} |",
+        f"| Noise — buffered, released labeled | `[Possible Bombing Noise]` | {tally.get('noise',0)} |",
+        f"| Uncertain — delivered labeled | `[Received During Mail Bomb]` | {tally.get('uncertain',0)} |",
+        f"| Quarantined — spoofed sender | `[PHISHGUARD QUARANTINE]` | {tally.get('quarantine',0)} |",
+        "",
+        "## Hidden-alert analysis — what the bomb tried to bury",
+    ]
+    if surfaced:
+        for dom, subj in surfaced:
+            lines.append(f"- **CRITICAL** — {subj}")
+            lines.append(f"  - from `{dom}` — authenticated critical sender (DKIM/DMARC-aligned)")
+        lines.append("")
+        lines.append(f"{len(surfaced)} authenticated alert(s) surfaced instantly; "
+                     f"{tally.get('noise',0)} subscription emails buffered as noise so they could not hide them.")
+    else:
+        lines.append("- No authenticated critical alerts arrived during this window.")
+    lines += ["", "## AI analyst summary", narrative, "",
+              "---", "_PhishGuard ThreatLens — incident report. No email body content included._"]
+
+    report_dir = _os.environ.get("BOMBING_REPORT_DIR", "data/bombing_reports")
+    try:
+        _os.makedirs(report_dir, exist_ok=True)
+        path = _os.path.join(report_dir, f"bombing_report_{fname_ts}.md")
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        print(f"\n{G}📄 Report saved: {path}{R}")
+    except Exception as e:
+        print(f"\n{Rd}Could not save report: {e}{R}")
+
 
 if __name__ == "__main__":
     main()
