@@ -21,7 +21,7 @@ docker exec -w /app "$CONTAINER" python3 demo_bombing_all_labels.py
 
 echo "→ pulling the report onto your Mac ..."
 mkdir -p data/bombing_reports
-LATEST="$(docker exec -w /app "$CONTAINER" sh -c 'ls -t data/bombing_reports/*.md 2>/dev/null | head -1' || true)"
+LATEST="$(docker exec -w /app "$CONTAINER" sh -c 'ls -t data/bombing_reports/*.json 2>/dev/null | head -1' || true)"
 if [ -n "$LATEST" ]; then
   BASE="$(basename "$LATEST")"
   docker cp "$CONTAINER:/app/$LATEST" "data/bombing_reports/$BASE" >/dev/null

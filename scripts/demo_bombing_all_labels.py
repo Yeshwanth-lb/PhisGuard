@@ -140,6 +140,13 @@ def _ai_narrative(total, noise_n, new_domains, priority_n, quarantine_n):
     )
 
 
+def _redact(text):
+    """Strip sensitive content (OTP codes, amounts) from a subject before it goes
+    into a report or the terminal — replaces any run of 3+ digits with [redacted]."""
+    import re as _re
+    return _re.sub(r"\d{3,}", "[redacted]", text or "")
+
+
 def main():
     import dkim, re as _re
     class _FakeDKIM:
@@ -188,8 +195,8 @@ def main():
     print(f"   {Rd}[PHISHGUARD QUARANTINE]{R}      {tally.get('quarantine',0)}  (spoofed .bank blocked)")
     print(f"\n{B}Check yeshwanthlb0@gmail.com — the OTPs are surfaced at the top despite the flood.{R}")
 
-    # ── Option 2 — hidden-alert analysis: what the bomb tried to bury ──────────
-    surfaced = [(dom, subj) for tier, dom, subj in results if tier == "priority"]
+    # ── Option 2 — hidden-alert analysis (subjects redacted: no OTP codes) ─────
+    surfaced = [(dom, _redact(subj)) for tier, dom, subj in results if tier == "priority"]
     print(f"\n{B}🎯 Hidden-alert analysis — what the bomb tried to bury:{R}")
     if surfaced:
         for dom, subj in surfaced:
@@ -200,7 +207,7 @@ def main():
     else:
         print(f"   {D}No authenticated critical alerts arrived during this window.{R}")
 
-    # ── Option 3 — AI analyst narrative ───────────────────────────────────────
+    # ── Option 3 — AI analyst narrative (facts only; no codes) ────────────────
     new_domains = len({dom for tier, dom, subj in results if tier == "noise"})
     narrative = _ai_narrative(
         total=total,
@@ -212,49 +219,44 @@ def main():
     print(f"\n{B}🧠 AI analyst summary:{R}")
     print(f"   {C}{narrative}{R}")
 
-    # ── Write a persistent, shareable Markdown report (plain text, no ANSI) ────
-    import os as _os
+    # ── Write a persistent JSON report (no email body content; codes redacted) ─
+    import os as _os, json as _json
     from datetime import datetime as _dt
-    now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-    fname_ts = _dt.now().strftime("%Y%m%d_%H%M%S")
-    lines = [
-        "# PhishGuard — Email-Bombing Incident Report",
-        f"_Generated: {now_str}_",
-        "",
-        "## Detection",
-        f"- Target inbox: `{VICTIM}`",
-        "- Bombing mode: **ACTIVE** (velocity trigger)",
-        f"- Emails delivered during flood: **{total}**",
-        "",
-        "## Asymmetric response — tier breakdown",
-        "| Tier | Label | Count |",
-        "|------|-------|-------|",
-        f"| Priority — surfaced instantly | `[PhishGuard-Priority]` | {tally.get('priority',0)} |",
-        f"| Noise — buffered, released labeled | `[Possible Bombing Noise]` | {tally.get('noise',0)} |",
-        f"| Uncertain — delivered labeled | `[Received During Mail Bomb]` | {tally.get('uncertain',0)} |",
-        f"| Quarantined — spoofed sender | `[PHISHGUARD QUARANTINE]` | {tally.get('quarantine',0)} |",
-        "",
-        "## Hidden-alert analysis — what the bomb tried to bury",
-    ]
-    if surfaced:
-        for dom, subj in surfaced:
-            lines.append(f"- **CRITICAL** — {subj}")
-            lines.append(f"  - from `{dom}` — authenticated critical sender (DKIM/DMARC-aligned)")
-        lines.append("")
-        lines.append(f"{len(surfaced)} authenticated alert(s) surfaced instantly; "
-                     f"{tally.get('noise',0)} subscription emails buffered as noise so they could not hide them.")
-    else:
-        lines.append("- No authenticated critical alerts arrived during this window.")
-    lines += ["", "## AI analyst summary", narrative, "",
-              "---", "_PhishGuard ThreatLens — incident report. No email body content included._"]
-
+    report = {
+        "report_type": "email_bombing_incident",
+        "generated_at": _dt.now().isoformat(timespec="seconds"),
+        "detection": {
+            "target_inbox": VICTIM,
+            "bombing_mode": "active",
+            "trigger": "velocity",
+            "emails_in_flood": total,
+        },
+        "tier_breakdown": {
+            "priority_surfaced":   tally.get("priority", 0),
+            "noise_buffered":      tally.get("noise", 0),
+            "uncertain_delivered": tally.get("uncertain", 0),
+            "quarantined_spoofed": tally.get("quarantine", 0),
+        },
+        "hidden_alerts": [
+            {
+                "sender_domain": dom,
+                "subject_redacted": subj,   # OTP codes / amounts stripped
+                "authenticated": True,
+                "alignment": "DKIM/DMARC",
+            }
+            for dom, subj in surfaced
+        ],
+        "ai_summary": narrative,
+        "privacy_note": "No email body content included. OTP codes and numeric amounts are redacted.",
+    }
     report_dir = _os.environ.get("BOMBING_REPORT_DIR", "data/bombing_reports")
+    fname_ts = _dt.now().strftime("%Y%m%d_%H%M%S")
     try:
         _os.makedirs(report_dir, exist_ok=True)
-        path = _os.path.join(report_dir, f"bombing_report_{fname_ts}.md")
+        path = _os.path.join(report_dir, f"bombing_report_{fname_ts}.json")
         with open(path, "w") as fh:
-            fh.write("\n".join(lines) + "\n")
-        print(f"\n{G}📄 Report saved: {path}{R}")
+            _json.dump(report, fh, indent=2)
+        print(f"\n{G}📄 Report saved (JSON): {path}{R}")
     except Exception as e:
         print(f"\n{Rd}Could not save report: {e}{R}")
 
