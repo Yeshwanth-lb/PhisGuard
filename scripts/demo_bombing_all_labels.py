@@ -240,11 +240,11 @@ def main():
         "hidden_alerts": [
             {
                 "sender_domain": dom,
-                "subject_redacted": subj,   # OTP codes / amounts stripped
+                "type": "authenticated banking OTP",
                 "authenticated": True,
                 "alignment": "DKIM/DMARC",
             }
-            for dom, subj in surfaced
+            for dom, _subj in surfaced
         ],
         "ai_summary": narrative,
         "privacy_note": "No email body content included. OTP codes and numeric amounts are redacted.",
