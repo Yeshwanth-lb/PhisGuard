@@ -730,6 +730,23 @@ async def get_intel_profile(
     if not profile:
         raise HTTPException(status_code=404, detail='Profile not found')
     cluster = tl_store.get_cluster(profile.cluster_id)
+    # Per-agent enrichment findings (provenance) — what each of the 11 agents
+    # actually returned for this cluster. The dashboard's "Intelligence Sources"
+    # cards group these by agent. (profile.evidence is the LLM's synthesized
+    # evidence and is all tagged agent="profiler", so it can't populate the cards.)
+    agent_findings = []
+    for s in tl_store.get_intel_sources(profile.cluster_id):
+        try:
+            fj = json.loads(s.get("finding_json") or "{}")
+        except Exception:
+            fj = {}
+        agent_findings.append({
+            "agent":        s.get("agent"),
+            "claim":        fj.get("claim", "") or s.get("source_title", ""),
+            "source_url":   s.get("source_url"),
+            "source_title": s.get("source_title"),
+            "confidence":   s.get("confidence"),
+        })
     return {
         "id":                profile.id,
         "cluster_id":        profile.cluster_id,
@@ -749,6 +766,7 @@ async def get_intel_profile(
         ],
         "summary":           profile.summary,
         "model":             profile.model,
+        "agent_findings":    agent_findings,
         "member_scan_count": len(cluster.member_scan_ids) if cluster else 0,
         "member_scan_ids":   cluster.member_scan_ids[:50] if cluster else [],
     }
