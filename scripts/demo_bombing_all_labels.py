@@ -60,13 +60,25 @@ UNCERTAIN = [  # known business contacts -> Tier 3
     ("ops@globex.com", "globex.com", "Team offsite — logistics & agenda",
      "Sharing the offsite agenda and travel details for next month."),
 ]
-PRIORITY = [  # authenticated bank OTPs (offline DKIM) -> Tier 1
+PRIORITY = [  # authenticated critical senders (protected TLD + valid DKIM) -> Tier 1.
+              # Tier 1 is decided by AUTHENTICATION, not the word "OTP": any DMARC-aligned
+              # mail from a protected (.bank/.gov.in/.insurance) sender is surfaced.
+    # Bank OTPs
     ("alert@axisbank.bank", "axisbank.bank", "Your OTP for fund transfer is 778451",
      "Your OTP for the fund transfer of Rs.1,20,000 is 778451. Valid 5 min."),
     ("otp@sbi.bank", "sbi.bank", "Your SBI NetBanking login OTP is 443120",
      "Use OTP 443120 to log in to SBI NetBanking. Do not share it."),
     ("secure@kotak.bank", "kotak.bank", "Transaction OTP: 901844",
      "Use 901844 to authorize your transaction of Rs.30,000."),
+    # Non-OTP critical mail — still Tier 1 (authenticated + protected sender)
+    ("alerts@yesbank.bank", "yesbank.bank", "Security alert: sign-in from a new device",
+     "We detected a sign-in to your account from a new device. Review your recent activity."),
+    ("statements@idfcbank.bank", "idfcbank.bank", "Your monthly account statement is ready",
+     "Your account statement for this period is now available in NetBanking."),
+    ("noreply@incometax.gov.in", "incometax.gov.in", "Your income-tax refund has been processed",
+     "Your refund for AY 2025-26 has been processed to your registered bank account."),
+    ("policy@licindia.insurance", "licindia.insurance", "Policy renewal confirmation",
+     "Your term insurance policy renewal has been confirmed for the coming year."),
 ]
 SPOOF = [  # spoofed .bank (no valid DKIM) -> quarantine
     ("security@hdfc.bank", "hdfc.bank", "Unusual activity detected on your account",
@@ -114,14 +126,14 @@ def _ai_narrative(total, noise_n, new_domains, priority_n, quarantine_n):
     facts = (
         f"Email-bombing incident. An inbox received {total} emails within minutes: "
         f"{noise_n} subscription/newsletter confirmations from {new_domains} sender domains, "
-        f"{priority_n} authenticated banking OTP(s), and {quarantine_n} spoofed bank alert(s) "
-        f"that failed authentication."
+        f"{priority_n} authenticated critical-sender alert(s) (bank/gov/insurance — e.g. OTPs, "
+        f"security alerts, statements), and {quarantine_n} spoofed alert(s) that failed authentication."
     )
     system = (
         "You are a SOC analyst assistant. In exactly 3 short sentences, explain this "
         "email-bombing incident to an analyst: (1) what happened, (2) what the system did "
-        "(surfaced the authenticated OTPs immediately, buffered the subscription noise and "
-        "released it after the window, quarantined the spoofs), (3) the takeaway. "
+        "(surfaced the authenticated critical-sender alerts immediately, buffered the subscription "
+        "noise and released it after the window, quarantined the spoofs), (3) the takeaway. "
         "Plain English. No preamble, no markdown, no bullet points."
     )
     try:
@@ -134,9 +146,9 @@ def _ai_narrative(total, noise_n, new_domains, priority_n, quarantine_n):
         pass
     return (
         f"This inbox received {noise_n} subscription emails from {new_domains} new sender domains "
-        f"within minutes. {priority_n} authenticated banking OTP(s) arrived during the attack and "
-        f"were delivered immediately, while the subscription noise was buffered and released after "
-        f"the attack subsided. {quarantine_n} spoofed bank alert(s) were quarantined."
+        f"within minutes. {priority_n} authenticated critical-sender alert(s) (bank/gov/insurance) "
+        f"arrived during the attack and were delivered immediately, while the subscription noise was "
+        f"buffered and released after the attack subsided. {quarantine_n} spoofed alert(s) were quarantined."
     )
 
 
@@ -189,7 +201,7 @@ def main():
         t = deliver(frm, dom, subj, body); tally[t] += 1; results.append((t, dom, subj))
 
     print(f"{B}Delivered {total} emails. Breakdown:{R}")
-    print(f"   {G}[PhishGuard-Priority]{R}        {tally.get('priority',0)}  (authenticated bank OTPs surfaced instantly)")
+    print(f"   {G}[PhishGuard-Priority]{R}        {tally.get('priority',0)}  (authenticated critical senders surfaced instantly)")
     print(f"   {Y}[Possible Bombing Noise]{R}     {tally.get('noise',0)}  (newsletter flood)")
     print(f"   {Y}[Received During Mail Bomb]{R}  {tally.get('uncertain',0)}  (business mail)")
     print(f"   {Rd}[PHISHGUARD QUARANTINE]{R}      {tally.get('quarantine',0)}  (spoofed .bank blocked)")
@@ -240,7 +252,7 @@ def main():
         "hidden_alerts": [
             {
                 "sender_domain": dom,
-                "type": "authenticated banking OTP",
+                "type": "authenticated critical sender",
                 "authenticated": True,
                 "alignment": "DKIM/DMARC",
             }
