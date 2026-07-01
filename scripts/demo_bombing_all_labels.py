@@ -22,7 +22,7 @@ from app.layer7_gmail.gmail_client import deliver_to_inbox  # noqa: E402
 from app.config import settings                     # noqa: E402
 
 VICTIM = "victim@company.com"
-G = "\033[92m"; Y = "\033[93m"; Rd = "\033[91m"; B = "\033[1m"; D = "\033[2m"; R = "\033[0m"
+G = "\033[92m"; Y = "\033[93m"; Rd = "\033[91m"; B = "\033[1m"; D = "\033[2m"; R = "\033[0m"; C = "\033[96m"
 
 NOISE = [  # newsletter/signup flood -> Tier 2 (with List-Unsubscribe)
     ("no-reply@accounts.spotify.com", "Confirm your email address"),
@@ -105,6 +105,41 @@ def deliver(frm, dom, subj, body, dkim=None, lu=False):
     return d.tier or "uncertain"
 
 
+def _ai_narrative(total, noise_n, new_domains, priority_n, quarantine_n):
+    """Option 3 — a short analyst-facing narrative of the incident.
+
+    Uses the LLM if available; falls back to a deterministic template (so the demo
+    never fails and never fabricates numbers — the facts are computed, not invented).
+    """
+    facts = (
+        f"Email-bombing incident. An inbox received {total} emails within minutes: "
+        f"{noise_n} subscription/newsletter confirmations from {new_domains} sender domains, "
+        f"{priority_n} authenticated banking OTP(s), and {quarantine_n} spoofed bank alert(s) "
+        f"that failed authentication."
+    )
+    system = (
+        "You are a SOC analyst assistant. In exactly 3 short sentences, explain this "
+        "email-bombing incident to an analyst: (1) what happened, (2) what the system did "
+        "(surfaced the authenticated OTPs immediately, buffered the subscription noise and "
+        "released it after the window, quarantined the spoofs), (3) the takeaway. "
+        "Plain English. No preamble, no markdown, no bullet points."
+    )
+    try:
+        import asyncio
+        from app.llm.client import get_llm_client
+        out = asyncio.run(get_llm_client().complete(system, facts, max_tokens=250))
+        if out and out.strip():
+            return out.strip()
+    except Exception:
+        pass
+    return (
+        f"This inbox received {noise_n} subscription emails from {new_domains} new sender domains "
+        f"within minutes. {priority_n} authenticated banking OTP(s) arrived during the attack and "
+        f"were delivered immediately, while the subscription noise was buffered and released after "
+        f"the attack subsided. {quarantine_n} spoofed bank alert(s) were quarantined."
+    )
+
+
 def main():
     import dkim, re as _re
     class _FakeDKIM:
@@ -134,15 +169,17 @@ def main():
 
     from collections import Counter
     tally = Counter()
+    results = []  # (tier, from_domain, subject)
     for frm, subj in NOISE:
         dom = frm.split("@")[1]
-        tally[deliver(frm, dom, subj, "Please confirm your email to continue.", lu=True)] += 1
+        t = deliver(frm, dom, subj, "Please confirm your email to continue.", lu=True)
+        tally[t] += 1; results.append((t, dom, subj))
     for frm, dom, subj, body in UNCERTAIN:
-        tally[deliver(frm, dom, subj, body)] += 1
+        t = deliver(frm, dom, subj, body); tally[t] += 1; results.append((t, dom, subj))
     for frm, dom, subj, body in PRIORITY:
-        tally[deliver(frm, dom, subj, body, dkim=dom)] += 1
+        t = deliver(frm, dom, subj, body, dkim=dom); tally[t] += 1; results.append((t, dom, subj))
     for frm, dom, subj, body in SPOOF:
-        tally[deliver(frm, dom, subj, body)] += 1
+        t = deliver(frm, dom, subj, body); tally[t] += 1; results.append((t, dom, subj))
 
     print(f"{B}Delivered {total} emails. Breakdown:{R}")
     print(f"   {G}[PhishGuard-Priority]{R}        {tally.get('priority',0)}  (authenticated bank OTPs surfaced instantly)")
@@ -150,6 +187,30 @@ def main():
     print(f"   {Y}[Received During Mail Bomb]{R}  {tally.get('uncertain',0)}  (business mail)")
     print(f"   {Rd}[PHISHGUARD QUARANTINE]{R}      {tally.get('quarantine',0)}  (spoofed .bank blocked)")
     print(f"\n{B}Check yeshwanthlb0@gmail.com — the OTPs are surfaced at the top despite the flood.{R}")
+
+    # ── Option 2 — hidden-alert analysis: what the bomb tried to bury ──────────
+    surfaced = [(dom, subj) for tier, dom, subj in results if tier == "priority"]
+    print(f"\n{B}🎯 Hidden-alert analysis — what the bomb tried to bury:{R}")
+    if surfaced:
+        for dom, subj in surfaced:
+            print(f"   {G}▸ CRITICAL{R} {subj}")
+            print(f"     {D}from {dom} — authenticated critical sender (DKIM/DMARC-aligned){R}")
+        print(f"   {D}{len(surfaced)} authenticated alert(s) surfaced instantly; "
+              f"{tally.get('noise', 0)} subscription emails buffered as noise so they could not hide them.{R}")
+    else:
+        print(f"   {D}No authenticated critical alerts arrived during this window.{R}")
+
+    # ── Option 3 — AI analyst narrative ───────────────────────────────────────
+    new_domains = len({dom for tier, dom, subj in results if tier == "noise"})
+    narrative = _ai_narrative(
+        total=total,
+        noise_n=tally.get("noise", 0),
+        new_domains=new_domains,
+        priority_n=tally.get("priority", 0),
+        quarantine_n=tally.get("quarantine", 0),
+    )
+    print(f"\n{B}🧠 AI analyst summary:{R}")
+    print(f"   {C}{narrative}{R}")
 
 
 if __name__ == "__main__":
