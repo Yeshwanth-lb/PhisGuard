@@ -1,0 +1,216 @@
+# Skylo NTN attack surface taxonomy — v1
+# Maps observed behavior to the Skylo infrastructure zone being targeted.
+# versioned here so it can evolve without code changes.
+
+zones:
+  - id: ground_station_ingress
+    label: "Ground-station ingress path"
+    keywords:
+      - earth station
+      - ground station
+      - teleport
+      - gateway
+      - baseband
+      - antenna
+      - uplink
+      - downlink
+      - feeder link
+      - satellite link
+      - rf link
+      - dish
+      - parabolic
+      - gnss
+      - timing signal
+      - frequency band
+      - spectrum
+      - interference
+      - jamming
+      - spoofing signal
+      - lpwan
+      - ifc
+      - ground segment
+      - hub station
+      - vsat
+      - hub gateway
+
+  - id: ntn_5g_core
+    label: "NTN / 5G signaling & core"
+    keywords:
+      - 5g core
+      - ntn
+      - vran
+      - ran
+      - 3gpp
+      - signaling
+      - amf
+      - smf
+      - gtp
+      - s6a
+      - s8
+      - non-terrestrial
+      - upf
+      - ausf
+      - udm
+      - nrf
+      - pcf
+      - sbi
+      - n2
+      - n3
+      - n4
+      - diameter
+      - sctp
+      - ngap
+      - nas
+      - ims
+      - volte
+      - bearer
+      - slice
+      - network slice
+      - pdcp
+      - rlc
+      - mac layer
+      - radio protocol
+      - handover
+      - paging
+
+  - id: gcp_infra
+    label: "Cloud (GCP) infrastructure"
+    keywords:
+      - gcp
+      - google cloud
+      - kubernetes
+      - k8s
+      - iam
+      - service account
+      - bucket
+      - cloud storage
+      - firebase
+      - gke
+      - cloud run
+      - pub/sub
+      - pubsub
+      - bigquery
+      - cloud sql
+      - terraform
+      - helm
+      - artifact registry
+      - container registry
+      - workload identity
+      - vpc
+      - cloud armor
+      - load balancer
+      - ingress controller
+      - secret manager
+      - kms
+      - cloud kms
+      - logging
+      - stackdriver
+      - compute engine
+
+  - id: supply_chain
+    label: "MNO / chipset / module / SIM supply chain"
+    keywords:
+      - mno
+      - carrier
+      - chipset
+      - module
+      - sim
+      - esim
+      - qualcomm
+      - modem
+      - ota firmware
+      - firmware update
+      - meditek
+      - mediatek
+      - sierra wireless
+      - telit
+      - u-blox
+      - quectel
+      - thales
+      - gemalto
+      - euicc
+      - iccid
+      - imsi
+      - plmn
+      - roaming
+      - mvno
+      - wholesale
+      - partner api
+      - network api
+      - provisioning
+      - activation
+      - device management
+      - mdm
+      - fota
+      - bootloader
+      - secure boot
+      - trustzone
+      - hardware security module
+      - hsm
+
+  - id: corporate_it
+    label: "Corporate / IT / identity"
+    keywords:
+      - okta
+      - vpn
+      - email
+      - credential
+      - payroll
+      - invoice
+      - wire transfer
+      - helpdesk
+      - password reset
+      - active directory
+      - azure ad
+      - sso
+      - saml
+      - oauth
+      - mfa
+      - phishing
+      - spear phishing
+      - whaling
+      - bec
+      - business email compromise
+      - slack
+      - confluence
+      - jira
+      - github
+      - gitlab
+      - access token
+      - api key
+      - ssh key
+      - privileged access
+      - zero trust
+      - endpoint
+      - edr
+      - antivirus
+      - patch
+      - vulnerability
+      - cve
+      - remote access
+      - rdp
+      - bastion
+
+segments:
+  - id: agriculture
+    label: Agriculture
+  - id: maritime
+    label: Maritime
+  - id: logistics
+    label: Logistics & Supply Chain
+  - id: mining
+    label: Mining
+  - id: automotive
+    label: Automotive
+  - id: consumer_wearables
+    label: Consumer Wearables
+  - id: telecom
+    label: Telecom / MNO
+  - id: energy
+    label: Energy & Utilities
+  - id: defense
+    label: Defense & Government
+  - id: aviation
+    label: Aviation
+  - id: enterprise_iot
+    label: Enterprise IoT

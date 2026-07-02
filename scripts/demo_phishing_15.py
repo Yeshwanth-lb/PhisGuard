@@ -52,24 +52,24 @@ CLEAN = [
 ]
 
 SUSPICIOUS = [
-    # ── Verified-reliable: calibrated 3/3 to 'suspicious' (~0.43). Used by --no-calibrate. ──
-    ("noreply@delivery-notice.net", "Your package could not be delivered",
-     "We attempted delivery but no one was available. Reschedule your delivery here: http://delivery-notice.net/reschedule within 48 hours."),
-    ("alerts@my-account-security.com", "Unusual sign-in detected",
-     "We noticed a new sign-in to your account from an unrecognized device. If this wasn't you, review your activity: http://my-account-security.com/review"),
+    # ── Verified reliable ──
     ("rewards@survey-prize.co", "You're eligible for a $50 reward",
-     "Thanks for being a valued customer. Complete a short survey to claim your $50 reward: http://survey-prize.co/claim"),
-    ("billing@subscription-renew.info", "Your subscription is expiring soon",
-     "Your subscription expires in 2 days. Renew now to keep your benefits: http://subscription-renew.info/renew"),
+     "Thanks for being a valued customer. Complete a short survey to claim your $50 reward before it expires in 24 hours: http://survey-prize.co/claim"),
     ("info@parcel-customs.net", "Customs fee required to release your parcel",
-     "Your parcel is held at customs. A small clearance fee is required to release it for delivery: http://parcel-customs.net/clear?ref=77120"),
-    # ── Spares (calibration may grade these clean — kept for the --send calibration pass). ──
-    ("team@docs-shared.net", "A document has been shared with you",
-     "A document titled 'Q3 Budget' has been shared with you. View it here: http://docs-shared.net/open?id=8841"),
-    ("no-reply@verify-mail.app", "Please verify your email address",
-     "To finish setting up your account, please verify your email address by clicking the link: http://verify-mail.app/confirm?u=4471"),
-    ("notice@invoice-portal.org", "Invoice #4471 is ready for review",
-     "Your invoice is ready. Please review and confirm payment details here: http://invoice-portal.org/inv/4471"),
+     "Your parcel is held at customs. A small clearance fee is required to release it for delivery. Pay now: http://parcel-customs.net/clear?ref=77120"),
+    # ── Stronger candidates ──
+    ("claims@prize-hub.net", "You've been selected — claim your gift",
+     "Congratulations! You were randomly selected as this week's winner. Claim your Rs.5000 gift card before it expires in 24 hours: http://prize-hub.net/claim?id=9921"),
+    ("alert@account-notice.co", "Important: your account requires attention",
+     "We detected unusual activity in your account. Verify your information within 24 hours to avoid suspension: http://account-notice.co/verify?uid=4421"),
+    ("notify@parcel-release.net", "Your delivery is on hold — action needed",
+     "Your parcel could not be cleared through customs. A payment of Rs.450 is required to release it. Complete payment here: http://parcel-release.net/pay?ref=88102"),
+    ("offers@lucky-winner.co", "Exclusive: you qualify for a special reward",
+     "As a valued member, you qualify for a free reward this month. Complete a quick verification to redeem before the offer expires: http://lucky-winner.co/redeem?code=VIP21"),
+    ("billing@renew-service.info", "Subscription payment failed — update now",
+     "We were unable to process your last payment. Update your billing information within 24 hours to avoid service interruption: http://renew-service.info/update?acc=7743"),
+    ("noreply@delivery-notice.net", "Your package could not be delivered",
+     "We attempted delivery but no one was available. Reschedule within 48 hours or your parcel will be returned: http://delivery-notice.net/reschedule"),
 ]
 
 PHISHING = [
