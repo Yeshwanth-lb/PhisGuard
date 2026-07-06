@@ -13,17 +13,24 @@ from .gmail_client import _build_service, apply_label, fetch_raw_message
 
 logger = structlog.get_logger()
 
-def decode_notification(body: dict) -> str | None:
+def decode_notification(body: dict) -> tuple[str | None, str | None]:
+    """Returns (history_id, email_address). Gmail's watch() push payload is
+    {"emailAddress": "...", "historyId": "..."} — emailAddress identifies
+    WHICH mailbox this notification is for, required once more than one
+    mailbox is being watched (fleet mode). A single-mailbox setup can ignore
+    the second value; fleet mode needs it to impersonate the right user."""
     try:
         data_b64 = body["message"]["data"]
         decoded = json.loads(base64.b64decode(data_b64 + "==").decode())
-        return str(decoded.get("historyId", ""))
+        history_id = str(decoded.get("historyId", "")) or None
+        email_address = decoded.get("emailAddress") or None
+        return history_id, email_address
     except Exception as exc:
         logger.warning("decode_err", error=str(exc))
-        return None
+        return None, None
 
-def fetch_new_message_ids(settings, start_history_id: str) -> list:
-    svc = _build_service(settings)
+def fetch_new_message_ids(settings, start_history_id: str, user_email: str | None = None) -> list:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return []
     try:
@@ -40,19 +47,19 @@ def fetch_new_message_ids(settings, start_history_id: str) -> list:
                     ids.append(mid)
         return ids
     except Exception as exc:
-        logger.warning("history_fetch_err", error=str(exc))
+        logger.warning("history_fetch_err", error=str(exc), user_email=user_email)
         return []
 
 async def handle_push_notification(push_body: dict, analyze_fn: Callable, settings) -> dict:
-    history_id = decode_notification(push_body)
+    history_id, user_email = decode_notification(push_body)
     if not history_id:
         return {"status": "ignored", "reason": "no_history_id"}
-    msg_ids = fetch_new_message_ids(settings, history_id)
+    msg_ids = fetch_new_message_ids(settings, history_id, user_email=user_email)
     if not msg_ids:
         return {"status": "ok", "processed": 0}
     results = []
     for msg_id in msg_ids:
-        raw = fetch_raw_message(settings, msg_id)
+        raw = fetch_raw_message(settings, msg_id, user_email=user_email)
         if not raw:
             continue
         try:
@@ -67,9 +74,9 @@ async def handle_push_notification(push_body: dict, analyze_fn: Callable, settin
             except Exception as _be:
                 logger.warning("gmail_bombing_ingest_err", msg_id=msg_id, error=str(_be))
             label = settings.gmail_quarantine_label if verdict == "phishing" else settings.gmail_scanned_label
-            apply_label(settings, msg_id, label)
-            results.append({"msg_id": msg_id, "verdict": verdict})
-            logger.info("push_processed", msg_id=msg_id, verdict=verdict)
+            apply_label(settings, msg_id, label, user_email=user_email)
+            results.append({"msg_id": msg_id, "verdict": verdict, "user_email": user_email})
+            logger.info("push_processed", msg_id=msg_id, verdict=verdict, user_email=user_email)
         except Exception as exc:
             logger.warning("push_analyze_err", msg_id=msg_id, error=str(exc))
     return {"status": "ok", "processed": len(results), "results": results}

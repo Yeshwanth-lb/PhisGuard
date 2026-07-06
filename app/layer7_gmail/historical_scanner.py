@@ -67,16 +67,24 @@ async def scan_inbox(
     query: str = "",
     max_messages: int = 500,
     concurrency: int = 5,
+    user_email: str | None = None,
 ) -> dict:
-    """Scan historical inbox messages concurrently. Returns summary counts."""
+    """Scan historical inbox messages concurrently. Returns summary counts.
+
+    user_email: scan this specific mailbox (via domain-wide delegation) instead
+    of the single settings.google_admin_impersonate_email — lets fleet_scanner
+    call this once per discovered domain user. Omit for the original
+    single-mailbox behavior, unchanged.
+    """
     from app import storage
 
-    user_email = getattr(settings, "google_admin_impersonate_email", "") or "default"
+    user_email = user_email or getattr(settings, "google_admin_impersonate_email", "") or "default"
     checkpoint = _checkpoint_conn()
 
     # Use safe default query unless caller explicitly overrides
     effective_query = query.strip() if query.strip() else _DEFAULT_SCAN_QUERY
-    stubs = list_messages(settings, query=effective_query, max_results=max_messages)
+    stubs = list_messages(settings, query=effective_query, max_results=max_messages,
+                           user_email=user_email)
     if not stubs:
         logger.info("scan_no_messages")
         return {"total": 0, "phishing": 0, "suspicious": 0, "clean": 0,
@@ -97,7 +105,7 @@ async def scan_inbox(
             return
 
         async with sem:
-            raw = fetch_raw_message(settings, msg_id)
+            raw = fetch_raw_message(settings, msg_id, user_email=user_email)
             if not raw:
                 counts["errors"] += 1
                 return
@@ -113,6 +121,7 @@ async def scan_inbox(
                 result["email_id"] = email_id
                 result["ingestion_source"] = "gmail_historical"
                 result["gmail_message_id"] = msg_id
+                result["gmail_mailbox"] = user_email
 
                 # Feed the SAME bombing pipeline as the SMTP gateway (dormant unless
                 # INBOX_INGESTION_ENABLED). NOTE: a historical backfill arrives as one
@@ -133,9 +142,9 @@ async def scan_inbox(
 
                 # Apply Gmail labels based on verdict
                 if verdict == "phishing":
-                    apply_label(settings, msg_id, settings.gmail_quarantine_label)
+                    apply_label(settings, msg_id, settings.gmail_quarantine_label, user_email=user_email)
                 else:
-                    apply_label(settings, msg_id, settings.gmail_scanned_label)
+                    apply_label(settings, msg_id, settings.gmail_scanned_label, user_email=user_email)
 
             except Exception as exc:
                 logger.warning("scan_err", msg_id=msg_id, error=str(exc))

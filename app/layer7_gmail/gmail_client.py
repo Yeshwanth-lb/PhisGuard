@@ -12,8 +12,16 @@ _SCOPES = [
 ]
 
 
-def _build_service(settings):
-    """Build an authenticated Gmail API client (service-account or OAuth user)."""
+def _build_service(settings, user_email: str | None = None):
+    """Build an authenticated Gmail API client (service-account or OAuth user).
+
+    user_email: impersonate this specific mailbox via domain-wide delegation
+    instead of the single settings.google_admin_impersonate_email — this is
+    what lets one service account fan out across every mailbox in a Workspace
+    domain rather than being pinned to one fixed account. Falls back to the
+    single-mailbox behavior (unchanged) when omitted, so existing callers
+    that don't pass it keep working exactly as before.
+    """
     try:
         from googleapiclient.discovery import build
     except ImportError as exc:
@@ -21,7 +29,7 @@ def _build_service(settings):
         return None
 
     sa_path = getattr(settings, "google_service_account_json", "") or ""
-    impersonate = getattr(settings, "google_admin_impersonate_email", "") or ""
+    impersonate = user_email or getattr(settings, "google_admin_impersonate_email", "") or ""
     oauth_path = getattr(settings, "gmail_oauth_token_file", "") or ""
 
     if sa_path and os.path.exists(sa_path) and impersonate:
@@ -59,8 +67,9 @@ def _build_service(settings):
     return None
 
 
-def list_messages(settings, query: str = "", max_results: int = 100) -> list[dict]:
-    svc = _build_service(settings)
+def list_messages(settings, query: str = "", max_results: int = 100,
+                   user_email: str | None = None) -> list[dict]:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return []
     try:
@@ -69,12 +78,12 @@ def list_messages(settings, query: str = "", max_results: int = 100) -> list[dic
         ).execute()
         return resp.get("messages", [])
     except Exception as exc:
-        logger.warning("gmail_list_err", error=str(exc))
+        logger.warning("gmail_list_err", error=str(exc), user_email=user_email)
         return []
 
 
-def fetch_raw_message(settings, msg_id: str) -> bytes | None:
-    svc = _build_service(settings)
+def fetch_raw_message(settings, msg_id: str, user_email: str | None = None) -> bytes | None:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return None
     try:
@@ -84,7 +93,7 @@ def fetch_raw_message(settings, msg_id: str) -> bytes | None:
         raw_b64 = resp.get("raw", "")
         return base64.urlsafe_b64decode(raw_b64 + "==")
     except Exception as exc:
-        logger.warning("gmail_fetch_err", msg_id=msg_id, error=str(exc))
+        logger.warning("gmail_fetch_err", msg_id=msg_id, error=str(exc), user_email=user_email)
         return None
 
 
@@ -95,8 +104,8 @@ def _find_label_id(all_labels: list, name: str) -> str | None:
     return None
 
 
-def apply_label(settings, msg_id: str, label_name: str) -> bool:
-    svc = _build_service(settings)
+def apply_label(settings, msg_id: str, label_name: str, user_email: str | None = None) -> bool:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return False
     try:
@@ -118,7 +127,8 @@ def apply_label(settings, msg_id: str, label_name: str) -> bool:
         return False
 
 
-def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-Delivered") -> bool:
+def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-Delivered",
+                      user_email: str | None = None) -> bool:
     """Inject a raw email directly into the Gmail inbox via Gmail API.
 
     This is used in demo/gateway mode when clean emails are approved —
@@ -126,7 +136,7 @@ def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-D
     we use the Gmail API to place the message directly into the inbox.
     The recipient actually SEES it in Gmail.
     """
-    svc = _build_service(settings)
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return False
     try:

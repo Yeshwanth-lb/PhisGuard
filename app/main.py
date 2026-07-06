@@ -1225,6 +1225,35 @@ async def gmail_scan_status(
         return prog
     return {"scans": list(_scan_progress.values())[-10:]}
 
+
+@app.post("/api/gmail/fleet/scan")
+async def gmail_fleet_scan(
+    query: str = "",
+    max_messages_per_user: int = 200,
+    current_user: dict = Depends(require_permission("scan")),
+):
+    """Discover every mailbox in the configured Workspace domain (via the
+    Admin SDK Directory API) and scan each one's inbox — the domain-wide
+    equivalent of /api/gmail/scan, which only ever covers one fixed mailbox.
+    Requires google_service_account_json + google_workspace_domain +
+    google_admin_impersonate_email (an actual admin) to be configured with
+    domain-wide delegation granted; returns 0 mailboxes (not an error) if not."""
+    import uuid as _uuid
+    from app.layer7_gmail.fleet_scanner import scan_all_mailboxes as _sam
+    from app.pipeline import analyze_email as _aeb
+
+    scan_id = str(_uuid.uuid4())
+    _scan_progress[scan_id] = {"status": "running", "scan_id": scan_id, "mailboxes": 0}
+    try:
+        result = await _sam(_aeb, settings, query=query, max_messages_per_user=max_messages_per_user)
+        _scan_progress[scan_id] = {**_scan_progress[scan_id], **result, "status": "complete"}
+        return {**result, "scan_id": scan_id, "status": "complete"}
+    except Exception as exc:
+        _scan_progress[scan_id]["status"] = "error"
+        _scan_progress[scan_id]["error"] = str(exc)
+        raise
+
+
 @app.get("/api/pending")
 async def list_pending(current_user: dict = Depends(require_permission("scan"))):
     """List emails held for SOC review (suspicious emails awaiting approval)."""
