@@ -77,6 +77,12 @@ async def _lifespan(app):
         _start_tl()
     except Exception as _e:
         logger.warning("threatlens_scheduler_start_failed", error=str(_e))
+    # Start Gmail fleet watch renewal scheduler (no-op when Workspace fleet not configured)
+    try:
+        from app.layer7_gmail.watch_scheduler import start_watch_scheduler as _swsched
+        _swsched(settings)
+    except Exception as _e:
+        logger.warning("watch_scheduler_start_failed", error=str(_e))
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:
@@ -1273,6 +1279,41 @@ async def gmail_fleet_scan(
         _scan_progress[scan_id]["status"] = "error"
         _scan_progress[scan_id]["error"] = str(exc)
         raise
+
+
+@app.post("/api/gmail/fleet/watch")
+async def gmail_fleet_watch_setup(
+    pilot_users: str = "",
+    current_user: dict = Depends(require_permission("gmail_write")),
+):
+    """Register a live push watch for every mailbox in the domain (or the
+    pilot_users allowlist) so new mail triggers /api/gmail/push in near-real-
+    time, instead of waiting for the next /api/gmail/fleet/scan poll. Each
+    mailbox's expiry is persisted so the background renewal scheduler can
+    keep it alive — see app/layer7_gmail/watch_scheduler.py."""
+    from app.layer7_gmail.fleet_watch import setup_fleet_watches as _sfw
+    only_users = [u.strip() for u in pilot_users.split(",") if u.strip()] or None
+    return await _sfw(settings, only_users=only_users)
+
+
+@app.get("/api/gmail/fleet/watch/status")
+async def gmail_fleet_watch_status(current_user: dict = Depends(require_permission("scan"))):
+    """Show every mailbox's tracked watch expiry — what the renewal
+    scheduler is protecting, and how soon each one needs renewal."""
+    from app.layer7_gmail import watch_state as _ws
+    return {"watches": _ws.list_all()}
+
+
+@app.post("/api/gmail/fleet/watch/renew")
+async def gmail_fleet_watch_renew(
+    within_hours: int = 24,
+    current_user: dict = Depends(require_permission("gmail_write")),
+):
+    """Manually trigger a renewal pass immediately, instead of waiting for
+    the background scheduler's next tick — useful right after setup, or to
+    verify renewal actually works before trusting the schedule."""
+    from app.layer7_gmail.fleet_watch import renew_expiring_watches as _rew
+    return await _rew(settings, within_hours=within_hours)
 
 
 @app.get("/api/pending")

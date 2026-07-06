@@ -1,6 +1,7 @@
 """Layer 7 - Gmail API client: list, fetch, label and move messages."""
 import base64
 import os
+import time
 
 import structlog
 
@@ -10,6 +11,31 @@ _SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
+
+_RETRYABLE_STATUSES = {429, 500, 503}
+
+
+def _execute_with_retry(request, max_retries: int = 3, base_delay: float = 1.0):
+    """Run a googleapiclient request.execute(), retrying with exponential
+    backoff on 429/500/503 — expected, not exceptional, once this fans out
+    across a whole Workspace domain and hits per-project Gmail API quota.
+    Any other error (403 permission denied, 404 not found, auth failure)
+    re-raises immediately — retrying those just wastes time on something
+    that will never succeed."""
+    from googleapiclient.errors import HttpError
+
+    attempt = 0
+    while True:
+        try:
+            return request.execute()
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            if status not in _RETRYABLE_STATUSES or attempt >= max_retries:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning("gmail_api_retry", status=status, attempt=attempt, delay=delay)
+            time.sleep(delay)
+            attempt += 1
 
 
 def _build_service(settings, user_email: str | None = None):
@@ -73,9 +99,9 @@ def list_messages(settings, query: str = "", max_results: int = 100,
     if not svc:
         return []
     try:
-        resp = svc.users().messages().list(
+        resp = _execute_with_retry(svc.users().messages().list(
             userId="me", q=query, maxResults=max_results
-        ).execute()
+        ))
         return resp.get("messages", [])
     except Exception as exc:
         logger.warning("gmail_list_err", error=str(exc), user_email=user_email)
@@ -87,9 +113,9 @@ def fetch_raw_message(settings, msg_id: str, user_email: str | None = None) -> b
     if not svc:
         return None
     try:
-        resp = svc.users().messages().get(
+        resp = _execute_with_retry(svc.users().messages().get(
             userId="me", id=msg_id, format="raw"
-        ).execute()
+        ))
         raw_b64 = resp.get("raw", "")
         return base64.urlsafe_b64decode(raw_b64 + "==")
     except Exception as exc:
@@ -109,17 +135,17 @@ def apply_label(settings, msg_id: str, label_name: str, user_email: str | None =
     if not svc:
         return False
     try:
-        all_labels = svc.users().labels().list(userId="me").execute().get("labels", [])
+        all_labels = _execute_with_retry(svc.users().labels().list(userId="me")).get("labels", [])
         label_id = _find_label_id(all_labels, label_name)
         if not label_id:
-            created = svc.users().labels().create(
+            created = _execute_with_retry(svc.users().labels().create(
                 userId="me", body={"name": label_name}
-            ).execute()
+            ))
             label_id = created.get("id")
-        svc.users().messages().modify(
+        _execute_with_retry(svc.users().messages().modify(
             userId="me", id=msg_id,
             body={"addLabelIds": [label_id]}
-        ).execute()
+        ))
         logger.info("label_applied", msg_id=msg_id, label=label_name)
         return True
     except Exception as exc:
@@ -141,25 +167,25 @@ def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-D
         return False
     try:
         raw_b64 = base64.urlsafe_b64encode(raw_email).decode().rstrip("=")
-        result = svc.users().messages().import_(
+        result = _execute_with_retry(svc.users().messages().import_(
             userId="me",
             body={"raw": raw_b64},
             internalDateSource="receivedTime",
             processForCalendar=False,
             deleted=False,
-        ).execute()
+        ))
         msg_id = result.get("id", "")
         logger.info("gmail_inbox_delivered", msg_id=msg_id)
 
         if msg_id:
-            all_labels = svc.users().labels().list(userId="me").execute().get("labels", [])
+            all_labels = _execute_with_retry(svc.users().labels().list(userId="me")).get("labels", [])
 
             # Ensure the custom label exists
             label_id = _find_label_id(all_labels, label_name)
             if not label_id:
-                created = svc.users().labels().create(
+                created = _execute_with_retry(svc.users().labels().create(
                     userId="me", body={"name": label_name}
-                ).execute()
+                ))
                 label_id = created.get("id")
 
             # Add INBOX label so it actually appears in the inbox,
@@ -168,10 +194,10 @@ def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-D
             if label_id:
                 add_labels.append(label_id)
 
-            svc.users().messages().modify(
+            _execute_with_retry(svc.users().messages().modify(
                 userId="me", id=msg_id,
                 body={"addLabelIds": add_labels, "removeLabelIds": []}
-            ).execute()
+            ))
             logger.info("gmail_inbox_labelled", msg_id=msg_id, label=label_name)
         return True
     except Exception as exc:

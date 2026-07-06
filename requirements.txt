@@ -44,6 +44,7 @@ mlflow==2.13.2
 google-api-python-client==2.134.0
 google-auth==2.30.0
 google-auth-httplib2==0.2.0
+google-cloud-pubsub==2.21.5
 aiosmtpd==1.4.6
 
 # Testing
