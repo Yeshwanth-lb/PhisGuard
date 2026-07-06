@@ -25,19 +25,36 @@ async def scan_all_mailboxes(
     max_messages_per_user: int = 200,
     mailbox_concurrency: int = 3,
     per_mailbox_concurrency: int = 5,
+    only_users: list[str] | None = None,
 ) -> dict:
     """Discover every mailbox in the domain and scan each one's inbox.
+
+    only_users: restrict to this explicit list instead of the full directory
+    — a pilot/allowlist mode for testing on a couple of real mailboxes before
+    ever pointing this at the whole org. Emails not found in the directory
+    are skipped with a warning rather than silently scanned anyway, so a typo
+    in the pilot list can't accidentally widen scope.
 
     Returns a summary with per-mailbox results plus aggregate totals. A
     mailbox whose scan raises is recorded as an error entry, not a fatal
     failure for the rest of the fleet — one broken mailbox must not stop the
     domain-wide sweep.
     """
-    users = list_domain_users(settings)
-    if not users:
+    directory_users = list_domain_users(settings)
+    if not directory_users:
         logger.warning("fleet_no_users_discovered")
         return {"domain": getattr(settings, "google_workspace_domain", ""),
                 "mailboxes": 0, "results": {}, "totals": _empty_totals()}
+
+    if only_users:
+        directory_set = set(directory_users)
+        users = [u for u in only_users if u in directory_set]
+        skipped = set(only_users) - directory_set
+        if skipped:
+            logger.warning("fleet_pilot_users_not_in_directory", skipped=sorted(skipped))
+        logger.info("fleet_pilot_mode", requested=len(only_users), matched=len(users))
+    else:
+        users = directory_users
 
     sem = asyncio.Semaphore(mailbox_concurrency)
     results: dict[str, dict] = {}

@@ -1226,10 +1226,24 @@ async def gmail_scan_status(
     return {"scans": list(_scan_progress.values())[-10:]}
 
 
+@app.get("/api/gmail/fleet/users")
+async def gmail_fleet_users(current_user: dict = Depends(require_permission("scan"))):
+    """Dry-run: list every mailbox the Directory API can see in the
+    configured Workspace domain — discovery only, no scanning, no Gmail API
+    calls against any mailbox. This is the safe first call to make once
+    domain-wide delegation is granted: confirms auth + Directory API access
+    work before committing to anything that touches real mail."""
+    from app.layer7_gmail.directory_client import list_domain_users as _ldu
+    users = _ldu(settings)
+    return {"domain": getattr(settings, "google_workspace_domain", ""),
+            "count": len(users), "users": users}
+
+
 @app.post("/api/gmail/fleet/scan")
 async def gmail_fleet_scan(
     query: str = "",
     max_messages_per_user: int = 200,
+    pilot_users: str = "",
     current_user: dict = Depends(require_permission("scan")),
 ):
     """Discover every mailbox in the configured Workspace domain (via the
@@ -1237,15 +1251,22 @@ async def gmail_fleet_scan(
     equivalent of /api/gmail/scan, which only ever covers one fixed mailbox.
     Requires google_service_account_json + google_workspace_domain +
     google_admin_impersonate_email (an actual admin) to be configured with
-    domain-wide delegation granted; returns 0 mailboxes (not an error) if not."""
+    domain-wide delegation granted; returns 0 mailboxes (not an error) if not.
+
+    pilot_users: comma-separated allowlist (e.g. "a@skylo.tech,b@skylo.tech")
+    to restrict the very first real run to a couple of mailboxes instead of
+    the whole domain. Omit once the pilot run looks correct."""
     import uuid as _uuid
     from app.layer7_gmail.fleet_scanner import scan_all_mailboxes as _sam
     from app.pipeline import analyze_email as _aeb
 
+    only_users = [u.strip() for u in pilot_users.split(",") if u.strip()] or None
+
     scan_id = str(_uuid.uuid4())
     _scan_progress[scan_id] = {"status": "running", "scan_id": scan_id, "mailboxes": 0}
     try:
-        result = await _sam(_aeb, settings, query=query, max_messages_per_user=max_messages_per_user)
+        result = await _sam(_aeb, settings, query=query, max_messages_per_user=max_messages_per_user,
+                             only_users=only_users)
         _scan_progress[scan_id] = {**_scan_progress[scan_id], **result, "status": "complete"}
         return {**result, "scan_id": scan_id, "status": "complete"}
     except Exception as exc:
@@ -1349,6 +1370,8 @@ async def gmail_status(current_user: dict = Depends(require_auth)):
     else:
         auth_mode = "none"
     push_ready = sa_ok and bool(getattr(settings, "google_cloud_project", ""))
+    domain = getattr(settings, "google_workspace_domain", "")
+    fleet_ready = sa_ok and bool(domain)
     return {
         "auth_mode": auth_mode,
         "service_account_file": sa_path,
@@ -1364,6 +1387,11 @@ async def gmail_status(current_user: dict = Depends(require_auth)):
         "pull_enabled": getattr(settings, "gmail_enable_pull_subscriber", False),
         "quarantine_label": settings.gmail_quarantine_label,
         "scanned_label": settings.gmail_scanned_label,
+        "workspace_domain": domain,
+        # fleet_ready means "config is wired for domain-wide scanning" — it does
+        # NOT mean delegation has actually been granted in the admin console;
+        # that can only be confirmed by a live call (GET /api/gmail/fleet/users).
+        "fleet_ready": fleet_ready,
     }
 
 
