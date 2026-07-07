@@ -36,6 +36,10 @@ async def _lifespan(app):
     # forge an admin token. (Set ALLOW_INSECURE_JWT_SECRET=true for local dev.)
     from app.security.auth import assert_secure_secret
     assert_secure_secret()
+    # Warn (don't crash — these gate optional integrations) on any other credential
+    # still on its known-weak shipped default.
+    from app.config import warn_insecure_defaults
+    warn_insecure_defaults()
     # Auto-start SMTP receiver if enabled
     from app.layer7_gmail.smtp_receiver import start_smtp_server as _sss
     from app.pipeline import analyze_email as _aeb

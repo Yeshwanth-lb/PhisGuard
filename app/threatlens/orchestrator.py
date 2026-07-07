@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 
 import structlog
@@ -118,7 +117,8 @@ async def run_cycle(db_path: str | None = None) -> dict:
     alerts_sent = 0
     confirmed_count = 0
     critical_zone_count = 0
-    _webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
+    from app.config import settings as _settings
+    _webhook = getattr(_settings, "slack_webhook_url", "")
 
     async def _process_one(cluster):
         nonlocal profiles_written, llm_calls, alerts_sent, confirmed_count, critical_zone_count

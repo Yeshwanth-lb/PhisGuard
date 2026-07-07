@@ -227,11 +227,11 @@ def _alert_bombing_async(source: str, count: int, peer_ip: str, sender: str) -> 
 
     def _send():
         try:
-            import httpx, os
-            webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
+            import httpx as _hx
+            from app.config import settings as _settings
+            webhook = getattr(_settings, "slack_webhook_url", "")
             if not webhook:
                 return
-            import httpx as _hx
             payload = {
                 "blocks": [
                     {"type": "header", "text": {"type": "plain_text",
@@ -267,8 +267,9 @@ def _alert_rcpt_bombing(rcpt: str, count: int, peer_ip: str, sender: str) -> Non
 
     def _send():
         try:
-            import httpx as _hx, os
-            webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
+            import httpx as _hx
+            from app.config import settings as _settings
+            webhook = getattr(_settings, "slack_webhook_url", "")
             if not webhook:
                 return
             payload = {"blocks": [

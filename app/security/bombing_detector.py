@@ -427,8 +427,9 @@ def _alert_async(rcpt: str, count: int, pattern_ratio: float,
 
     def _send():
         try:
-            import httpx as _hx, os
-            webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
+            import httpx as _hx
+            from app.config import settings as _settings
+            webhook = getattr(_settings, "slack_webhook_url", "")
             if not webhook:
                 return
             payload = {"blocks": [

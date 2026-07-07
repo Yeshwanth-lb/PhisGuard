@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     opencti_host: str = Field(default="http://opencti:8080")
     opencti_misp_sync_interval: int = Field(default=60)
 
+    # ── Neo4j (ThreatLens graph) ─────────────────────────────────────────────
+    neo4j_uri: str = Field(default="bolt://neo4j:7687")
+    neo4j_user: str = Field(default="neo4j")
+    neo4j_password: str = Field(default="changeme123")
+
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_host: str = Field(default="redis")
     redis_port: int = Field(default=6379)
@@ -191,3 +196,36 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# Fields whose Field(default=...) is a well-known placeholder, not a real secret —
+# shipping these unchanged into a real deployment means the credential is public
+# knowledge (it's sitting in this file's git history). Unlike JWT_SECRET, these
+# gate optional integrations (ES/OpenCTI/MinIO/Neo4j), so a hard startup failure
+# would be too aggressive for a deployment that doesn't use one of them — warn
+# loudly instead, once, at startup.
+_INSECURE_DEFAULTS = {
+    "elasticsearch_password": "changeme",
+    "opencti_admin_password": "changeme",
+    "minio_secret_key": "changeme123",
+    "neo4j_password": "changeme123",
+}
+
+
+def warn_insecure_defaults() -> list[str]:
+    """Log a warning for every credential still on its known-weak default.
+    Call once at startup. Returns the list of field names still insecure,
+    for callers that want to act on it (tests, health checks)."""
+    import structlog
+    logger = structlog.get_logger()
+    still_default = [
+        field for field, default_value in _INSECURE_DEFAULTS.items()
+        if getattr(settings, field, None) == default_value
+    ]
+    if still_default:
+        logger.warning(
+            "insecure_default_credentials",
+            fields=still_default,
+            hint="Set these in .env before a real deployment — the shipped defaults are public.",
+        )
+    return still_default
