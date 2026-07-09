@@ -1,3 +1,8 @@
+# Pinned <81: MLflow (and other libs) still import pkg_resources, which newer
+# setuptools removes — an unpinned setuptools breaks MLflow verdict logging on a
+# clean image rebuild. This was a prior in-container hotfix; pinning it here bakes
+# it into the image so `docker compose build` reproduces a working stack.
+setuptools==80.10.2
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.7.1
