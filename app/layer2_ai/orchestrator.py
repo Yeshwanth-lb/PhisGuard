@@ -64,6 +64,7 @@ async def run_layer2(parsed: dict, settings) -> dict:
             parsed,
             llm_client=llm_client,
             anthropic_max_tokens=getattr(settings, "anthropic_max_tokens", 1024),
+            settings=settings,
         ),
         run_behavioral(parsed, settings=settings),
         return_exceptions=True,

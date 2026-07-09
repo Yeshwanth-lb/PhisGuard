@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     anthropic_max_tokens: int = Field(default=1024)
     gemini_api_key: str = Field(default="")
     openai_api_key: str = Field(default="")
+    # Self-consistency voting for the NLP engine: sample the LLM N times and take
+    # the MEDIAN score. Reduces run-to-run verdict flip-flop on borderline mail
+    # without shifting the score distribution (so no threshold recalibration,
+    # unlike temperature=0 which regressed detection). Default 1 = single call =
+    # no extra cost/latency; set 3 for reproducibility-sensitive deployments.
+    nlp_self_consistency_samples: int = Field(default=1)
 
     # ── Layer 1 OSINT APIs ────────────────────────────────────────────────────
     virustotal_api_key: str = Field(default="")
