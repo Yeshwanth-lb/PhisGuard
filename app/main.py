@@ -1308,10 +1308,11 @@ async def gmail_fleet_watch_setup(
 
 @app.get("/api/gmail/fleet/watch/status")
 async def gmail_fleet_watch_status(current_user: dict = Depends(require_permission("scan"))):
-    """Show every mailbox's tracked watch expiry — what the renewal
-    scheduler is protecting, and how soon each one needs renewal."""
+    """Fleet watch health — a rollup (protected / expiring-soon / stale) for
+    dashboards/monitoring, plus the per-mailbox expiry detail. Safe with zero
+    watches (all-zero summary) so it works before the fleet is live."""
     from app.layer7_gmail import watch_state as _ws
-    return {"watches": _ws.list_all()}
+    return {"summary": _ws.health_summary(), "watches": _ws.list_all()}
 
 
 @app.post("/api/gmail/fleet/watch/renew")

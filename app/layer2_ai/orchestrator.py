@@ -39,6 +39,38 @@ from app.llm.client import LLMClient
 
 logger = structlog.get_logger()
 
+# Throttle engine-failure alerts: an engine that's down would otherwise fire one
+# Slack alert per scanned email (thousands/hour). One alert per engine per window.
+_ENGINE_ALERT_COOLDOWN_SECS = 300
+_engine_alert_last: dict[str, float] = {}
+
+
+async def _alert_engine_failure(engine: str, error: str, settings) -> None:
+    """Fire-and-forget, throttled Slack alert when an L2 engine errors out — a
+    degraded verdict (engine defaulted to 0.0) must not fail silently."""
+    webhook = getattr(settings, "slack_webhook_url", "") if settings else ""
+    if not webhook:
+        return
+    import time as _t
+    now = _t.monotonic()
+    last = _engine_alert_last.get(engine, 0.0)
+    if now - last < _ENGINE_ALERT_COOLDOWN_SECS:
+        return
+    _engine_alert_last[engine] = now
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                webhook,
+                json={"text": f":warning: PhishGuard L2 engine *{engine}* is failing "
+                              f"({error[:160]}). Verdicts are running DEGRADED (this engine "
+                              f"scored 0.0) until it recovers. Throttled to 1 alert / "
+                              f"{_ENGINE_ALERT_COOLDOWN_SECS//60} min."},
+                timeout=10,
+            )
+    except Exception as exc:
+        logger.warning("engine_failure_alert_err", error=str(exc))
+
 WEIGHTS = {
     "structural": 0.30,
     "nlp":        0.50,
@@ -74,11 +106,19 @@ async def run_layer2(parsed: dict, settings) -> dict:
     scores:  dict = {}
     details: dict = {}
 
+    degraded_engines: list[str] = []
     for result, name in zip(results, engine_names):
         if isinstance(result, Exception):
             logger.warning("l2_engine_error", engine=name, error=str(result))
             scores[name]  = 0.0
-            details[name] = {"engine": name, "score": 0.0, "status": "error"}
+            details[name] = {"engine": name, "score": 0.0, "status": "error", "error": str(result)[:200]}
+            degraded_engines.append(name)
+            # Escalate (throttled, non-blocking) — a silently degraded detector is
+            # a reliability incident, not just a log line.
+            try:
+                asyncio.create_task(_alert_engine_failure(name, str(result), settings))
+            except RuntimeError:
+                pass  # no running loop (unit test / sync context) — log already emitted
         else:
             scores[name]  = result.get("score", 0.0)
             details[name] = result
@@ -165,5 +205,6 @@ async def run_layer2(parsed: dict, settings) -> dict:
         "triggered_by":   triggered_by,
         "engine_scores":  scores,
         "engines":        details,
+        "degraded_engines": degraded_engines,   # non-empty => verdict computed with a failed engine
         "llm_provider":   llm_client.provider,
     }

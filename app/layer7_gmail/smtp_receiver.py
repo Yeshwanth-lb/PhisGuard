@@ -59,6 +59,25 @@ async def _relay_raw(raw_bytes: bytes, mail_from: str, recipients: list[str], se
     return False
 
 
+async def _alert_delivery_failure(settings, recipients: list[str]) -> None:
+    """Slack-alert on a clean email that could not be delivered by any path.
+    A silently-dropped clean email is a real availability incident — surface it."""
+    webhook = getattr(settings, "slack_webhook_url", "") or ""
+    if not webhook:
+        return
+    try:
+        import httpx as _hx
+        await _hx.AsyncClient().post(
+            webhook,
+            json={"text": f":x: PhishGuard: a CLEAN email could not be delivered "
+                          f"(Gmail API + SMTP relay both failed) to {', '.join(recipients)}. "
+                          f"Recipient did NOT receive it — check Gmail OAuth token / relay config."},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("delivery_failure_alert_err", error=str(exc))
+
+
 def _tag_subject(raw_bytes: bytes, prefix: str) -> bytes:
     """Prepend a tag to the Subject header of a raw email."""
     try:
@@ -234,8 +253,18 @@ class PhishGuardSMTPHandler:
             if gmail_ok:
                 logger.info("smtp_delivered_via_gmail_api", rcpt=original_rcpts)
             else:
-                await _relay_raw(raw_bytes, mail_from, original_rcpts, self.settings)
-                logger.info("smtp_delivered_clean", rcpt=original_rcpts)
+                # Fall back to the downstream SMTP relay — but only claim delivery
+                # if the relay actually succeeded. Previously this logged
+                # "smtp_delivered_clean" unconditionally, so a clean email that
+                # failed BOTH Gmail API and relay looked delivered while silently
+                # going nowhere (invisible data loss).
+                relay_ok = await _relay_raw(raw_bytes, mail_from, original_rcpts, self.settings)
+                if relay_ok:
+                    logger.info("smtp_delivered_clean", rcpt=original_rcpts, via="relay")
+                else:
+                    logger.error("smtp_delivery_failed", rcpt=original_rcpts,
+                                 detail="clean email: Gmail API + SMTP relay both failed — not delivered")
+                    await _alert_delivery_failure(self.settings, original_rcpts)
 
         elif routing_verdict == "suspicious":
             # HOLD — do NOT deliver until SOC reviews it

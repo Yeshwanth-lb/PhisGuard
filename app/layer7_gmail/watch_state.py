@@ -79,3 +79,35 @@ def list_expiring_within(hours: int = 24) -> list[str]:
     finally:
         conn.close()
     return [r[0] for r in rows]
+
+
+def health_summary(expiring_hours: int = 24) -> dict:
+    """Fleet watch-health rollup for observability: how many mailboxes are
+    protected, expiring soon, or in an unknown/stale state. This is the data a
+    dashboard tile renders; safe to call with zero watches (returns zeros)."""
+    now_ms = time.time() * 1000
+    cutoff_ms = now_ms + expiring_hours * 3600 * 1000
+    all_rows = list_all()
+    protected = expiring = stale = 0
+    soonest_expiry_ms = None
+    for r in all_rows:
+        exp = r.get("expiry_ms")
+        if exp is None:
+            stale += 1
+        elif exp <= now_ms:
+            stale += 1          # already expired = going dark now
+        elif exp <= cutoff_ms:
+            expiring += 1
+            soonest_expiry_ms = exp if soonest_expiry_ms is None else min(soonest_expiry_ms, exp)
+        else:
+            protected += 1
+            soonest_expiry_ms = exp if soonest_expiry_ms is None else min(soonest_expiry_ms, exp)
+    return {
+        "total_mailboxes": len(all_rows),
+        "protected": protected,
+        "expiring_soon": expiring,
+        "stale_or_expired": stale,
+        "expiring_window_hours": expiring_hours,
+        "soonest_expiry_ms": soonest_expiry_ms,
+        "healthy": stale == 0,
+    }
