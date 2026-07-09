@@ -386,10 +386,38 @@ services:
     mem_limit: 1g
     networks: [phishguard]
 
+  # Production datastore for the primary store (app/storage.py). Opt-in via the
+  # "postgres" compose profile so the default dev/demo stack stays on SQLite and
+  # this doesn't auto-start. To use: `docker compose --profile postgres up -d postgres`,
+  # then set DATABASE_URL=postgresql://phishguard:${POSTGRES_PASSWORD}@postgres:5432/phishguard
+  # in the app env and rebuild the app image (installs psycopg).
+  postgres:
+    image: postgres:16-alpine
+    container_name: phishguard-postgres
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=phishguard
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme123}
+      - POSTGRES_DB=phishguard
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "phishguard"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1g
+    networks: [phishguard]
+
 networks:
   phishguard: { driver: bridge }
 
 volumes:
+  postgres_data: {}
   app_data: {}
   ml_baselines: {}
   es_data: {}

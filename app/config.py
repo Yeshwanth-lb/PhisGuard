@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="changeme123")
 
+    # ── Primary datastore ────────────────────────────────────────────────────
+    # Empty => SQLite (default, dev/demo). Set to postgresql://user:pass@host/db
+    # for a production Postgres backend (concurrent-write durability / backup / HA).
+    database_url: str = Field(default="")
+
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_host: str = Field(default="redis")
     redis_port: int = Field(default=6379)

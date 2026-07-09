@@ -52,6 +52,11 @@ google-auth-httplib2==0.2.0
 google-cloud-pubsub==2.21.5
 aiosmtpd==1.4.6
 
+# Optional deployment datastore — the primary store (app/storage.py) runs on
+# SQLite by default and on PostgreSQL when DATABASE_URL is set. psycopg is only
+# imported on the Postgres path, so it's a no-op for the default SQLite setup.
+psycopg[binary]==3.2.1
+
 # Testing
 pytest==8.2.2
 pytest-asyncio==0.23.7

@@ -1,45 +1,33 @@
-"""SQLite-backed storage for scan results."""
+"""Primary datastore for scan results. Backend-agnostic via app.db:
+SQLite by default (WAL, unchanged dev/demo behavior), PostgreSQL when
+DATABASE_URL is set (deployment — real concurrent-write durability)."""
 import json
 import os
-import sqlite3
 import threading
 import time
+
+from app import db as _db
 
 _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 _lock = threading.Lock()
 
 
 def _conn():
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(_DB_PATH, check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    # WAL lets readers and a writer proceed concurrently and survives process
-    # crashes without corruption — essential under a mail-bomb flood where the
-    # Docker container and local scripts hit the same DB file (gotcha #1).
-    # synchronous=NORMAL is durable under WAL (data is fsynced at checkpoint;
-    # only the last transaction can be lost on an OS-level crash, never on a
-    # plain process restart). journal_mode is persisted at the DB level on first
-    # set; synchronous is per-connection, so we set both every open. ":memory:"
-    # DBs ignore WAL — guard so unit tests on in-memory DBs don't error.
-    if _DB_PATH != ":memory:":
-        try:
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("PRAGMA synchronous=NORMAL")
-        except Exception:
-            pass
-    return c
+    # app.db.connect handles WAL/pragmas for SQLite and psycopg for Postgres, and
+    # returns rows that behave like sqlite3.Row on both backends.
+    return _db.connect(_DB_PATH)
 
 
 def init_db():
     with _lock:
         c = _conn()
-        c.execute('''CREATE TABLE IF NOT EXISTS trusted_domains (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS trusted_domains (
             domain TEXT PRIMARY KEY,
             added_at REAL NOT NULL,
             added_by TEXT DEFAULT 'user',
             note TEXT DEFAULT ''
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+        )'''))
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS feedback (
             id TEXT PRIMARY KEY,
             scan_id TEXT NOT NULL,
             original_verdict TEXT,
@@ -47,9 +35,9 @@ def init_db():
             notes TEXT DEFAULT '',
             submitted_at REAL NOT NULL,
             submitted_by TEXT DEFAULT 'soc'
-        )''')
+        )'''))
         # Pending SOC review queue — suspicious emails held for analyst approval
-        c.execute('''CREATE TABLE IF NOT EXISTS pending_review (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS pending_review (
             id TEXT PRIMARY KEY,
             scan_id TEXT,
             ts REAL NOT NULL,
@@ -62,9 +50,9 @@ def init_db():
             status TEXT DEFAULT 'pending',
             reviewed_by TEXT,
             reviewed_at REAL
-        )''')
+        )'''))
         c.execute('CREATE INDEX IF NOT EXISTS idx_pr_status ON pending_review(status)')
-        c.execute('''CREATE TABLE IF NOT EXISTS scans (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS scans (
             id TEXT PRIMARY KEY,
             ts REAL NOT NULL,
             verdict TEXT NOT NULL,
@@ -76,17 +64,17 @@ def init_db():
             data_json TEXT NOT NULL,
             released INTEGER DEFAULT 0,
             deleted INTEGER DEFAULT 0
-        )''')
+        )'''))
         c.execute('CREATE INDEX IF NOT EXISTS idx_ts ON scans(ts DESC)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_verdict ON scans(verdict)')
         # Durable staging buffer for the bombing triage engine. Tier-2 (noise) and
         # Tier-3 (uncertain) mail is parked here during an active bomb and released
         # — labeled — when the window expires. NOTHING is held indefinitely. Buffer
-        # is SQLite-backed (not in-memory) specifically so it survives a restart
+        # is persisted (not in-memory) specifically so it survives a restart
         # mid-bomb. raw_email is stored so the message can be delivered intact;
         # bodies are never logged (see privacy rule), only stored at rest like
         # pending_review already does.
-        c.execute('''CREATE TABLE IF NOT EXISTS bombing_buffer (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS bombing_buffer (
             id TEXT PRIMARY KEY,
             recipient TEXT NOT NULL,
             scan_id TEXT,
@@ -98,15 +86,17 @@ def init_db():
             subject TEXT,
             claimed_at REAL,
             delivered_at REAL
-        )''')
+        )'''))
         c.execute('CREATE INDEX IF NOT EXISTS idx_buffer_recipient_released '
                   'ON bombing_buffer(recipient, released)')
-        # Migrate older buffer tables that predate the claimed_at/delivered_at columns.
-        _cols = {r[1] for r in c.execute("PRAGMA table_info(bombing_buffer)").fetchall()}
-        if "claimed_at" not in _cols:
-            c.execute("ALTER TABLE bombing_buffer ADD COLUMN claimed_at REAL")
-        if "delivered_at" not in _cols:
-            c.execute("ALTER TABLE bombing_buffer ADD COLUMN delivered_at REAL")
+        # Migrate older SQLite buffer tables that predate claimed_at/delivered_at.
+        # SQLite-only: Postgres deployments start fresh with the full schema above.
+        if not _db.is_postgres():
+            _cols = {r[1] for r in c.execute("PRAGMA table_info(bombing_buffer)").fetchall()}
+            if "claimed_at" not in _cols:
+                c.execute("ALTER TABLE bombing_buffer ADD COLUMN claimed_at REAL")
+            if "delivered_at" not in _cols:
+                c.execute("ALTER TABLE bombing_buffer ADD COLUMN delivered_at REAL")
         c.commit()
         c.close()
 
@@ -116,9 +106,9 @@ def save_scan(scan_id, result, parsed):
         c = _conn()
         body = parsed.get('body_text', '') or ''
         prev = body[:300] if body else ''
-        c.execute('''INSERT OR REPLACE INTO scans
-            (id, ts, verdict, confidence, blocked_at, sender, subject, body_preview, data_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        c.execute(_db.upsert('scans',
+            ['id', 'ts', 'verdict', 'confidence', 'blocked_at', 'sender', 'subject',
+             'body_preview', 'data_json'], 'id'),
             (scan_id,
              time.time(),
              result.get('verdict', 'unknown'),
@@ -218,11 +208,11 @@ def save_pending_review(pending_id: str, scan_id: str, verdict: str, confidence:
     with _lock:
         c = _conn()
         try:
-            c.execute('''INSERT OR REPLACE INTO pending_review
-                (id, scan_id, ts, verdict, confidence, sender, subject, original_rcpt, raw_email, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')''',
+            c.execute(_db.upsert('pending_review',
+                ['id', 'scan_id', 'ts', 'verdict', 'confidence', 'sender', 'subject',
+                 'original_rcpt', 'raw_email', 'status'], 'id'),
                 (pending_id, scan_id, time.time(), verdict, float(confidence),
-                 sender, subject, original_rcpt, raw_email))
+                 sender, subject, original_rcpt, raw_email, 'pending'))
             c.commit()
             return True
         except Exception as exc:
@@ -277,7 +267,7 @@ def add_trusted_domain(domain: str, note: str = '', added_by: str = 'user') -> b
     with _lock:
         c = _conn()
         try:
-            c.execute('INSERT OR REPLACE INTO trusted_domains (domain, added_at, added_by, note) VALUES (?, ?, ?, ?)',
+            c.execute(_db.upsert('trusted_domains', ['domain', 'added_at', 'added_by', 'note'], 'domain'),
                       (domain.lower().strip(), time.time(), added_by, note))
             c.commit()
             return True
@@ -332,12 +322,12 @@ def buffer_add(buffer_id: str, recipient: str, scan_id: str, tier: str,
     with _lock:
         c = _conn()
         try:
-            c.execute('''INSERT OR REPLACE INTO bombing_buffer
-                (id, recipient, scan_id, timestamp, tier, released, raw_email, sender_domain, subject)
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)''',
+            c.execute(_db.upsert('bombing_buffer',
+                ['id', 'recipient', 'scan_id', 'timestamp', 'tier', 'released',
+                 'raw_email', 'sender_domain', 'subject'], 'id'),
                 (buffer_id, (recipient or "").strip().lower(), scan_id,
                  timestamp if timestamp is not None else time.time(),
-                 tier, raw_email, sender_domain, subject))
+                 tier, 0, raw_email, sender_domain, subject))
             c.commit()
             return True
         except Exception as exc:
