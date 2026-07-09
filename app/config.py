@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     ml_local_data_dir: str = Field(default="data/training")    # ground-truth corpus only
     ml_verdict_log_dir: str = Field(default="data/verdicts")   # live predictions (NOT training)
     ml_bootstrap_on_startup: bool = Field(default=True)
+    # Automated feedback-loop retraining (opt-in — retrains on accumulated SOC
+    # feedback on a cadence, but only PROMOTES the new model if it doesn't
+    # regress the champion's held-out AUC — see auto_retrain.py).
+    ml_auto_retrain_enabled: bool = Field(default=False)
+    ml_retrain_cadence_days: int = Field(default=7)
+    ml_promote_auc_tolerance: float = Field(default=0.01)   # accept new model if new_auc >= champion_auc - this
 
     # MLflow
     mlflow_tracking_uri: str = Field(default="http://127.0.0.1:5000")

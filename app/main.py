@@ -87,6 +87,12 @@ async def _lifespan(app):
         _swsched(settings)
     except Exception as _e:
         logger.warning("watch_scheduler_start_failed", error=str(_e))
+    # Start gated ML retrain scheduler (no-op unless ML_AUTO_RETRAIN_ENABLED)
+    try:
+        from app.layer5_ml.retrain_scheduler import start_retrain_scheduler as _srsched
+        _srsched(settings)
+    except Exception as _e:
+        logger.warning("retrain_scheduler_start_failed", error=str(_e))
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:
