@@ -7,22 +7,22 @@ notifications and nobody notices until someone asks "why didn't this get
 flagged". Mirrors the sqlite checkpoint pattern already used in
 historical_scanner.py.
 """
-import sqlite3
 import time
+
+from app import db as _db
 
 _STATE_DB = "data/gmail_watch_state.db"
 
 
-def _conn() -> sqlite3.Connection:
-    import os
-    os.makedirs("data", exist_ok=True)
-    c = sqlite3.connect(_STATE_DB, check_same_thread=False)
-    c.execute("""CREATE TABLE IF NOT EXISTS mailbox_watches (
+def _conn():
+    # Backend-agnostic (SQLite default / Postgres when DATABASE_URL set) via app.db.
+    c = _db.connect(_STATE_DB)
+    c.execute(_db.ddl("""CREATE TABLE IF NOT EXISTS mailbox_watches (
         user_email   TEXT PRIMARY KEY,
         history_id   TEXT,
         expiry_ms    INTEGER,
         updated_at   REAL NOT NULL
-    )""")
+    )"""))
     c.commit()
     return c
 
@@ -31,8 +31,7 @@ def save_watch(user_email: str, history_id: str | None, expiry_ms: str | int | N
     conn = _conn()
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO mailbox_watches (user_email, history_id, expiry_ms, updated_at) "
-            "VALUES (?,?,?,?)",
+            _db.upsert("mailbox_watches", ["user_email", "history_id", "expiry_ms", "updated_at"], "user_email"),
             (user_email, history_id, int(expiry_ms) if expiry_ms else None, time.time()),
         )
         conn.commit()

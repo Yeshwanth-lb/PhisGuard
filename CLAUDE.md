@@ -64,16 +64,17 @@ ruff format .
    tier boundaries — the "You've been selected — claim your gift" sample flipping to
    phishing is known variance, not a regression. Clean pool is always 7/7.
 
-6. **Datastore backend (`DATABASE_URL`) — do NOT enable Postgres yet.** The primary
-   store (`storage.py`) and `denylist.py` route through `app/db.py` and work on
-   SQLite (default) or Postgres. BUT the Postgres migration is INCOMPLETE: other
-   readers of `phishguard.db` — ThreatLens (`threatlens/store.py`,
-   `actor_clusterer.py`, `sector_rollup.py`, `org_assessor.py`), retrain
-   (`layer5_ml/training_pipeline.py`), SOAR (`layer4_soar/digest.py`,
-   `campaign_detector.py`), and `smtp_receiver.py`'s buffer path — still open raw
-   SQLite. In Postgres mode those would read an empty SQLite file (degraded, not
-   crashing). Finish migrating ALL `phishguard.db` accessors to `app.db` before
-   setting `DATABASE_URL`. SQLite (default, empty `DATABASE_URL`) is fully consistent.
+6. **Datastore backend (`DATABASE_URL`).** All DB access routes through
+   `app/db.py` — SQLite by default (empty `DATABASE_URL`, WAL, unchanged
+   dev/demo), or PostgreSQL when `DATABASE_URL=postgresql://...` is set. The
+   migration is COMPLETE across every module (storage, denylist, ThreatLens
+   store/clusterer, retrain, SOAR digest/campaign, watch_state, historical
+   scanner, smtp_receiver) and validated on both backends incl. cross-module
+   consistency (readers see what writers wrote on Postgres). To deploy on
+   Postgres: `docker compose --profile postgres up -d postgres`, set
+   `DATABASE_URL`, rebuild the app image (installs psycopg). Note: `app/db.py`
+   is the ONLY place allowed to call `sqlite3.connect` — everything else uses
+   `_db.connect()` + `_db.ddl()`/`_db.upsert()` for dialect-correct SQL.
 
 ## Architecture — the big picture
 

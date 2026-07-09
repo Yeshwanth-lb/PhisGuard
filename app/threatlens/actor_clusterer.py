@@ -9,7 +9,7 @@ No external calls, no LLM — pure scan-data processing.
 import hashlib
 import json
 import os
-import sqlite3
+from app import db as _db
 import time
 
 from app.layer4_soar.campaign_detector import (
@@ -121,8 +121,7 @@ def _extract_iocs(scan: dict) -> IoCSet:
 def _load_scans_from_db(db_path: str) -> list[dict]:
     """Load all phishing + suspicious scans from the scans table."""
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = _db.connect(db_path)
         rows = conn.execute(
             """SELECT id, ts, verdict, sender, data_json
                FROM scans

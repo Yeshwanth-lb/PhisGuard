@@ -10,7 +10,7 @@ A cluster with ≥ MIN_EMAILS members within the detection window = campaign.
 """
 import json
 import re
-import sqlite3
+from app import db as _db
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -57,7 +57,7 @@ def detect_campaigns(
     since = time.time() - window_days * 86400
 
     try:
-        conn = sqlite3.connect(db_path)
+        conn = _db.connect(db_path)
         rows = conn.execute(
             """SELECT id, ts, verdict, sender, data_json
                FROM scans

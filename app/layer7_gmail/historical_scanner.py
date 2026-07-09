@@ -4,12 +4,12 @@ Maintains a SQLite checkpoint table so restarting a scan never re-processes
 an already-scanned message. Safe to run multiple times.
 """
 import asyncio
-import sqlite3
 import uuid
 from collections.abc import Callable
 
 import structlog
 
+from app import db as _db
 from .gmail_client import apply_label, fetch_raw_message, list_messages
 
 logger = structlog.get_logger()
@@ -17,22 +17,21 @@ logger = structlog.get_logger()
 _CHECKPOINT_DB = "data/gmail_scan_checkpoint.db"
 
 
-def _checkpoint_conn() -> sqlite3.Connection:
-    import os
-    os.makedirs("data", exist_ok=True)
-    c = sqlite3.connect(_CHECKPOINT_DB, check_same_thread=False)
-    c.execute("""CREATE TABLE IF NOT EXISTS scanned_messages (
+def _checkpoint_conn():
+    # Backend-agnostic (SQLite default / Postgres when DATABASE_URL set) via app.db.
+    c = _db.connect(_CHECKPOINT_DB)
+    c.execute(_db.ddl("""CREATE TABLE IF NOT EXISTS scanned_messages (
         user_email  TEXT NOT NULL,
         message_id  TEXT NOT NULL,
         verdict     TEXT,
         scanned_at  REAL NOT NULL,
         PRIMARY KEY (user_email, message_id)
-    )""")
+    )"""))
     c.commit()
     return c
 
 
-def _is_already_scanned(conn: sqlite3.Connection, user_email: str, msg_id: str) -> bool:
+def _is_already_scanned(conn, user_email: str, msg_id: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM scanned_messages WHERE user_email=? AND message_id=?",
         (user_email, msg_id),
@@ -40,10 +39,11 @@ def _is_already_scanned(conn: sqlite3.Connection, user_email: str, msg_id: str) 
     return row is not None
 
 
-def _mark_scanned(conn: sqlite3.Connection, user_email: str, msg_id: str, verdict: str) -> None:
+def _mark_scanned(conn, user_email: str, msg_id: str, verdict: str) -> None:
     import time
     conn.execute(
-        "INSERT OR REPLACE INTO scanned_messages (user_email, message_id, verdict, scanned_at) VALUES (?,?,?,?)",
+        _db.upsert("scanned_messages", ["user_email", "message_id", "verdict", "scanned_at"],
+                   ["user_email", "message_id"]),
         (user_email, msg_id, verdict, time.time()),
     )
     conn.commit()

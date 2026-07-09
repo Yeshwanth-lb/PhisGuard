@@ -490,9 +490,10 @@ async def reject_pending(pending_id: str, settings, reviewed_by: str = "soc") ->
     # Update the original scan record to phishing so it appears in the Quarantine tab
     if item.get("scan_id"):
         try:
-            import sqlite3 as _sq, os as _os, time as _time
+            import os as _os
+            from app import db as _db
             db_path = _os.environ.get("PHISHGUARD_DB_PATH", "data/phishguard.db")
-            conn = _sq.connect(db_path, check_same_thread=False)
+            conn = _db.connect(db_path)
             conn.execute(
                 "UPDATE scans SET verdict='phishing', confidence=? WHERE id=?",
                 (max(item.get("confidence", 0.5), 0.65), item["scan_id"])
