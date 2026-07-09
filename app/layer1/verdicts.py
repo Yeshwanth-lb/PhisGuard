@@ -32,9 +32,14 @@ TRUSTED_SENDER_DOMAINS = {
     "linkedin.com", "indeed.com", "glassdoor.com", "naukri.com",
     "monster.com", "hackerearth.com", "hackerrank.com", "internshala.com",
     "shine.com", "foundit.in", "hirist.com",
-    # Big tech
-    "google.com", "gmail.com", "accounts.google.com", "mail.google.com",
-    "microsoft.com", "live.com", "outlook.com", "office.com",
+    # Big tech — SERVICE/notification domains only (only the vendor sends from
+    # these). NOTE: consumer webmail (gmail.com, outlook.com, live.com,
+    # hotmail.com, yahoo.com, ...) is deliberately NOT here. Those mailboxes are
+    # open to anyone, so "authenticated gmail" says nothing about whether the
+    # content is malicious — treating them as a trusted skip let every BEC /
+    # consumer-phish from gmail/outlook bypass L2/L3 content analysis entirely.
+    "google.com", "accounts.google.com", "mail.google.com",
+    "microsoft.com", "office.com",
     "apple.com", "amazon.com", "amazonaws.com",
     # Communication / productivity
     "slack.com", "zoom.us", "teams.microsoft.com", "github.com",

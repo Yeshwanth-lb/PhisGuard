@@ -133,6 +133,79 @@ def _social_engineering_score(subject: str, body: str) -> tuple[float, list[str]
     return round(score, 3), matched
 
 
+# Free/consumer webmail providers. An "executive/authority" request that arrives
+# from one of these (rather than the corporate domain) is the core BEC signal —
+# a real CEO emails from the company domain, not gmail.
+FREE_WEBMAIL = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "yahoo.com", "yahoo.co.uk", "aol.com", "icloud.com", "me.com", "mac.com",
+    "proton.me", "protonmail.com", "gmx.com", "mail.com", "zoho.com", "yandex.com",
+}
+
+_BEC_MARKERS = {
+    "availability_probe": [
+        r"are you (?:available|at your desk|around|free|in the office)",
+        r"quick (?:task|question|favor|favour)", r"do you have a (?:minute|moment|sec)",
+        r"you got a (?:minute|moment|sec)",
+    ],
+    "authority_delegation": [
+        r"i need you to", r"i want you to", r"can you (?:handle|take care of|process|purchase|arrange)",
+        r"handle something", r"favou?r (?:to ask|needed|from you)", r"help me with something",
+    ],
+    "urgency": [
+        r"urgent", r"right away", r"asap", r"as soon as you (?:get|see) this",
+        r"time.?sensitive", r"immediately", r"before .{0,15}(?:eod|end of day|close)",
+    ],
+    "secrecy": [
+        r"keep this (?:between us|confidential|discreet|quiet)", r"between you and me",
+        r"don'?t (?:tell|mention|discuss)", r"discreet", r"confidential(?:ly)?",
+    ],
+    "giftcard_wire": [
+        r"gift ?cards?", r"wire transfer", r"purchase .{0,20}cards?", r"scratch .{0,10}back",
+        r"(?:email|send) .{0,10}(?:me )?the codes?", r"i'?ll reimburse",
+    ],
+    "mobile_footer": [
+        r"sent from my (?:iphone|ipad|mobile|android|samsung)",
+    ],
+}
+_BEC_PATTERNS = {c: [re.compile(p, re.IGNORECASE) for p in pats] for c, pats in _BEC_MARKERS.items()}
+_EXEC_ROLE_RE = re.compile(r"\b(ceo|cfo|cto|coo|ciso|president|chairman|director|chief|vp|exec(?:utive)?)\b",
+                           re.IGNORECASE)
+
+
+def _bec_opener_score(from_header: str, sender_domain: str, reply_to: str,
+                      subject: str, body: str) -> tuple[float, list[str]]:
+    """Detect executive-impersonation BEC openers — the near-contentless
+    "are you available?" / gift-card-favor mails that carry no link, attachment,
+    or classic scam keyword and so score 0.0 everywhere else.
+
+    The discriminator is the SENDER, not the words: an authority/action request
+    from a free-webmail domain (or with a role in the address while off-domain,
+    or a Reply-To mismatch) PLUS >=2 distinct BEC markers. The 2-marker floor is
+    the false-positive guard — a friend's "are you free for lunch?" from gmail
+    has one marker and stays silent. Capped 0.58 (suspicious, never solo-phishing).
+    """
+    sd = (sender_domain or "").lower()
+    rt = (reply_to or "").lower()
+    is_free = sd in FREE_WEBMAIL
+    # role word in the local-part/display while off a free-webmail domain (ceo.x@gmail)
+    role_offdomain = bool(_EXEC_ROLE_RE.search(from_header or "")) and is_free
+    reply_mismatch = bool(rt) and sd and (sd not in rt)
+    untrusted_sender = is_free or reply_mismatch or role_offdomain
+    if not untrusted_sender:
+        return 0.0, []
+    text = f"{subject or ''}\n{body or ''}"
+    hits = [c for c, pats in _BEC_PATTERNS.items() if any(p.search(text) for p in pats)]
+    if len(hits) < 2:
+        return 0.0, []
+    score = 0.50
+    if "giftcard_wire" in hits:
+        score = 0.58   # gift-card/wire ask is the BEC money step — stronger
+    if role_offdomain:
+        score = max(score, 0.55)
+    return round(score, 3), hits
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -357,6 +430,17 @@ async def run_structural(parsed: dict) -> dict:
     if se_score > 0:
         findings.append(f"social_engineering:{'+'.join(se_categories)}")
         scores.append(se_score)
+
+    # --- BEC executive-impersonation opener (sender-based, near-contentless) ---
+    bec_score, bec_markers = _bec_opener_score(fh, sd, rt, subj, bt or bh)
+    if bec_score > 0:
+        findings.append(f"bec_opener:{'+'.join(bec_markers)}")
+        scores.append(bec_score)
+        # Fold into the social-engineering signal so the orchestrator's
+        # struct_socialeng rung escalates it to suspicious.
+        se_score = max(se_score, bec_score)
+        if "bec_opener" not in se_categories:
+            se_categories = se_categories + ["bec_opener"]
 
     # --- Brand impersonation ---
     if sd:
