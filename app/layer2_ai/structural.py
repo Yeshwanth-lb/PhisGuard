@@ -52,6 +52,88 @@ _WHOIS_CACHE: dict[str, int | None] = {}   # domain → age_days (None = unknown
 
 
 # ---------------------------------------------------------------------------
+# Social-engineering lexical patterns
+# ---------------------------------------------------------------------------
+# Why this exists: the structural checks above are all about the *envelope*
+# (domain, auth, brand). Old-school social-engineering scams — advance-fee/419,
+# fake loan approvals, lottery/prize, BEC payroll-diversion — carry no spoofed
+# domain and no brand impersonation, so structural scored them 0.0 and, because
+# NLP can also under-read subtle prose, they slipped through as clean (measured
+# ~30% real-world miss). These patterns give structural a *content-intent* signal
+# so those scams get caught. HIGH-specificity categories almost never appear in
+# legitimate mail; MEDIUM ones can, so they require corroboration (2+ matches).
+_HIGH_SPECIFICITY = {
+    "advance_fee": [
+        r"next of kin", r"unclaimed (?:fund|sum|money)", r"beneficiary of",
+        r"business (?:proposal|opportunity) to you", r"consignment",
+        r"barrister", r"widow of (?:the )?late", r"the late (?:mr|mrs|dr|president|engr)",
+        r"central bank of", r"diplomatic (?:immunity|package)",
+        r"million (?:united states |us )?dollars", r"\$[\d,]{7,}",
+        r"transfer .{0,20}(?:sum|fund) of", r"inheritance",
+    ],
+    "prize_lottery": [
+        r"you (?:have |'ve )?won", r"winning notification", r"claim your (?:prize|reward|winnings|gift)",
+        r"lucky winner", r"randomly selected", r"you have been selected",
+        r"lottery", r"cash prize", r"gift card (?:worth|of|before)",
+    ],
+    "loan_refi": [
+        r"pre[- ]?approved", r"(?:you are|you're) eligible for \$", r"qualify for a \$[\d,]+",
+        r"refinance", r"consolidate your debt", r"low(?:er)? (?:interest )?rate",
+        r"your (?:loan )?application (?:was|has been) (?:approved|processed)",
+    ],
+    # BEC bank-detail-diversion — a single one of these is a strong fraud marker
+    # (unlike a bare "wire transfer", which is common in legit mail and stays medium).
+    "bec_diversion": [
+        r"bank details have changed", r"new (?:account|banking|bank) details",
+        r"update (?:my |your )?direct deposit", r"change (?:my |your )?direct deposit",
+        r"update .{0,15}bank(?:ing)? (?:details|information)", r"vendor .{0,10}bank(?:ing)? account",
+        r"(?:remittance|payment) .{0,15}(?:new|updated) (?:account|bank)",
+    ],
+}
+_MEDIUM_SPECIFICITY = {
+    "payment_pressure": [
+        r"wire transfer", r"process .{0,15}payment .{0,15}urgent",
+        r"gift cards? for (?:the )?(?:team|staff|client)", r"urgent .{0,10}payment",
+    ],
+    "credential_urgency": [
+        r"verify your account", r"confirm your identity", r"account (?:has been |is )?(?:suspended|limited|locked)",
+        r"update your password", r"unusual (?:activity|sign)", r"click here to (?:verify|confirm|restore)",
+        r"restore your account", r"account will be (?:closed|suspended|terminated)",
+    ],
+}
+_HIGH_PATTERNS = {c: [re.compile(p, re.IGNORECASE) for p in pats] for c, pats in _HIGH_SPECIFICITY.items()}
+_MED_PATTERNS = {c: [re.compile(p, re.IGNORECASE) for p in pats] for c, pats in _MEDIUM_SPECIFICITY.items()}
+
+
+def _social_engineering_score(subject: str, body: str) -> tuple[float, list[str]]:
+    """Detect social-engineering scam language independent of domain/brand.
+
+    Returns (score, matched_categories). Score is deliberately capped at 0.60 so
+    it corroborates within the composite and can drive the orchestrator's
+    dedicated 'suspicious' rung, but never solo-triggers a phishing verdict
+    (that stays reserved for the 0.90 single-engine bar) — lexical matching is
+    too false-positive-prone to condemn on its own.
+    """
+    text = f"{subject or ''}\n{body or ''}"
+    if not text.strip():
+        return 0.0, []
+    high_hits = [c for c, pats in _HIGH_PATTERNS.items() if any(p.search(text) for p in pats)]
+    med_hits = [c for c, pats in _MED_PATTERNS.items() if any(p.search(text) for p in pats)]
+    matched = high_hits + med_hits
+    if high_hits:
+        # A high-specificity scam family is present (419/lottery/loan): strong signal.
+        score = min(0.45 + 0.08 * (len(matched) - 1), 0.60)
+    elif len(med_hits) >= 2:
+        # Only medium-specificity signals — require two distinct categories, since
+        # any one alone ("wire transfer", "verify your account") appears in legit mail.
+        score = 0.45
+    else:
+        score = 0.0
+        matched = []
+    return round(score, 3), matched
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -266,7 +348,15 @@ async def run_structural(parsed: dict) -> dict:
     fh = parsed.get("from_header", "") or ""
     rt = parsed.get("reply_to", "") or ""
     bh = parsed.get("body_html", "") or ""
+    bt = parsed.get("body_text", "") or ""
+    subj = parsed.get("subject", "") or ""
     attachments = parsed.get("attachments", []) or []
+
+    # --- Social-engineering language (content-intent, domain-independent) ---
+    se_score, se_categories = _social_engineering_score(subj, bt or bh)
+    if se_score > 0:
+        findings.append(f"social_engineering:{'+'.join(se_categories)}")
+        scores.append(se_score)
 
     # --- Brand impersonation ---
     if sd:
@@ -361,6 +451,11 @@ async def run_structural(parsed: dict) -> dict:
         "domain_age_days": age,
         "auth_alignment": alignment if align_score > 0 else "aligned",
         "attachment_risk": att_risk,
+        # Exposed separately so the orchestrator can escalate on scam LANGUAGE even
+        # when the composite (structural weighted 0.30) would otherwise dilute it
+        # and NLP under-read — this is what closes the plain-text-scam gap.
+        "social_engineering_score": se_score,
+        "social_engineering_categories": se_categories,
         "red_flags": [
             {"flag": f, "severity": _flag_severity(f)} for f in findings
         ],

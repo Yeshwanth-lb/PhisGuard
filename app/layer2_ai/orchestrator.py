@@ -49,6 +49,7 @@ SINGLE_ENGINE_THRESHOLD = 0.90   # Tier 1: one engine is overwhelming → phishi
 HIGH_CONF_THRESHOLD     = 0.70   # Tier 2: composite score → phishing (raised from 0.62 — borderline domain-age signals were escalating suspicious → phishing)
 MED_CONF_THRESHOLD      = 0.42   # Tier 3: composite score → suspicious
 NLP_MED_THRESHOLD       = 0.55   # nlp_med: nlp alone is moderately confident → suspicious, even if composite would clear as clean
+SE_MED_THRESHOLD        = 0.45   # struct_socialeng: scam-language alone → suspicious (419/lottery/loan/BEC with a clean domain that composite would dilute to clean)
 
 
 async def run_layer2(parsed: dict, settings) -> dict:
@@ -98,6 +99,7 @@ async def run_layer2(parsed: dict, settings) -> dict:
     tier1_score  = tier1_candidates[tier1_engine]
 
     nlp_score = scores.get("nlp", 0.0)
+    se_score = (details.get("structural", {}) or {}).get("social_engineering_score", 0.0)
 
     if tier1_score >= SINGLE_ENGINE_THRESHOLD:
         # Tier 1: one engine has overwhelming evidence
@@ -115,6 +117,13 @@ async def run_layer2(parsed: dict, settings) -> dict:
         verdict       = "suspicious"
         triggered_tier = "nlp_med"
         triggered_by   = "nlp"
+    elif se_score >= SE_MED_THRESHOLD:
+        # struct_socialeng: scam-language patterns (419/lottery/loan/BEC) present
+        # even though the sender domain is clean and NLP under-read — the exact
+        # plain-text-scam profile that was slipping through as clean. Hold for review.
+        verdict       = "suspicious"
+        triggered_tier = "struct_socialeng"
+        triggered_by   = "structural"
     elif weighted >= MED_CONF_THRESHOLD:
         # Tier 3: moderate suspicion
         verdict       = "suspicious"

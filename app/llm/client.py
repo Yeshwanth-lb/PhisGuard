@@ -33,6 +33,13 @@ async def _call_claude(
 ) -> str:
     import anthropic
     client = anthropic.AsyncAnthropic(api_key=api_key)
+    # NOTE: temperature is intentionally left at the API default (1.0), NOT pinned
+    # to 0. Pinning to 0 was tried and REVERTED: greedy decoding scores subtle
+    # threats (BEC wire-fraud, docusign lures) systematically lower, dropping real
+    # phishing to "clean" because the L2 thresholds were calibrated against the
+    # temp=1 distribution. Making this deterministic safely requires re-fitting
+    # HIGH_CONF/MED_CONF/NLP_MED thresholds against a held-out labeled eval set
+    # (see the modern-eval-set work) — it is not a standalone one-liner.
     response = await client.messages.create(
         model=model,
         max_tokens=max_tokens,
