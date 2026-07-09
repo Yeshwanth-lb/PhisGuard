@@ -115,6 +115,35 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
         }
         return await _post_actions(final, settings, raw_eml)
 
+    # ── Attachment static analysis (Layer 3, content vector) ──────────────────
+    # Runs whenever attachments exist, regardless of the L2 *body* verdict — a
+    # malicious attachment routinely rides a benign-looking email that L2 would
+    # rate clean. Only UNAMBIGUOUS malware (executables, double extensions,
+    # auto-exec macros) reaches "phishing" here and quarantines immediately,
+    # overriding even the trusted/authenticated fast-passes below (a .exe from a
+    # DMARC-aligned sender = account takeover, must not be fast-passed). Benign
+    # macro presence is only "suspicious" and is folded into the blend later, so
+    # legitimate macro-enabled business docs aren't condemned.
+    l3_att = None
+    if parsed.get("attachments") and getattr(settings, "enable_attachment_analysis", True):
+        try:
+            from app.layer3_sandbox.attachment_analyzer import analyze_attachments
+            l3_att = await analyze_attachments(raw_eml, settings)
+            if l3_att.get("verdict") == "phishing":
+                logger.info("malware_attachment_at_l3",
+                            worst=l3_att.get("worst_attachment"), score=l3_att.get("score"))
+                final = {
+                    "verdict": "phishing",
+                    "confidence": max(0.9, float(l3_att.get("score", 0.9))),
+                    "blocked_at": "layer3_attachment",
+                    "l1": l1, "l3_attachment": l3_att,
+                    "parsed": parsed,
+                }
+                return await _post_actions(final, settings, raw_eml)
+        except Exception as exc:
+            logger.warning("attachment_analysis_err", error=str(exc))
+            l3_att = {"verdict": "error", "error": str(exc)}
+
     # Trusted sender fast-exit: L1 confirmed the email is genuinely from a
     # known-good platform (LinkedIn, Google, etc.) AND auth (SPF+DKIM) passed.
     # Skip L2, L3, L5 entirely — these engines flag brand names in job emails
@@ -235,6 +264,12 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
     elif l2_verdict == "suspicious":
         blended = max(blended, 0.43)   # suspicious floor (just above MED threshold)
 
+    # Fold in a suspicious-tier attachment finding (benign-macro etc.) — a
+    # phishing-tier attachment already short-circuited above, so this only lifts
+    # the verdict toward "suspicious/review", never fabricates a phishing verdict.
+    if l3_att and l3_att.get("verdict") in ("suspicious", "phishing"):
+        blended = max(blended, float(l3_att.get("score", 0.0)))
+
     if blended >= 0.65:
         final_verdict = "phishing"
     elif blended >= 0.40:
@@ -245,7 +280,7 @@ async def analyze_email(raw_eml: bytes, settings) -> dict:
         "verdict": final_verdict,
         "confidence": blended,
         "blocked_at": None,
-        "l1": l1, "l2": l2, "l3": l3, "l5": l5,
+        "l1": l1, "l2": l2, "l3": l3, "l3_attachment": l3_att, "l5": l5,
         "parsed": parsed,
     }
     return await _post_actions(final, settings, raw_eml)

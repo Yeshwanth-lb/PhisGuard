@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     sandbox_docker_image: str = Field(default="")
     max_sandbox_containers: int = Field(default=5)
     sandbox_timeout_seconds: int = Field(default=60)
+    l3_max_detonations: int = Field(default=5)   # max URLs detonated per email (attacker hides payload behind a clean first link)
+    # ── Layer 3 attachment static analysis (macro/executable/archive) ─────────
+    enable_attachment_analysis: bool = Field(default=True)
+    max_attachment_scan_bytes: int = Field(default=25 * 1024 * 1024)
 
     # ── Layer 4 SOAR ─────────────────────────────────────────────────────────
     slack_webhook_url: str = Field(default="")
