@@ -46,3 +46,6 @@ phishguard_handoff*
 # Generated bombing incident reports (artifacts)
 bombing_report_*.md
 data/bombing_reports/
+
+# macOS junk
+.DS_Store
