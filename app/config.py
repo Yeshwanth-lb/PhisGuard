@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     max_sandbox_containers: int = Field(default=5)
     sandbox_timeout_seconds: int = Field(default=60)
     l3_max_detonations: int = Field(default=5)   # max URLs detonated per email (attacker hides payload behind a clean first link)
+    # Docker host the sandbox uses to spawn detonation containers. Default = the
+    # mounted unix socket (dev/demo). Hardened deploy: tcp://docker-proxy:2375
+    # (a docker-socket-proxy exposing only the needed API) so the app doesn't
+    # mount the root-equivalent /var/run/docker.sock itself.
+    sandbox_docker_host: str = Field(default="unix://var/run/docker.sock")
     # ── Layer 3 attachment static analysis (macro/executable/archive) ─────────
     enable_attachment_analysis: bool = Field(default=True)
     max_attachment_scan_bytes: int = Field(default=25 * 1024 * 1024)
@@ -159,6 +164,13 @@ class Settings(BaseSettings):
     smtp_listen_host: str = Field(default="0.0.0.0")
     smtp_listen_port: int = Field(default=8025)   # 8025 = no root needed; map to 25 in prod
     smtp_relay_host: str = Field(default="smtp-relay.gmail.com")
+    # Inbound SMTP hardening (for an MX-routed / internet-facing gateway). All
+    # opt-in — unset => the plain listener behaves exactly as the dev/demo does.
+    smtp_tls_cert_file: str = Field(default="")   # PEM cert; set with key to enable STARTTLS
+    smtp_tls_key_file: str = Field(default="")
+    smtp_require_tls: bool = Field(default=False)  # reject MAIL/RCPT before STARTTLS
+    smtp_auth_user: str = Field(default="")        # set user+password to require SMTP AUTH
+    smtp_auth_password: str = Field(default="")
     smtp_relay_port: int = Field(default=587)
     smtp_allowed_ips: str = Field(default="")
     max_smtp_connections: int = Field(default=50)

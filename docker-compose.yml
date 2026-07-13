@@ -413,6 +413,37 @@ services:
     mem_limit: 1g
     networks: [phishguard]
 
+  # Hardened sandbox path (opt-in, profile "hardened-sandbox"): a proxy that
+  # fronts the Docker socket and exposes ONLY the endpoints the sandbox needs
+  # (containers: create/start/wait/remove/logs + images: inspect). The app then
+  # talks to tcp://docker-proxy:2375 instead of mounting /var/run/docker.sock,
+  # which is root-equivalent host access (container-escape risk). To use:
+  #   docker compose --profile hardened-sandbox up -d docker-proxy
+  #   set SANDBOX_DOCKER_HOST=tcp://docker-proxy:2375 in the app env
+  #   AND remove the app service's /var/run/docker.sock bind mount.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: phishguard-docker-proxy
+    profiles: ["hardened-sandbox"]
+    restart: unless-stopped
+    environment:
+      # Least privilege: only what the sandbox runner calls. Everything else 0.
+      - CONTAINERS=1
+      - IMAGES=1
+      - POST=1          # allow create/start (default proxy is read-only)
+      - EXEC=0
+      - VOLUMES=0
+      - NETWORKS=0
+      - INFO=0
+      - AUTH=0
+      - SECRETS=0
+      - SWARM=0
+      - SYSTEM=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [phishguard]
+    mem_limit: 128m
+
 networks:
   phishguard: { driver: bridge }
 

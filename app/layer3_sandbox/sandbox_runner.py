@@ -32,7 +32,17 @@ async def _run_with_sdk(url: str, docker_image: str) -> dict:
 
     def _sync_run():
         import docker as _docker
-        client = _docker.DockerClient(base_url="unix://var/run/docker.sock")
+        # Configurable Docker host. Default = the mounted unix socket (dev/demo).
+        # For a hardened deploy set SANDBOX_DOCKER_HOST=tcp://docker-proxy:2375 so
+        # the app talks to a docker-socket-proxy (whitelisted API subset) instead
+        # of mounting the raw socket — which is root-equivalent host access.
+        base_url = "unix://var/run/docker.sock"
+        try:
+            from app.config import settings as _s
+            base_url = getattr(_s, "sandbox_docker_host", "") or base_url
+        except Exception:
+            pass
+        client = _docker.DockerClient(base_url=base_url)
         try:
             output = client.containers.run(
                 docker_image,

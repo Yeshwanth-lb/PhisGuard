@@ -301,19 +301,69 @@ class PhishGuardSMTPHandler:
         return "250 OK"
 
 
+def _build_tls_context(settings):
+    """SSL context for STARTTLS from configured cert/key, or None (plain listener)."""
+    import os as _os
+    cert = getattr(settings, "smtp_tls_cert_file", "") or ""
+    key = getattr(settings, "smtp_tls_key_file", "") or ""
+    if not (cert and key and _os.path.exists(cert) and _os.path.exists(key)):
+        return None
+    try:
+        import ssl as _ssl
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+        return ctx
+    except Exception as exc:
+        logger.warning("smtp_tls_context_failed", error=str(exc))
+        return None
+
+
+def _build_authenticator(settings):
+    """aiosmtpd authenticator requiring a fixed user/password, or None (no AUTH)."""
+    user = getattr(settings, "smtp_auth_user", "") or ""
+    pw = getattr(settings, "smtp_auth_password", "") or ""
+    if not (user and pw):
+        return None
+    from aiosmtpd.smtp import AuthResult  # type: ignore
+    import hmac
+
+    def _authenticator(server, session, envelope, mechanism, auth_data):
+        try:
+            u = auth_data.login.decode() if isinstance(auth_data.login, bytes) else str(auth_data.login)
+            p = auth_data.password.decode() if isinstance(auth_data.password, bytes) else str(auth_data.password)
+        except Exception:
+            return AuthResult(success=False)
+        # constant-time compare to avoid credential-timing leaks
+        ok = hmac.compare_digest(u, user) and hmac.compare_digest(p, pw)
+        return AuthResult(success=ok)
+
+    return _authenticator
+
+
 async def start_smtp_server(analyze_fn, settings) -> object | None:
     try:
         from aiosmtpd.controller import Controller  # type: ignore
         hdlr = PhishGuardSMTPHandler(analyze_fn, settings)
-        ctrl = Controller(
-            hdlr,
-            hostname=getattr(settings, "smtp_listen_host", "0.0.0.0"),
-            port=getattr(settings, "smtp_listen_port", 8025),
-        )
+        host = getattr(settings, "smtp_listen_host", "0.0.0.0")
+        port = getattr(settings, "smtp_listen_port", 8025)
+
+        # Opt-in hardening — all unset by default => unchanged plain listener.
+        smtp_kw: dict = {}
+        tls_ctx = _build_tls_context(settings)
+        if tls_ctx is not None:
+            smtp_kw["tls_context"] = tls_ctx
+            smtp_kw["require_starttls"] = bool(getattr(settings, "smtp_require_tls", False))
+        authenticator = _build_authenticator(settings)
+        if authenticator is not None:
+            smtp_kw["authenticator"] = authenticator
+            smtp_kw["auth_require_tls"] = tls_ctx is not None  # never accept creds in clear
+
+        ctrl = Controller(hdlr, hostname=host, port=port, **smtp_kw)
         ctrl.start()
-        logger.info("smtp_started",
-                    host=getattr(settings, "smtp_listen_host", "0.0.0.0"),
-                    port=getattr(settings, "smtp_listen_port", 8025))
+        logger.info("smtp_started", host=host, port=port,
+                    starttls=tls_ctx is not None,
+                    require_tls=smtp_kw.get("require_starttls", False),
+                    auth=authenticator is not None)
         return ctrl
     except Exception as exc:
         logger.warning("smtp_start_failed", error=str(exc))
