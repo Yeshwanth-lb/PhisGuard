@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # for a production Postgres backend (concurrent-write durability / backup / HA).
     database_url: str = Field(default="")
 
+    # Shared state backend for multi-worker deployments. "memory" (default) keeps
+    # rate-limit/bombing counters per-process (correct for a single SMTP replica).
+    # "redis" shares them across workers via app/redis_state.py. Scheduler
+    # leader-election always uses Redis when REDIS_URL resolves (fails open to
+    # single-node otherwise).
+    state_backend: str = Field(default="memory")
+
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_host: str = Field(default="redis")
     redis_port: int = Field(default=6379)

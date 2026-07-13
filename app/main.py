@@ -63,36 +63,44 @@ async def _lifespan(app):
             _sps(_aeb, settings)
         except Exception as _e:
             logger.warning("pull_autostart_failed", error=str(_e))
-    # Start weekly digest scheduler
-    try:
-        from app.layer4_soar.digest import start_digest_scheduler
-        start_digest_scheduler(settings)
-    except Exception as _e:
-        logger.warning("digest_scheduler_start_failed", error=str(_e))
-    # Initialise ThreatLens tables (idempotent — safe on every startup)
+    # Initialise ThreatLens tables (idempotent — every worker needs them for reads)
     try:
         from app.threatlens.store import init_db as _tl_init_db
         _tl_init_db()
     except Exception as _e:
         logger.warning("threatlens_init_db_failed", error=str(_e))
-    # Start ThreatLens scheduler (no-op when INTEL_ENABLED=false)
+    # Daemon schedulers must run in exactly ONE process. With >1 worker/replica a
+    # Redis leader-lock elects a single leader; with no Redis (single-node dev)
+    # this returns True so everything runs as before.
     try:
-        from app.threatlens.scheduler import start_scheduler as _start_tl
-        _start_tl()
+        from app.redis_state import acquire_leader
+        _is_leader = acquire_leader("schedulers")
     except Exception as _e:
-        logger.warning("threatlens_scheduler_start_failed", error=str(_e))
-    # Start Gmail fleet watch renewal scheduler (no-op when Workspace fleet not configured)
-    try:
-        from app.layer7_gmail.watch_scheduler import start_watch_scheduler as _swsched
-        _swsched(settings)
-    except Exception as _e:
-        logger.warning("watch_scheduler_start_failed", error=str(_e))
-    # Start gated ML retrain scheduler (no-op unless ML_AUTO_RETRAIN_ENABLED)
-    try:
-        from app.layer5_ml.retrain_scheduler import start_retrain_scheduler as _srsched
-        _srsched(settings)
-    except Exception as _e:
-        logger.warning("retrain_scheduler_start_failed", error=str(_e))
+        logger.warning("scheduler_leader_election_failed", error=str(_e))
+        _is_leader = True
+    if _is_leader:
+        try:
+            from app.layer4_soar.digest import start_digest_scheduler
+            start_digest_scheduler(settings)
+        except Exception as _e:
+            logger.warning("digest_scheduler_start_failed", error=str(_e))
+        try:
+            from app.threatlens.scheduler import start_scheduler as _start_tl
+            _start_tl()
+        except Exception as _e:
+            logger.warning("threatlens_scheduler_start_failed", error=str(_e))
+        try:
+            from app.layer7_gmail.watch_scheduler import start_watch_scheduler as _swsched
+            _swsched(settings)
+        except Exception as _e:
+            logger.warning("watch_scheduler_start_failed", error=str(_e))
+        try:
+            from app.layer5_ml.retrain_scheduler import start_retrain_scheduler as _srsched
+            _srsched(settings)
+        except Exception as _e:
+            logger.warning("retrain_scheduler_start_failed", error=str(_e))
+    else:
+        logger.info("schedulers_skipped_not_leader")
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:

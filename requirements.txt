@@ -57,6 +57,11 @@ aiosmtpd==1.4.6
 # imported on the Postgres path, so it's a no-op for the default SQLite setup.
 psycopg[binary]==3.2.1
 
+# Redis client — powers the L1 OSINT cache (app/layer1/cache.py, previously a
+# silent no-op because the lib was missing) and the multi-worker coordination in
+# app/redis_state.py (scheduler leader-lock + shared rate-limit counters).
+redis==5.0.7
+
 # Testing
 pytest==8.2.2
 pytest-asyncio==0.23.7
