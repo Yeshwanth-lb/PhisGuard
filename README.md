@@ -67,15 +67,37 @@ nothing else breaks):**
 Verdict tiers: **clean** → delivered, **suspicious** → held for SOC review,
 **phishing** → quarantined. Full detail in `PROJECT_CONTEXT.md`.
 
+## Production deployment (hardening)
+
+All hardening is **opt-in and config-driven** — the defaults above run the full
+dev/demo stack. For a production deployment, layer these on:
+
+- **Postgres datastore** — set `DATABASE_URL=postgresql://…` and start the
+  profile-gated service: `docker compose --profile postgres up -d postgres`,
+  then rebuild the app image (installs the driver). Empty `DATABASE_URL` keeps
+  the default SQLite backend.
+- **Multiple workers / HA** — a Redis leader-lock ensures the background
+  schedulers run in exactly one process, so you can now scale HTTP workers.
+  Recommended topology: single SMTP-ingress replica (its rate-limiter/bombing
+  counters are authoritative), horizontally-scaled HTTP workers, one scheduler
+  leader. Redis (already in the stack) powers this and the L1 OSINT cache.
+- **Sandbox without the root socket** — instead of mounting `/var/run/docker.sock`
+  into the app (container-escape surface), run the least-privilege proxy:
+  `docker compose --profile hardened-sandbox up -d docker-proxy`, set
+  `SANDBOX_DOCKER_HOST=tcp://docker-proxy:2375`, and drop the app's socket mount.
+- **Inbound SMTP TLS/auth** (internet-facing gateway) — set `SMTP_TLS_CERT_FILE`
+  / `SMTP_TLS_KEY_FILE` to enable STARTTLS, `SMTP_AUTH_USER` / `SMTP_AUTH_PASSWORD`
+  to require SMTP AUTH, and `SMTP_REQUIRE_TLS=true` to reject cleartext.
+- **Before going live:** rotate every credential (especially `MISP_API_KEY` — see
+  git history), publish the Gmail OAuth app out of "Testing" mode (else user
+  tokens expire every 7 days), and run behind TLS termination.
+
 ## Notes for anyone deploying this fresh
 
-- Runs as a **single uvicorn worker by default, on purpose** — the app holds
-  in-process state (SMTP gateway, bombing-detector counters, background
-  schedulers). Scaling to multiple workers needs that state moved to Redis
-  first; don't just bump `--workers`.
-- `docker compose up --force-recreate` / `down` wipes anything living only in
-  a container's writable layer. If you've hotfixed something directly inside
-  a running container, get it into source/`.env`/`requirements.txt` before
-  recreating, or it's gone.
-- Named volumes persist scan history, the ML model, and evidence storage
-  across restarts; `docker compose down -v` deletes them.
+- Reproducible image: `docker compose build` produces a working stack (all deps,
+  including the `setuptools`/`pkg_resources` pin MLflow needs, are in
+  `requirements.txt`). Named volumes persist scan history, the ML model, and
+  evidence across restarts; `docker compose down -v` deletes them.
+- CI (`.github/workflows/ci.yml`) runs ruff + the offline test suite + a docker
+  build on every PR. `make eval` runs the detection-quality regression gate
+  against the running stack.
