@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import pickle
-import sqlite3
+from app import db as _db
 import time
 from datetime import UTC, datetime
 
@@ -51,12 +51,14 @@ def _load_feedback_records(db_path):
     When the same scan is corrected multiple times only the latest correction
     is used (most recent submitted_at wins).
     """
-    if not os.path.exists(db_path):
+    # On the Postgres backend db_path is a SQLite path that won't exist — the
+    # existence check only guards the SQLite case (no DB file yet = no data).
+    if not _db.is_postgres() and not os.path.exists(db_path):
         return [], set()
 
     rows = []
     corrected_scan_ids = set()
-    db = sqlite3.connect(db_path)
+    db = _db.connect(db_path)
     cur = db.cursor()
     try:
         # Latest correction per scan (subquery handles multiple edits)
@@ -92,10 +94,10 @@ def _load_feedback_records(db_path):
 
 
 def _load_db_records(db_path, exclude_scan_ids=None):
-    if not os.path.exists(db_path):
+    if not _db.is_postgres() and not os.path.exists(db_path):
         return []
     rows = []
-    db = sqlite3.connect(db_path)
+    db = _db.connect(db_path)
     cur = db.cursor()
     try:
         cur.execute("SELECT id, verdict, data_json FROM scans WHERE data_json IS NOT NULL")

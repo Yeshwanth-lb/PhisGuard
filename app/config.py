@@ -1,14 +1,38 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    @model_validator(mode="after")
+    def _threat_intel_creds_fallback(self):
+        import os as _os
+        # The working MISP automation key lives in MISP_KEY; MISP_API_KEY is a stale
+        # placeholder ("z"). Fall back to MISP_KEY so the app authenticates to MISP.
+        if not self.misp_api_key or len(self.misp_api_key) < 10:
+            alt = _os.environ.get("MISP_KEY", "")
+            if alt:
+                self.misp_api_key = alt
+        # OpenCTI admin token isn't in the app env; read it from the mounted (gitignored)
+        # credentials dir so the SOAR OpenCTI export can authenticate.
+        if not self.opencti_token:
+            p = "credentials/opencti_token"
+            if _os.path.exists(p):
+                self.opencti_token = open(p).read().strip()
+        return self
+
     # ── Auth ──────────────────────────────────────────────────────────────────
     phishguard_api_key: str = Field(default="dev-key")
     api_key: str = Field(default="dev-key")
+    # Role granted to holders of the single shared api_key (server-decided, never
+    # chosen by the client). Optional per-key map: "keyA:admin,keyB:analyst".
+    api_key_role: str = Field(default="analyst")
+    api_key_roles: str = Field(default="")
     jwt_secret: str = Field(default="change-me-in-production")
+    # Allowed CORS origins for the dashboard (comma-separated). Wildcard '*' with
+    # credentials is unsafe, so default to the local dashboard origins.
+    cors_allow_origins: str = Field(default="http://localhost:8000,http://127.0.0.1:8000")
 
     # ── LLM provider (used by all AI layers) ─────────────────────────────────
     # auto = detect from whichever key is set (claude → openai → gemini → heuristic)
@@ -22,6 +46,12 @@ class Settings(BaseSettings):
     anthropic_max_tokens: int = Field(default=1024)
     gemini_api_key: str = Field(default="")
     openai_api_key: str = Field(default="")
+    # Self-consistency voting for the NLP engine: sample the LLM N times and take
+    # the MEDIAN score. Reduces run-to-run verdict flip-flop on borderline mail
+    # without shifting the score distribution (so no threshold recalibration,
+    # unlike temperature=0 which regressed detection). Default 1 = single call =
+    # no extra cost/latency; set 3 for reproducibility-sensitive deployments.
+    nlp_self_consistency_samples: int = Field(default=1)
 
     # ── Layer 1 OSINT APIs ────────────────────────────────────────────────────
     virustotal_api_key: str = Field(default="")
@@ -54,6 +84,23 @@ class Settings(BaseSettings):
     opencti_host: str = Field(default="http://opencti:8080")
     opencti_misp_sync_interval: int = Field(default=60)
 
+    # ── Neo4j (ThreatLens graph) ─────────────────────────────────────────────
+    neo4j_uri: str = Field(default="bolt://neo4j:7687")
+    neo4j_user: str = Field(default="neo4j")
+    neo4j_password: str = Field(default="changeme123")
+
+    # ── Primary datastore ────────────────────────────────────────────────────
+    # Empty => SQLite (default, dev/demo). Set to postgresql://user:pass@host/db
+    # for a production Postgres backend (concurrent-write durability / backup / HA).
+    database_url: str = Field(default="")
+
+    # Shared state backend for multi-worker deployments. "memory" (default) keeps
+    # rate-limit/bombing counters per-process (correct for a single SMTP replica).
+    # "redis" shares them across workers via app/redis_state.py. Scheduler
+    # leader-election always uses Redis when REDIS_URL resolves (fails open to
+    # single-node otherwise).
+    state_backend: str = Field(default="memory")
+
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_host: str = Field(default="redis")
     redis_port: int = Field(default=6379)
@@ -65,6 +112,15 @@ class Settings(BaseSettings):
     sandbox_docker_image: str = Field(default="")
     max_sandbox_containers: int = Field(default=5)
     sandbox_timeout_seconds: int = Field(default=60)
+    l3_max_detonations: int = Field(default=5)   # max URLs detonated per email (attacker hides payload behind a clean first link)
+    # Docker host the sandbox uses to spawn detonation containers. Default = the
+    # mounted unix socket (dev/demo). Hardened deploy: tcp://docker-proxy:2375
+    # (a docker-socket-proxy exposing only the needed API) so the app doesn't
+    # mount the root-equivalent /var/run/docker.sock itself.
+    sandbox_docker_host: str = Field(default="unix://var/run/docker.sock")
+    # ── Layer 3 attachment static analysis (macro/executable/archive) ─────────
+    enable_attachment_analysis: bool = Field(default=True)
+    max_attachment_scan_bytes: int = Field(default=25 * 1024 * 1024)
 
     # ── Layer 4 SOAR ─────────────────────────────────────────────────────────
     slack_webhook_url: str = Field(default="")
@@ -99,11 +155,22 @@ class Settings(BaseSettings):
     gmail_queue_subscription: str = Field(default="phishguard-gmail-sub")
     gmail_push_endpoint: str = Field(default="")
     gmail_enable_pull_subscriber: bool = Field(default=False)
+    # When true, Gmail-ingested mail (push + historical) is fed through the SAME
+    # bombing detection+triage pipeline as the SMTP gateway. Default off: fully
+    # dormant — no Gmail API calls, no startup errors — production is a one-flag flip.
+    inbox_ingestion_enabled: bool = Field(default=False)
 
     # ── SMTP inbound gateway ──────────────────────────────────────────────────
     smtp_listen_host: str = Field(default="0.0.0.0")
     smtp_listen_port: int = Field(default=8025)   # 8025 = no root needed; map to 25 in prod
     smtp_relay_host: str = Field(default="smtp-relay.gmail.com")
+    # Inbound SMTP hardening (for an MX-routed / internet-facing gateway). All
+    # opt-in — unset => the plain listener behaves exactly as the dev/demo does.
+    smtp_tls_cert_file: str = Field(default="")   # PEM cert; set with key to enable STARTTLS
+    smtp_tls_key_file: str = Field(default="")
+    smtp_require_tls: bool = Field(default=False)  # reject MAIL/RCPT before STARTTLS
+    smtp_auth_user: str = Field(default="")        # set user+password to require SMTP AUTH
+    smtp_auth_password: str = Field(default="")
     smtp_relay_port: int = Field(default=587)
     smtp_allowed_ips: str = Field(default="")
     max_smtp_connections: int = Field(default=50)
@@ -113,6 +180,12 @@ class Settings(BaseSettings):
     ml_local_data_dir: str = Field(default="data/training")    # ground-truth corpus only
     ml_verdict_log_dir: str = Field(default="data/verdicts")   # live predictions (NOT training)
     ml_bootstrap_on_startup: bool = Field(default=True)
+    # Automated feedback-loop retraining (opt-in — retrains on accumulated SOC
+    # feedback on a cadence, but only PROMOTES the new model if it doesn't
+    # regress the champion's held-out AUC — see auto_retrain.py).
+    ml_auto_retrain_enabled: bool = Field(default=False)
+    ml_retrain_cadence_days: int = Field(default=7)
+    ml_promote_auc_tolerance: float = Field(default=0.01)   # accept new model if new_auc >= champion_auc - this
 
     # MLflow
     mlflow_tracking_uri: str = Field(default="http://127.0.0.1:5000")
@@ -142,6 +215,10 @@ class Settings(BaseSettings):
     l2_baseline_min_emails: int = Field(default=20)
     l2_domain_age_threshold_days: int = Field(default=30)
     l2_typosquatting_distance: int = Field(default=2)
+    # Authenticated-sender fast-pass: a DMARC-aligned message from an established,
+    # non-abusive domain isn't condemned by content tactics (urgency/verify/link) —
+    # reduces false positives on legit OTP/transactional mail. Reputation-gated.
+    auth_sender_fastpass: bool = Field(default=True)
 
     # Engine 3 cold start
     l2_global_iso_model_path: str = Field(default="models/global_iso_v1.pkl")
@@ -159,3 +236,36 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# Fields whose Field(default=...) is a well-known placeholder, not a real secret —
+# shipping these unchanged into a real deployment means the credential is public
+# knowledge (it's sitting in this file's git history). Unlike JWT_SECRET, these
+# gate optional integrations (ES/OpenCTI/MinIO/Neo4j), so a hard startup failure
+# would be too aggressive for a deployment that doesn't use one of them — warn
+# loudly instead, once, at startup.
+_INSECURE_DEFAULTS = {
+    "elasticsearch_password": "changeme",
+    "opencti_admin_password": "changeme",
+    "minio_secret_key": "changeme123",
+    "neo4j_password": "changeme123",
+}
+
+
+def warn_insecure_defaults() -> list[str]:
+    """Log a warning for every credential still on its known-weak default.
+    Call once at startup. Returns the list of field names still insecure,
+    for callers that want to act on it (tests, health checks)."""
+    import structlog
+    logger = structlog.get_logger()
+    still_default = [
+        field for field, default_value in _INSECURE_DEFAULTS.items()
+        if getattr(settings, field, None) == default_value
+    ]
+    if still_default:
+        logger.warning(
+            "insecure_default_credentials",
+            fields=still_default,
+            hint="Set these in .env before a real deployment — the shipped defaults are public.",
+        )
+    return still_default

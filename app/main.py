@@ -32,6 +32,14 @@ from contextlib import asynccontextmanager as _acm
 
 @_acm
 async def _lifespan(app):
+    # Fail fast if the JWT signing secret is unset/default — otherwise anyone could
+    # forge an admin token. (Set ALLOW_INSECURE_JWT_SECRET=true for local dev.)
+    from app.security.auth import assert_secure_secret
+    assert_secure_secret()
+    # Warn (don't crash — these gate optional integrations) on any other credential
+    # still on its known-weak shipped default.
+    from app.config import warn_insecure_defaults
+    warn_insecure_defaults()
     # Auto-start SMTP receiver if enabled
     from app.layer7_gmail.smtp_receiver import start_smtp_server as _sss
     from app.pipeline import analyze_email as _aeb
@@ -41,6 +49,12 @@ async def _lifespan(app):
             _smtp_ctrl = await _sss(_aeb, settings)
         except Exception as _e:
             logger.warning("smtp_autostart_failed", error=str(_e))
+    # Start the bombing-buffer release worker (releases Tier-2/3 mail past the window)
+    try:
+        from app.layer7_gmail.smtp_receiver import start_release_worker as _srw
+        _srw(settings)
+    except Exception as _e:
+        logger.warning("bombing_release_worker_start_failed", error=str(_e))
     # Auto-start pull subscriber if enabled
     from app.layer7_gmail.pubsub_watcher import start_pull_subscriber as _sps
     from app.layer7_gmail.pubsub_watcher import stop_pull_subscriber as _stp
@@ -49,24 +63,44 @@ async def _lifespan(app):
             _sps(_aeb, settings)
         except Exception as _e:
             logger.warning("pull_autostart_failed", error=str(_e))
-    # Start weekly digest scheduler
-    try:
-        from app.layer4_soar.digest import start_digest_scheduler
-        start_digest_scheduler(settings)
-    except Exception as _e:
-        logger.warning("digest_scheduler_start_failed", error=str(_e))
-    # Initialise ThreatLens tables (idempotent — safe on every startup)
+    # Initialise ThreatLens tables (idempotent — every worker needs them for reads)
     try:
         from app.threatlens.store import init_db as _tl_init_db
         _tl_init_db()
     except Exception as _e:
         logger.warning("threatlens_init_db_failed", error=str(_e))
-    # Start ThreatLens scheduler (no-op when INTEL_ENABLED=false)
+    # Daemon schedulers must run in exactly ONE process. With >1 worker/replica a
+    # Redis leader-lock elects a single leader; with no Redis (single-node dev)
+    # this returns True so everything runs as before.
     try:
-        from app.threatlens.scheduler import start_scheduler as _start_tl
-        _start_tl()
+        from app.redis_state import acquire_leader
+        _is_leader = acquire_leader("schedulers")
     except Exception as _e:
-        logger.warning("threatlens_scheduler_start_failed", error=str(_e))
+        logger.warning("scheduler_leader_election_failed", error=str(_e))
+        _is_leader = True
+    if _is_leader:
+        try:
+            from app.layer4_soar.digest import start_digest_scheduler
+            start_digest_scheduler(settings)
+        except Exception as _e:
+            logger.warning("digest_scheduler_start_failed", error=str(_e))
+        try:
+            from app.threatlens.scheduler import start_scheduler as _start_tl
+            _start_tl()
+        except Exception as _e:
+            logger.warning("threatlens_scheduler_start_failed", error=str(_e))
+        try:
+            from app.layer7_gmail.watch_scheduler import start_watch_scheduler as _swsched
+            _swsched(settings)
+        except Exception as _e:
+            logger.warning("watch_scheduler_start_failed", error=str(_e))
+        try:
+            from app.layer5_ml.retrain_scheduler import start_retrain_scheduler as _srsched
+            _srsched(settings)
+        except Exception as _e:
+            logger.warning("retrain_scheduler_start_failed", error=str(_e))
+    else:
+        logger.info("schedulers_skipped_not_leader")
     # Auto-bootstrap ML model on first startup
     if getattr(settings, "ml_bootstrap_on_startup", True):
         try:
@@ -90,12 +124,14 @@ async def _lifespan(app):
 app = FastAPI(title='PhishGuard', version='1.5.0', docs_url='/api/docs', lifespan=_lifespan)
 _rate_limit = get_rate_limiter(limit=120, window=60)
 
+_cors_origins = [o.strip() for o in getattr(settings, 'cors_allow_origins', '').split(',') if o.strip()] \
+    or ['http://localhost:8000', 'http://127.0.0.1:8000']
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
+    allow_origins=_cors_origins,            # no wildcard with credentials
     allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
+    allow_methods=['GET', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+    allow_headers=['Authorization', 'Content-Type'],
 )
 
 app.add_middleware(AuditMiddleware)
@@ -138,13 +174,27 @@ async def dashboard():
     return FileResponse('app/templates/index.html')
 
 
+def _role_for_api_key(ak: str):
+    """Resolve the role for an API key SERVER-SIDE. Returns None if the key is unknown.
+    The role is never taken from the client request (that let the shared key mint admin)."""
+    if not ak:
+        return None
+    for pair in (getattr(settings, 'api_key_roles', '') or '').split(','):
+        if ':' in pair:
+            k, r = pair.split(':', 1)
+            if ak == k.strip():
+                return r.strip()
+    if ak == getattr(settings, 'api_key', '') and getattr(settings, 'api_key', ''):
+        return getattr(settings, 'api_key_role', 'analyst')
+    return None
+
+
 @app.post('/token')
 async def get_token(body: dict):
     ak = body.get('api_key', '')
-    expected = getattr(settings, 'api_key', '')
-    if not expected or ak != expected:
+    role = _role_for_api_key(ak)          # server decides the role, not the client
+    if role is None:
         raise HTTPException(status_code=401, detail='Unauthorized')
-    role = body.get('role', 'analyst')
     sub = body.get('sub', 'api-client')
     return create_token_pair(sub=sub, role=role)
 
@@ -201,10 +251,20 @@ async def health():
     ml_ok = _os.path.exists(ml_path)
     from app.security.smtp_rate_limiter import stats as _smtp_rl_stats
     from app.security.bombing_detector import stats as _bomb_stats
+    # Per-recipient buffered-mail breakdown (Tier 2/3 awaiting labeled release)
+    _buf_state = {}
+    try:
+        import app.storage as _stg
+        from app.layer7_gmail.smtp_receiver import RELEASE_WINDOW_SECS as _rwin
+        _recips = {r: _stg.buffer_counts_by_tier(r) for r in _stg.buffer_active_recipients()}
+        _buf_state = {'recipients': _recips, 'release_window_secs': _rwin}
+    except Exception as _be:
+        _buf_state = {'error': str(_be)}
     return {
         'status': 'ok',
         'smtp_rate_limiter': _smtp_rl_stats(),
         'bombing_detector': _bomb_stats(),
+        'bombing_buffer': _buf_state,
         'virustotal_api': 'ok' if settings.virustotal_api_key else 'unconfigured',
         'abuseipdb_api': 'ok' if settings.abuseipdb_api_key else 'unconfigured',
         'urlhaus_api': 'ok',
@@ -274,18 +334,18 @@ async def get_quarantine(page: int = 1, limit: int = 50):
 
 
 @app.get('/api/quarantine')
-async def list_quarantine(limit: int = 50, offset: int = 0):
+async def list_quarantine(limit: int = 50, offset: int = 0, _auth: dict = Depends(require_auth)):
     return {'items': storage.list_scans(limit=limit, offset=offset, only_quarantined=True)}
 
 
 @app.get('/api/scans')
-async def list_scans(limit: int = 50, offset: int = 0, verdict: str = None, hours: int = None):
+async def list_scans(limit: int = 50, offset: int = 0, verdict: str = None, hours: int = None, _auth: dict = Depends(require_auth)):
     since = (time.time() - hours * 3600) if hours else None
     return {'items': storage.list_scans(limit=limit, offset=offset, verdict_filter=verdict, since_ts=since)}
 
 
 @app.get('/api/scan/{scan_id}')
-async def get_scan_detail(scan_id: str):
+async def get_scan_detail(scan_id: str, _auth: dict = Depends(require_auth)):
     s = storage.get_scan(scan_id)
     if not s:
         raise HTTPException(status_code=404, detail='Scan not found')
@@ -300,19 +360,19 @@ async def get_scan_detail(scan_id: str):
 
 
 @app.post('/api/scan/{scan_id}/release')
-async def release_scan(scan_id: str):
+async def release_scan(scan_id: str, _auth: dict = Depends(require_permission('release'))):
     storage.release_scan(scan_id)
     return {'ok': True}
 
 
 @app.delete('/api/scan/{scan_id}')
-async def delete_scan(scan_id: str):
+async def delete_scan(scan_id: str, _auth: dict = Depends(require_permission('quarantine'))):
     storage.delete_scan(scan_id)
     return {'ok': True}
 
 
 @app.get('/api/stats')
-async def get_stats(hours: int = None):
+async def get_stats(hours: int = None, _auth: dict = Depends(require_auth)):
     since = (time.time() - hours * 3600) if hours else None
     return storage.get_stats(since_ts=since)
 
@@ -322,7 +382,7 @@ from app.layer4_soar import denylist as _deny
 
 
 @app.get('/api/denylist')
-async def list_denylist(kind: str = None, only_active: bool = True, limit: int = 200):
+async def list_denylist(kind: str = None, only_active: bool = True, limit: int = 200, _auth: dict = Depends(require_auth)):
     return {
         'items': _deny.list_entries(kind=kind, only_active=only_active, limit=limit),
         'stats': _deny.stats(),
@@ -330,7 +390,7 @@ async def list_denylist(kind: str = None, only_active: bool = True, limit: int =
 
 
 @app.post('/api/denylist')
-async def add_denylist(body: dict):
+async def add_denylist(body: dict, _auth: dict = Depends(require_permission('denylist_write'))):
     kind = (body.get('kind') or '').strip().lower()
     value = (body.get('value') or '').strip().lower()
     reason = body.get('reason') or 'manual'
@@ -343,7 +403,7 @@ async def add_denylist(body: dict):
 
 
 @app.delete('/api/denylist/{kind}/{value:path}')
-async def remove_denylist(kind: str, value: str):
+async def remove_denylist(kind: str, value: str, _auth: dict = Depends(require_permission('denylist_write'))):
     ok = _deny.remove_entry(kind, value)
     return {'ok': ok}
 
@@ -353,6 +413,31 @@ async def bombing_status(current_user: dict = Depends(require_auth)):
     """Return active inbox bombing attacks and detector thresholds."""
     from app.security.bombing_detector import stats as _bomb_stats
     return _bomb_stats()
+
+
+@app.get('/api/bombing/active')
+async def bombing_active(current_user: dict = Depends(require_auth)):
+    """Active bombing events with per-recipient buffered-mail tier breakdown.
+
+    Powers a dashboard banner: which inboxes are mid-bomb, how much noise/uncertain
+    mail is buffered for each, and when it releases.
+    """
+    from app.security.bombing_detector import active_attacks as _active
+    import app.storage as _stg
+    from app.layer7_gmail.smtp_receiver import RELEASE_WINDOW_SECS as _rwin
+
+    events = _active()                    # recipients currently in bombing mode
+    by_rcpt = {e['rcpt']: e for e in events}
+    # Fold in buffered counts for every recipient with held mail (mode may have
+    # just exited while mail still awaits release).
+    for rcpt in _stg.buffer_active_recipients():
+        ev = by_rcpt.setdefault(rcpt, {'rcpt': rcpt})
+        ev['buffered'] = _stg.buffer_counts_by_tier(rcpt)
+    return {
+        'active': list(by_rcpt.values()),
+        'count': len(by_rcpt),
+        'release_window_secs': _rwin,
+    }
 
 
 @app.post('/api/bombing/{rcpt}/clear')
@@ -387,7 +472,7 @@ async def send_digest_now(current_user: dict = Depends(require_permission('soar'
 
 
 @app.get('/api/soar/status')
-async def soar_status():
+async def soar_status(_auth: dict = Depends(require_auth)):
     """Show which SOAR integrations are configured and reachable."""
     out = []
     es_url = getattr(settings, 'elasticsearch_url', '')
@@ -419,7 +504,7 @@ async def soar_status():
 
 
 @app.get('/api/soar/audit')
-async def soar_audit(limit: int = 50):
+async def soar_audit(limit: int = 50, _auth: dict = Depends(require_permission('audit'))):
     """Recent SOAR actions sourced from ES."""
     es_url = getattr(settings, 'elasticsearch_url', '')
     if not es_url:
@@ -443,7 +528,7 @@ async def soar_audit(limit: int = 50):
 
 
 @app.get('/api/soar/test')
-async def soar_test():
+async def soar_test(_auth: dict = Depends(require_permission('soar'))):
     return await _run_soar_dryrun()
 
 
@@ -520,7 +605,7 @@ async def patch_settings(body: dict, current_user: dict = Depends(require_permis
 
 
 @app.get('/api/settings')
-async def get_settings():
+async def get_settings(_auth: dict = Depends(require_permission('settings'))):
     overrides = _load_overrides()
     items = []
     keys = [
@@ -614,12 +699,20 @@ async def download_evidence(
 
 
 @app.get('/api/scan/{scan_id}/screenshot')
-async def get_screenshot(scan_id: str):
+async def get_screenshot(scan_id: str, _auth: dict = Depends(require_auth)):
     import os
     path = f'data/screenshots/{scan_id}.png'
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail='No screenshot available')
-    return FileResponse(path, media_type='image/png')
+    if os.path.exists(path):
+        return FileResponse(path, media_type='image/png')
+    # Fallback: the L3 sandbox stores the screenshot as base64 in the scan data
+    # (no PNG file is written to disk), so serve it from there when present.
+    s = storage.get_scan(scan_id)
+    b64 = (((s or {}).get('data') or {}).get('l3') or {}).get('screenshot_b64') if s else None
+    if b64:
+        import base64 as _b64
+        from fastapi import Response as _Response
+        return _Response(content=_b64.b64decode(b64), media_type='image/png')
+    raise HTTPException(status_code=404, detail='No screenshot available')
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +754,23 @@ async def get_intel_profile(
     if not profile:
         raise HTTPException(status_code=404, detail='Profile not found')
     cluster = tl_store.get_cluster(profile.cluster_id)
+    # Per-agent enrichment findings (provenance) — what each of the 11 agents
+    # actually returned for this cluster. The dashboard's "Intelligence Sources"
+    # cards group these by agent. (profile.evidence is the LLM's synthesized
+    # evidence and is all tagged agent="profiler", so it can't populate the cards.)
+    agent_findings = []
+    for s in tl_store.get_intel_sources(profile.cluster_id):
+        try:
+            fj = json.loads(s.get("finding_json") or "{}")
+        except Exception:
+            fj = {}
+        agent_findings.append({
+            "agent":        s.get("agent"),
+            "claim":        fj.get("claim", "") or s.get("source_title", ""),
+            "source_url":   s.get("source_url"),
+            "source_title": s.get("source_title"),
+            "confidence":   s.get("confidence"),
+        })
     return {
         "id":                profile.id,
         "cluster_id":        profile.cluster_id,
@@ -680,6 +790,7 @@ async def get_intel_profile(
         ],
         "summary":           profile.summary,
         "model":             profile.model,
+        "agent_findings":    agent_findings,
         "member_scan_count": len(cluster.member_scan_ids) if cluster else 0,
         "member_scan_ids":   cluster.member_scan_ids[:50] if cluster else [],
     }
@@ -694,6 +805,14 @@ async def run_intel_cycle(current_user: dict = Depends(require_admin())):
             status_code=503,
             detail='ThreatLens is disabled. Set INTEL_ENABLED=true to activate.',
         )
+    # Rebuild clusters from current scans first, so a manual run picks up new attacks
+    # (run_cycle only profiles existing clusters). Best-effort, off the event loop.
+    try:
+        import asyncio as _asyncio
+        from app.threatlens import actor_clusterer
+        await _asyncio.get_event_loop().run_in_executor(None, actor_clusterer.refresh)
+    except Exception as _exc:
+        logger.warning("intel_cluster_refresh_err", error=str(_exc))
     from app.threatlens.orchestrator import run_cycle
     result = await run_cycle()
     return result
@@ -1130,6 +1249,92 @@ async def gmail_scan_status(
         return prog
     return {"scans": list(_scan_progress.values())[-10:]}
 
+
+@app.get("/api/gmail/fleet/users")
+async def gmail_fleet_users(current_user: dict = Depends(require_permission("scan"))):
+    """Dry-run: list every mailbox the Directory API can see in the
+    configured Workspace domain — discovery only, no scanning, no Gmail API
+    calls against any mailbox. This is the safe first call to make once
+    domain-wide delegation is granted: confirms auth + Directory API access
+    work before committing to anything that touches real mail."""
+    from app.layer7_gmail.directory_client import list_domain_users as _ldu
+    users = _ldu(settings)
+    return {"domain": getattr(settings, "google_workspace_domain", ""),
+            "count": len(users), "users": users}
+
+
+@app.post("/api/gmail/fleet/scan")
+async def gmail_fleet_scan(
+    query: str = "",
+    max_messages_per_user: int = 200,
+    pilot_users: str = "",
+    current_user: dict = Depends(require_permission("scan")),
+):
+    """Discover every mailbox in the configured Workspace domain (via the
+    Admin SDK Directory API) and scan each one's inbox — the domain-wide
+    equivalent of /api/gmail/scan, which only ever covers one fixed mailbox.
+    Requires google_service_account_json + google_workspace_domain +
+    google_admin_impersonate_email (an actual admin) to be configured with
+    domain-wide delegation granted; returns 0 mailboxes (not an error) if not.
+
+    pilot_users: comma-separated allowlist (e.g. "a@skylo.tech,b@skylo.tech")
+    to restrict the very first real run to a couple of mailboxes instead of
+    the whole domain. Omit once the pilot run looks correct."""
+    import uuid as _uuid
+    from app.layer7_gmail.fleet_scanner import scan_all_mailboxes as _sam
+    from app.pipeline import analyze_email as _aeb
+
+    only_users = [u.strip() for u in pilot_users.split(",") if u.strip()] or None
+
+    scan_id = str(_uuid.uuid4())
+    _scan_progress[scan_id] = {"status": "running", "scan_id": scan_id, "mailboxes": 0}
+    try:
+        result = await _sam(_aeb, settings, query=query, max_messages_per_user=max_messages_per_user,
+                             only_users=only_users)
+        _scan_progress[scan_id] = {**_scan_progress[scan_id], **result, "status": "complete"}
+        return {**result, "scan_id": scan_id, "status": "complete"}
+    except Exception as exc:
+        _scan_progress[scan_id]["status"] = "error"
+        _scan_progress[scan_id]["error"] = str(exc)
+        raise
+
+
+@app.post("/api/gmail/fleet/watch")
+async def gmail_fleet_watch_setup(
+    pilot_users: str = "",
+    current_user: dict = Depends(require_permission("gmail_write")),
+):
+    """Register a live push watch for every mailbox in the domain (or the
+    pilot_users allowlist) so new mail triggers /api/gmail/push in near-real-
+    time, instead of waiting for the next /api/gmail/fleet/scan poll. Each
+    mailbox's expiry is persisted so the background renewal scheduler can
+    keep it alive — see app/layer7_gmail/watch_scheduler.py."""
+    from app.layer7_gmail.fleet_watch import setup_fleet_watches as _sfw
+    only_users = [u.strip() for u in pilot_users.split(",") if u.strip()] or None
+    return await _sfw(settings, only_users=only_users)
+
+
+@app.get("/api/gmail/fleet/watch/status")
+async def gmail_fleet_watch_status(current_user: dict = Depends(require_permission("scan"))):
+    """Fleet watch health — a rollup (protected / expiring-soon / stale) for
+    dashboards/monitoring, plus the per-mailbox expiry detail. Safe with zero
+    watches (all-zero summary) so it works before the fleet is live."""
+    from app.layer7_gmail import watch_state as _ws
+    return {"summary": _ws.health_summary(), "watches": _ws.list_all()}
+
+
+@app.post("/api/gmail/fleet/watch/renew")
+async def gmail_fleet_watch_renew(
+    within_hours: int = 24,
+    current_user: dict = Depends(require_permission("gmail_write")),
+):
+    """Manually trigger a renewal pass immediately, instead of waiting for
+    the background scheduler's next tick — useful right after setup, or to
+    verify renewal actually works before trusting the schedule."""
+    from app.layer7_gmail.fleet_watch import renew_expiring_watches as _rew
+    return await _rew(settings, within_hours=within_hours)
+
+
 @app.get("/api/pending")
 async def list_pending(current_user: dict = Depends(require_permission("scan"))):
     """List emails held for SOC review (suspicious emails awaiting approval)."""
@@ -1225,6 +1430,8 @@ async def gmail_status(current_user: dict = Depends(require_auth)):
     else:
         auth_mode = "none"
     push_ready = sa_ok and bool(getattr(settings, "google_cloud_project", ""))
+    domain = getattr(settings, "google_workspace_domain", "")
+    fleet_ready = sa_ok and bool(domain)
     return {
         "auth_mode": auth_mode,
         "service_account_file": sa_path,
@@ -1240,6 +1447,11 @@ async def gmail_status(current_user: dict = Depends(require_auth)):
         "pull_enabled": getattr(settings, "gmail_enable_pull_subscriber", False),
         "quarantine_label": settings.gmail_quarantine_label,
         "scanned_label": settings.gmail_scanned_label,
+        "workspace_domain": domain,
+        # fleet_ready means "config is wired for domain-wide scanning" — it does
+        # NOT mean delegation has actually been granted in the admin console;
+        # that can only be confirmed by a live call (GET /api/gmail/fleet/users).
+        "fleet_ready": fleet_ready,
     }
 
 

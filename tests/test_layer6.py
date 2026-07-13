@@ -204,9 +204,10 @@ def test_http_refresh_rotation_and_replay():
 
 
 def test_http_rbac_readonly_blocked_from_retrain():
+    from app.security.auth import create_token
     c = _client()
-    tok = c.post("/token", json={"api_key": "dev-key", "sub": "ro", "role": "readonly"}).json()
-    r = c.post("/api/ml/retrain", headers={"Authorization": "Bearer " + tok["access_token"]})
+    access = create_token({"sub": "ro", "role": "readonly"})   # role minted directly
+    r = c.post("/api/ml/retrain", headers={"Authorization": "Bearer " + access})
     assert r.status_code in (401, 403)
 
 
@@ -232,9 +233,10 @@ def test_http_request_id_header_present():
 # ---------------------------------------------------------------------------
 
 def _token(client, role):
-    return client.post(
-        "/token", json={"api_key": "dev-key", "sub": f"test-{role}", "role": role}
-    ).json()["access_token"]
+    # Mint a role-specific token directly. /token no longer honors a client-supplied
+    # role (server decides it), so tests use the low-level factory to exercise each role.
+    from app.security.auth import create_token
+    return create_token({"sub": f"test-{role}", "role": role})
 
 
 def _auth(token):

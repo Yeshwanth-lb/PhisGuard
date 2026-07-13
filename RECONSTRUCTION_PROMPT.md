@@ -295,7 +295,7 @@ MED_CONF_THRESHOLD      = 0.42   # Tier 3: composite → suspicious
 
 **MISP setup:**
 - Self-signed cert for hostname `misp` (not `localhost`) — mounted at `docker/misp-cert.pem`
-- API key: `keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z` (in .env + docker-compose)
+- API key: `<REDACTED — set MISP_API_KEY/MISP_KEY in .env, never commit>` (in .env + docker-compose)
 - connector-misp auto-syncs to OpenCTI
 
 **Campaign Detector** (`campaign_detector.py`):
@@ -625,7 +625,7 @@ VIRUSTOTAL_API_KEY=
 ABUSEIPDB_API_KEY=
 GOOGLE_SAFE_BROWSING_API_KEY=
 PHISHTANK_API_KEY=              # optional
-MISP_API_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
+MISP_API_KEY=<REDACTED — real key must never be committed; set in .env only>
 MISP_URL=https://misp
 
 # SOAR

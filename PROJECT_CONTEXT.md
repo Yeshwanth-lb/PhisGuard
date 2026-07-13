@@ -153,6 +153,9 @@ Phishing is binary (block). But suspicious emails sit in a grey zone — maybe i
 ### Why a feedback loop?
 Every time a SOC analyst clicks "Mark Wrong" on a misclassified email, that correction is saved. When the ML model retrains, it uses those corrections as ground truth, overriding the original prediction. Over time, the model learns from the organization's specific email patterns.
 
+### Why asymmetric triage for email bombs (not blocking/holding)?
+An email bomb is a *cover attack*: the attacker floods an inbox with thousands of newsletter sign-ups to bury one real alert (an OTP, a bank notice). Blocking or holding the flood would bury that alert a second way. Instead PhishGuard runs **asymmetric triage** while an inbox is under attack — it *accelerates* authenticated high-signal mail and *isolates* the noise, never dropping or holding anything. Trust is granted only on **cryptographic authentication** (DMARC/DKIM alignment), never on subject words — a "Your OTP" subject from a throwaway domain is delivered but soft-labeled, never fast-tracked, which closes the obvious spoofing bypass. Detection uses three cascading time windows (fast/standard/slow-drip) so a low-and-slow flood can't evade it, and the buffer is crash-durable (SQLite WAL) so nothing is lost mid-attack. See RUNBOOK.md → "Runbook: Email-Bombing Triage Engine".
+
 ---
 
 ## The SOC Dashboard

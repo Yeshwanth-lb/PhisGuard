@@ -723,7 +723,10 @@ function startPolling(){
     loadStats();
     pollPendingBadge();
     if(currentSection === "overview") loadOverview();
-    if(currentSection === "pending") loadPending();
+    // Pending list is NOT auto-reloaded: re-rendering every 5s reset the scroll
+    // position and flickered the cards. The badge still updates above; use the
+    // Refresh button (or switch tabs) to reload the list on demand.
+    // if(currentSection === "pending") loadPending();
   }, 5000);
 }
 
@@ -747,7 +750,7 @@ function setTimeRange(hours, btn){
 async function loadStats(){
   const qs = _currentHours ? "?hours=" + _currentHours : "";
   try{
-    const r = await fetch(API + "/api/stats" + qs);
+    const r = await api("/api/stats" + qs);   // authed (was raw fetch -> 401 after auth hardening)
     if(!r.ok) throw new Error("stats " + r.status);
     const s = await r.json();
     document.getElementById("st-total").textContent = s.total || 0;
@@ -1391,9 +1394,11 @@ async function _expandProfile(btn){
     if(!r.ok){panel.innerHTML=`<div style="padding:14px;color:#ef4444;font-size:12px;background:#040810;border-top:1px solid #111827">Failed to load intelligence (${r.status})</div>`;return;}
     const p = await r.json();
 
-    // Group evidence by agent
+    // Group per-agent enrichment findings by agent (from intel_sources provenance).
+    // Falls back to evidence for older profiles that predate agent_findings.
     const byAgent = {};
-    (p.evidence||[]).forEach(e=>{ if(!byAgent[e.agent]) byAgent[e.agent]=[]; byAgent[e.agent].push(e); });
+    const _af = (p.agent_findings && p.agent_findings.length) ? p.agent_findings : (p.evidence||[]);
+    _af.forEach(e=>{ if(!byAgent[e.agent]) byAgent[e.agent]=[]; byAgent[e.agent].push(e); });
 
     // Update agent dots on the card
     _AGENT_ORDER.forEach(a=>{
@@ -1554,8 +1559,9 @@ let _visNetwork = null;
 let _visAllData = null;
 let _graphFilter = 'all';
 let _graphInitialized = false;
-const _EDGE_COLORS = {shared_ip:'#10b981', shared_domain:'#06b6d4', shared_ttps:'#f59e0b'};
-const _SEV_NODE = {critical:'#ef4444', high:'#f97316', medium:'#f59e0b', low:'#475569', unknown:'#334155'};
+let _graphShowAllLinks = false;
+const _EDGE_COLORS = {shared_ip:'#10b981', shared_domain:'#06b6d4', shared_ttps:'#a78bfa'};
+const _SEV_NODE = {critical:'#ef4444', high:'#fb923c', medium:'#fbbf24', low:'#38bdf8', unknown:'#64748b'};
 
 async function _toggleGraph(header){
   const container = document.getElementById('graphContainer');
@@ -1645,20 +1651,33 @@ function _renderVis(){
       _type: e.type,
     }));
 
+  // Thin edges to avoid a hairball: keep each node's strongest links only.
+  // (Most clusters share generic TTPs, which otherwise fully-connects the graph.)
+  let shownEdges = edges;
+  if(!_graphShowAllLinks && edges.length > nodes.length){
+    const K = 2, byNode = {};
+    edges.forEach(e=>{ (byNode[e.from]=byNode[e.from]||[]).push(e); (byNode[e.to]=byNode[e.to]||[]).push(e); });
+    const keep = new Set();
+    Object.values(byNode).forEach(arr=>{ arr.slice().sort((a,b)=>b.width-a.width).slice(0,K).forEach(e=>keep.add(e.id)); });
+    shownEdges = edges.filter(e=>keep.has(e.id));
+  }
+  const badge = document.getElementById('graphEdgeBadge');
+  if(badge){ badge.textContent = `${nodes.length} actors · ${shownEdges.length} links${shownEdges.length<edges.length?' (strongest)':''}`; }
+
   const data = {
     nodes: new vis.DataSet(nodes),
-    edges: new vis.DataSet(edges),
+    edges: new vis.DataSet(shownEdges),
   };
   const options = {
-    nodes: { shape:'dot', scaling:{ min:14, max:45 } },
-    edges: { selectionWidth: 2 },
+    nodes: { shape:'dot', scaling:{ min:16, max:54 }, shadow:{enabled:true, size:10, color:'rgba(0,0,0,0.55)'} },
+    edges: { selectionWidth: 2, smooth:{ type:'continuous', roundness:0.15 } },
     physics: {
       enabled: true,
-      barnesHut: { gravitationalConstant:-12000, centralGravity:0.25, springLength:140, springConstant:0.05, damping:0.4, avoidOverlap:0.6 },
-      stabilization: { enabled:true, iterations:300, updateInterval:30, fit:true },
+      barnesHut: { gravitationalConstant:-28000, centralGravity:0.12, springLength:220, springConstant:0.035, damping:0.5, avoidOverlap:1 },
+      stabilization: { enabled:true, iterations:450, updateInterval:30, fit:true },
       timestep: 0.4,
     },
-    interaction: { hover:true, tooltipDelay:120, navigationButtons:false, keyboard:false, zoomView:true, dragView:true },
+    interaction: { hover:true, tooltipDelay:120, navigationButtons:true, keyboard:false, zoomView:true, dragView:true, hideEdgesOnDrag:true },
     layout: { improvedLayout:true },
   };
 

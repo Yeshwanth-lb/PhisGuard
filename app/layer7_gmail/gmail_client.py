@@ -1,6 +1,7 @@
 """Layer 7 - Gmail API client: list, fetch, label and move messages."""
 import base64
 import os
+import time
 
 import structlog
 
@@ -11,9 +12,42 @@ _SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
 
+_RETRYABLE_STATUSES = {429, 500, 503}
 
-def _build_service(settings):
-    """Build an authenticated Gmail API client (service-account or OAuth user)."""
+
+def _execute_with_retry(request, max_retries: int = 3, base_delay: float = 1.0):
+    """Run a googleapiclient request.execute(), retrying with exponential
+    backoff on 429/500/503 — expected, not exceptional, once this fans out
+    across a whole Workspace domain and hits per-project Gmail API quota.
+    Any other error (403 permission denied, 404 not found, auth failure)
+    re-raises immediately — retrying those just wastes time on something
+    that will never succeed."""
+    from googleapiclient.errors import HttpError
+
+    attempt = 0
+    while True:
+        try:
+            return request.execute()
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            if status not in _RETRYABLE_STATUSES or attempt >= max_retries:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning("gmail_api_retry", status=status, attempt=attempt, delay=delay)
+            time.sleep(delay)
+            attempt += 1
+
+
+def _build_service(settings, user_email: str | None = None):
+    """Build an authenticated Gmail API client (service-account or OAuth user).
+
+    user_email: impersonate this specific mailbox via domain-wide delegation
+    instead of the single settings.google_admin_impersonate_email — this is
+    what lets one service account fan out across every mailbox in a Workspace
+    domain rather than being pinned to one fixed account. Falls back to the
+    single-mailbox behavior (unchanged) when omitted, so existing callers
+    that don't pass it keep working exactly as before.
+    """
     try:
         from googleapiclient.discovery import build
     except ImportError as exc:
@@ -21,7 +55,7 @@ def _build_service(settings):
         return None
 
     sa_path = getattr(settings, "google_service_account_json", "") or ""
-    impersonate = getattr(settings, "google_admin_impersonate_email", "") or ""
+    impersonate = user_email or getattr(settings, "google_admin_impersonate_email", "") or ""
     oauth_path = getattr(settings, "gmail_oauth_token_file", "") or ""
 
     if sa_path and os.path.exists(sa_path) and impersonate:
@@ -59,32 +93,33 @@ def _build_service(settings):
     return None
 
 
-def list_messages(settings, query: str = "", max_results: int = 100) -> list[dict]:
-    svc = _build_service(settings)
+def list_messages(settings, query: str = "", max_results: int = 100,
+                   user_email: str | None = None) -> list[dict]:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return []
     try:
-        resp = svc.users().messages().list(
+        resp = _execute_with_retry(svc.users().messages().list(
             userId="me", q=query, maxResults=max_results
-        ).execute()
+        ))
         return resp.get("messages", [])
     except Exception as exc:
-        logger.warning("gmail_list_err", error=str(exc))
+        logger.warning("gmail_list_err", error=str(exc), user_email=user_email)
         return []
 
 
-def fetch_raw_message(settings, msg_id: str) -> bytes | None:
-    svc = _build_service(settings)
+def fetch_raw_message(settings, msg_id: str, user_email: str | None = None) -> bytes | None:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return None
     try:
-        resp = svc.users().messages().get(
+        resp = _execute_with_retry(svc.users().messages().get(
             userId="me", id=msg_id, format="raw"
-        ).execute()
+        ))
         raw_b64 = resp.get("raw", "")
         return base64.urlsafe_b64decode(raw_b64 + "==")
     except Exception as exc:
-        logger.warning("gmail_fetch_err", msg_id=msg_id, error=str(exc))
+        logger.warning("gmail_fetch_err", msg_id=msg_id, error=str(exc), user_email=user_email)
         return None
 
 
@@ -95,22 +130,22 @@ def _find_label_id(all_labels: list, name: str) -> str | None:
     return None
 
 
-def apply_label(settings, msg_id: str, label_name: str) -> bool:
-    svc = _build_service(settings)
+def apply_label(settings, msg_id: str, label_name: str, user_email: str | None = None) -> bool:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return False
     try:
-        all_labels = svc.users().labels().list(userId="me").execute().get("labels", [])
+        all_labels = _execute_with_retry(svc.users().labels().list(userId="me")).get("labels", [])
         label_id = _find_label_id(all_labels, label_name)
         if not label_id:
-            created = svc.users().labels().create(
+            created = _execute_with_retry(svc.users().labels().create(
                 userId="me", body={"name": label_name}
-            ).execute()
+            ))
             label_id = created.get("id")
-        svc.users().messages().modify(
+        _execute_with_retry(svc.users().messages().modify(
             userId="me", id=msg_id,
             body={"addLabelIds": [label_id]}
-        ).execute()
+        ))
         logger.info("label_applied", msg_id=msg_id, label=label_name)
         return True
     except Exception as exc:
@@ -118,7 +153,8 @@ def apply_label(settings, msg_id: str, label_name: str) -> bool:
         return False
 
 
-def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-Delivered") -> bool:
+def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-Delivered",
+                      user_email: str | None = None) -> bool:
     """Inject a raw email directly into the Gmail inbox via Gmail API.
 
     This is used in demo/gateway mode when clean emails are approved —
@@ -126,30 +162,30 @@ def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-D
     we use the Gmail API to place the message directly into the inbox.
     The recipient actually SEES it in Gmail.
     """
-    svc = _build_service(settings)
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return False
     try:
         raw_b64 = base64.urlsafe_b64encode(raw_email).decode().rstrip("=")
-        result = svc.users().messages().import_(
+        result = _execute_with_retry(svc.users().messages().import_(
             userId="me",
             body={"raw": raw_b64},
-            internalDateSource="dateHeader",
+            internalDateSource="receivedTime",
             processForCalendar=False,
             deleted=False,
-        ).execute()
+        ))
         msg_id = result.get("id", "")
         logger.info("gmail_inbox_delivered", msg_id=msg_id)
 
         if msg_id:
-            all_labels = svc.users().labels().list(userId="me").execute().get("labels", [])
+            all_labels = _execute_with_retry(svc.users().labels().list(userId="me")).get("labels", [])
 
             # Ensure the custom label exists
             label_id = _find_label_id(all_labels, label_name)
             if not label_id:
-                created = svc.users().labels().create(
+                created = _execute_with_retry(svc.users().labels().create(
                     userId="me", body={"name": label_name}
-                ).execute()
+                ))
                 label_id = created.get("id")
 
             # Add INBOX label so it actually appears in the inbox,
@@ -158,10 +194,10 @@ def deliver_to_inbox(settings, raw_email: bytes, label_name: str = "PhishGuard-D
             if label_id:
                 add_labels.append(label_id)
 
-            svc.users().messages().modify(
+            _execute_with_retry(svc.users().messages().modify(
                 userId="me", id=msg_id,
                 body={"addLabelIds": add_labels, "removeLabelIds": []}
-            ).execute()
+            ))
             logger.info("gmail_inbox_labelled", msg_id=msg_id, label=label_name)
         return True
     except Exception as exc:

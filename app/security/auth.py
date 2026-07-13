@@ -15,9 +15,37 @@ logger = structlog.get_logger()
 _bearer = HTTPBearer(auto_error=False)
 
 
+_INSECURE_DEFAULT = "change-me-in-production"
+
+
+def _resolve_secret() -> str:
+    """JWT secret from env, then settings — single source of truth (previously env-only,
+    so a secret set only in settings/.env silently didn't apply)."""
+    if os.environ.get("JWT_SECRET"):
+        return os.environ["JWT_SECRET"]
+    try:
+        from app.config import settings
+        return settings.jwt_secret or ""
+    except Exception:
+        return ""
+
+
 def _get_secret() -> bytes:
-    raw = os.environ.get("JWT_SECRET", "change-me-in-production")
-    return raw.encode()
+    return (_resolve_secret() or _INSECURE_DEFAULT).encode()
+
+
+def assert_secure_secret() -> None:
+    """Fail-fast (call at startup) if the JWT secret is unset or the insecure default —
+    otherwise anyone could forge an admin token. Local dev can opt out with
+    ALLOW_INSECURE_JWT_SECRET=true."""
+    if _resolve_secret() in ("", _INSECURE_DEFAULT):
+        if os.environ.get("ALLOW_INSECURE_JWT_SECRET", "").lower() in ("1", "true", "yes"):
+            logger.warning("jwt_secret_insecure_default_allowed")
+            return
+        raise RuntimeError(
+            "JWT_SECRET is unset or the insecure default. Set a strong JWT_SECRET "
+            "(e.g. `openssl rand -hex 32`), or set ALLOW_INSECURE_JWT_SECRET=true for local dev."
+        )
 
 
 def create_token(payload: dict, ttl_seconds: int = 3600) -> str:
@@ -42,12 +70,21 @@ def verify_token(token: str) -> dict:
         hdr, body, sig = token.split(".")
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid token format")
+    # Validate the header algorithm — never trust an attacker-supplied alg (e.g. 'none').
+    try:
+        header = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4)))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token header")
+    if header.get("alg") != "HS256":
+        raise HTTPException(status_code=401, detail="Unsupported token algorithm")
     sig_input = f"{hdr}.{body}".encode()
     expected = base64.urlsafe_b64encode(hmac.new(_get_secret(), sig_input, hashlib.sha256).digest()).rstrip(b"=").decode()
     if not hmac.compare_digest(sig, expected):
         raise HTTPException(status_code=401, detail="Invalid signature")
-    pad = 4 - len(body) % 4
-    payload = json.loads(base64.urlsafe_b64decode(body + "=" * pad))
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token body")
     if payload.get("exp", 0) < int(time.time()):
         raise HTTPException(status_code=401, detail="Token expired")
     return payload

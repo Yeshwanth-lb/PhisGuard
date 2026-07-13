@@ -23,8 +23,11 @@ services:
       - AUDIT_LOG_FILE=/app/data/audit.jsonl
       - MISP_URL=https://misp
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
-    user: "0"
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+    # Runs as the Dockerfile's non-root 'phishguard' user (was user:"0" = root, a
+    # container-escape risk given the docker.sock mount). Socket access is granted by
+    # the post-restart `chmod 666 /var/run/docker.sock` step; volume ownership is
+    # fixed to the app user on deploy. See RUNBOOK deploy steps.
     ports:
       - "8000:8000"
       - "8025:8025"
@@ -216,7 +219,7 @@ services:
       - APP__BASE_URL=http://localhost:8080
       - APP__ADMIN__EMAIL=admin@phishguard.local
       - APP__ADMIN__PASSWORD=changeme123
-      - APP__ADMIN__TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - APP__ADMIN__TOKEN=${OPENCTI_TOKEN}
       - APP__APP_LOGS__LOGS_LEVEL=error
       - REDIS__HOSTNAME=redis
       - REDIS__PORT=6379
@@ -263,14 +266,14 @@ services:
     restart: unless-stopped
     environment:
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
       - CONNECTOR_ID=misp-connector-phishguard
       - CONNECTOR_NAME=MISP PhishGuard
       - CONNECTOR_SCOPE=misp-galaxy,misp-attack-pattern,misp-course-of-action,misp-intrusion-set,misp-malware,misp-tool,misp-vulnerability
       - CONNECTOR_LOG_LEVEL=error
       - MISP_URL=https://misp
       - MISP_REFERENCE_URL=http://localhost:8888
-      - MISP_KEY=keugWnClooY4yPB7vItEnfVikSRxUeUH5TY7DO7z
+      - MISP_KEY=${MISP_KEY}
       - MISP_SSL=false
       - MISP_SSL_VERIFY=false
       - MISP_VERIFYCERT=false
@@ -298,7 +301,7 @@ services:
     restart: unless-stopped
     environment:
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=e9cd0d97-04f8-4cbb-91fb-7153192b118c
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
       - WORKER_LOG_LEVEL=error
     depends_on:
       - opencti
@@ -371,7 +374,7 @@ services:
       - "7474:7474"   # Neo4j Browser (HTTP)
       - "7687:7687"   # Bolt protocol (used by Neovis.js + Python driver)
     environment:
-      - NEO4J_AUTH=neo4j/changeme123
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-changeme123}
       - NEO4J_server_memory_heap_initial__size=256m
       - NEO4J_server_memory_heap_max__size=512m
       - NEO4J_server_memory_pagecache_size=128m
@@ -383,10 +386,69 @@ services:
     mem_limit: 1g
     networks: [phishguard]
 
+  # Production datastore for the primary store (app/storage.py). Opt-in via the
+  # "postgres" compose profile so the default dev/demo stack stays on SQLite and
+  # this doesn't auto-start. To use: `docker compose --profile postgres up -d postgres`,
+  # then set DATABASE_URL=postgresql://phishguard:${POSTGRES_PASSWORD}@postgres:5432/phishguard
+  # in the app env and rebuild the app image (installs psycopg).
+  postgres:
+    image: postgres:16-alpine
+    container_name: phishguard-postgres
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=phishguard
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme123}
+      - POSTGRES_DB=phishguard
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "phishguard"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1g
+    networks: [phishguard]
+
+  # Hardened sandbox path (opt-in, profile "hardened-sandbox"): a proxy that
+  # fronts the Docker socket and exposes ONLY the endpoints the sandbox needs
+  # (containers: create/start/wait/remove/logs + images: inspect). The app then
+  # talks to tcp://docker-proxy:2375 instead of mounting /var/run/docker.sock,
+  # which is root-equivalent host access (container-escape risk). To use:
+  #   docker compose --profile hardened-sandbox up -d docker-proxy
+  #   set SANDBOX_DOCKER_HOST=tcp://docker-proxy:2375 in the app env
+  #   AND remove the app service's /var/run/docker.sock bind mount.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: phishguard-docker-proxy
+    profiles: ["hardened-sandbox"]
+    restart: unless-stopped
+    environment:
+      # Least privilege: only what the sandbox runner calls. Everything else 0.
+      - CONTAINERS=1
+      - IMAGES=1
+      - POST=1          # allow create/start (default proxy is read-only)
+      - EXEC=0
+      - VOLUMES=0
+      - NETWORKS=0
+      - INFO=0
+      - AUTH=0
+      - SECRETS=0
+      - SWARM=0
+      - SYSTEM=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [phishguard]
+    mem_limit: 128m
+
 networks:
   phishguard: { driver: bridge }
 
 volumes:
+  postgres_data: {}
   app_data: {}
   ml_baselines: {}
   es_data: {}

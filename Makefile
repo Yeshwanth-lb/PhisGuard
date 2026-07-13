@@ -57,6 +57,9 @@ test-docker: ## Run pytest inside the app container
 test-live: ## Run live integration tests (requires API keys / webhooks in .env)
 	python3 -m pytest tests/ -v -k _live
 
+eval: ## Run the detection quality eval against the running stack (recall/FP per category)
+	PYTHONPATH=. python3 scripts/eval_detection.py
+
 mlflow-ui: ## Open MLflow UI
 	open http://localhost:5000 || xdg-open http://localhost:5000 || true
 

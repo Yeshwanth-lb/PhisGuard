@@ -12,7 +12,7 @@ on a configurable schedule (default: every Monday at 09:00 local time).
 """
 import json
 import re
-import sqlite3
+from app import db as _db
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -33,7 +33,7 @@ def _sender_domain(sender: str) -> str:
 
 
 def _get_stats(db_path: str, since: float) -> dict:
-    conn = sqlite3.connect(db_path)
+    conn = _db.connect(db_path)
     stats: dict = {}
     for verdict in ("phishing", "suspicious", "clean"):
         row = conn.execute(

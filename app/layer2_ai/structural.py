@@ -52,6 +52,161 @@ _WHOIS_CACHE: dict[str, int | None] = {}   # domain → age_days (None = unknown
 
 
 # ---------------------------------------------------------------------------
+# Social-engineering lexical patterns
+# ---------------------------------------------------------------------------
+# Why this exists: the structural checks above are all about the *envelope*
+# (domain, auth, brand). Old-school social-engineering scams — advance-fee/419,
+# fake loan approvals, lottery/prize, BEC payroll-diversion — carry no spoofed
+# domain and no brand impersonation, so structural scored them 0.0 and, because
+# NLP can also under-read subtle prose, they slipped through as clean (measured
+# ~30% real-world miss). These patterns give structural a *content-intent* signal
+# so those scams get caught. HIGH-specificity categories almost never appear in
+# legitimate mail; MEDIUM ones can, so they require corroboration (2+ matches).
+_HIGH_SPECIFICITY = {
+    "advance_fee": [
+        r"next of kin", r"unclaimed (?:fund|sum|money)", r"beneficiary of",
+        r"business (?:proposal|opportunity) to you", r"consignment",
+        r"barrister", r"widow of (?:the )?late", r"the late (?:mr|mrs|dr|president|engr)",
+        r"central bank of", r"diplomatic (?:immunity|package)",
+        r"million (?:united states |us )?dollars", r"\$[\d,]{7,}",
+        r"transfer .{0,20}(?:sum|fund) of", r"inheritance",
+    ],
+    "prize_lottery": [
+        r"you (?:have |'ve )?won", r"winning notification", r"claim your (?:prize|reward|winnings|gift)",
+        r"lucky winner", r"randomly selected", r"you have been selected",
+        r"lottery", r"cash prize", r"gift card (?:worth|of|before)",
+    ],
+    "loan_refi": [
+        r"pre[- ]?approved", r"(?:you are|you're) eligible for \$", r"qualify for a \$[\d,]+",
+        r"refinance", r"consolidate your debt", r"low(?:er)? (?:interest )?rate",
+        r"your (?:loan )?application (?:was|has been) (?:approved|processed)",
+    ],
+    # BEC bank-detail-diversion — a single one of these is a strong fraud marker
+    # (unlike a bare "wire transfer", which is common in legit mail and stays medium).
+    "bec_diversion": [
+        r"bank details have changed", r"new (?:account|banking|bank) details",
+        r"update (?:my |your )?direct deposit", r"change (?:my |your )?direct deposit",
+        r"update .{0,15}bank(?:ing)? (?:details|information)", r"vendor .{0,10}bank(?:ing)? account",
+        r"(?:remittance|payment) .{0,15}(?:new|updated) (?:account|bank)",
+    ],
+}
+_MEDIUM_SPECIFICITY = {
+    "payment_pressure": [
+        r"wire transfer", r"process .{0,15}payment .{0,15}urgent",
+        r"gift cards? for (?:the )?(?:team|staff|client)", r"urgent .{0,10}payment",
+    ],
+    "credential_urgency": [
+        r"verify your account", r"confirm your identity", r"account (?:has been |is )?(?:suspended|limited|locked)",
+        r"update your password", r"unusual (?:activity|sign)", r"click here to (?:verify|confirm|restore)",
+        r"restore your account", r"account will be (?:closed|suspended|terminated)",
+    ],
+}
+_HIGH_PATTERNS = {c: [re.compile(p, re.IGNORECASE) for p in pats] for c, pats in _HIGH_SPECIFICITY.items()}
+_MED_PATTERNS = {c: [re.compile(p, re.IGNORECASE) for p in pats] for c, pats in _MEDIUM_SPECIFICITY.items()}
+
+
+def _social_engineering_score(subject: str, body: str) -> tuple[float, list[str]]:
+    """Detect social-engineering scam language independent of domain/brand.
+
+    Returns (score, matched_categories). Score is deliberately capped at 0.60 so
+    it corroborates within the composite and can drive the orchestrator's
+    dedicated 'suspicious' rung, but never solo-triggers a phishing verdict
+    (that stays reserved for the 0.90 single-engine bar) — lexical matching is
+    too false-positive-prone to condemn on its own.
+    """
+    text = f"{subject or ''}\n{body or ''}"
+    if not text.strip():
+        return 0.0, []
+    high_hits = [c for c, pats in _HIGH_PATTERNS.items() if any(p.search(text) for p in pats)]
+    med_hits = [c for c, pats in _MED_PATTERNS.items() if any(p.search(text) for p in pats)]
+    matched = high_hits + med_hits
+    if high_hits:
+        # A high-specificity scam family is present (419/lottery/loan): strong signal.
+        score = min(0.45 + 0.08 * (len(matched) - 1), 0.60)
+    elif len(med_hits) >= 2:
+        # Only medium-specificity signals — require two distinct categories, since
+        # any one alone ("wire transfer", "verify your account") appears in legit mail.
+        score = 0.45
+    else:
+        score = 0.0
+        matched = []
+    return round(score, 3), matched
+
+
+# Free/consumer webmail providers. An "executive/authority" request that arrives
+# from one of these (rather than the corporate domain) is the core BEC signal —
+# a real CEO emails from the company domain, not gmail.
+FREE_WEBMAIL = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "yahoo.com", "yahoo.co.uk", "aol.com", "icloud.com", "me.com", "mac.com",
+    "proton.me", "protonmail.com", "gmx.com", "mail.com", "zoho.com", "yandex.com",
+}
+
+_BEC_MARKERS = {
+    "availability_probe": [
+        r"are you (?:available|at your desk|around|free|in the office)",
+        r"quick (?:task|question|favor|favour)", r"do you have a (?:minute|moment|sec)",
+        r"you got a (?:minute|moment|sec)",
+    ],
+    "authority_delegation": [
+        r"i need you to", r"i want you to", r"can you (?:handle|take care of|process|purchase|arrange)",
+        r"handle something", r"favou?r (?:to ask|needed|from you)", r"help me with something",
+    ],
+    "urgency": [
+        r"urgent", r"right away", r"asap", r"as soon as you (?:get|see) this",
+        r"time.?sensitive", r"immediately", r"before .{0,15}(?:eod|end of day|close)",
+    ],
+    "secrecy": [
+        r"keep this (?:between us|confidential|discreet|quiet)", r"between you and me",
+        r"don'?t (?:tell|mention|discuss)", r"discreet", r"confidential(?:ly)?",
+    ],
+    "giftcard_wire": [
+        r"gift ?cards?", r"wire transfer", r"purchase .{0,20}cards?", r"scratch .{0,10}back",
+        r"(?:email|send) .{0,10}(?:me )?the codes?", r"i'?ll reimburse",
+    ],
+    "mobile_footer": [
+        r"sent from my (?:iphone|ipad|mobile|android|samsung)",
+    ],
+}
+_BEC_PATTERNS = {c: [re.compile(p, re.IGNORECASE) for p in pats] for c, pats in _BEC_MARKERS.items()}
+_EXEC_ROLE_RE = re.compile(r"\b(ceo|cfo|cto|coo|ciso|president|chairman|director|chief|vp|exec(?:utive)?)\b",
+                           re.IGNORECASE)
+
+
+def _bec_opener_score(from_header: str, sender_domain: str, reply_to: str,
+                      subject: str, body: str) -> tuple[float, list[str]]:
+    """Detect executive-impersonation BEC openers — the near-contentless
+    "are you available?" / gift-card-favor mails that carry no link, attachment,
+    or classic scam keyword and so score 0.0 everywhere else.
+
+    The discriminator is the SENDER, not the words: an authority/action request
+    from a free-webmail domain (or with a role in the address while off-domain,
+    or a Reply-To mismatch) PLUS >=2 distinct BEC markers. The 2-marker floor is
+    the false-positive guard — a friend's "are you free for lunch?" from gmail
+    has one marker and stays silent. Capped 0.58 (suspicious, never solo-phishing).
+    """
+    sd = (sender_domain or "").lower()
+    rt = (reply_to or "").lower()
+    is_free = sd in FREE_WEBMAIL
+    # role word in the local-part/display while off a free-webmail domain (ceo.x@gmail)
+    role_offdomain = bool(_EXEC_ROLE_RE.search(from_header or "")) and is_free
+    reply_mismatch = bool(rt) and sd and (sd not in rt)
+    untrusted_sender = is_free or reply_mismatch or role_offdomain
+    if not untrusted_sender:
+        return 0.0, []
+    text = f"{subject or ''}\n{body or ''}"
+    hits = [c for c, pats in _BEC_PATTERNS.items() if any(p.search(text) for p in pats)]
+    if len(hits) < 2:
+        return 0.0, []
+    score = 0.50
+    if "giftcard_wire" in hits:
+        score = 0.58   # gift-card/wire ask is the BEC money step — stronger
+    if role_offdomain:
+        score = max(score, 0.55)
+    return round(score, 3), hits
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -266,7 +421,26 @@ async def run_structural(parsed: dict) -> dict:
     fh = parsed.get("from_header", "") or ""
     rt = parsed.get("reply_to", "") or ""
     bh = parsed.get("body_html", "") or ""
+    bt = parsed.get("body_text", "") or ""
+    subj = parsed.get("subject", "") or ""
     attachments = parsed.get("attachments", []) or []
+
+    # --- Social-engineering language (content-intent, domain-independent) ---
+    se_score, se_categories = _social_engineering_score(subj, bt or bh)
+    if se_score > 0:
+        findings.append(f"social_engineering:{'+'.join(se_categories)}")
+        scores.append(se_score)
+
+    # --- BEC executive-impersonation opener (sender-based, near-contentless) ---
+    bec_score, bec_markers = _bec_opener_score(fh, sd, rt, subj, bt or bh)
+    if bec_score > 0:
+        findings.append(f"bec_opener:{'+'.join(bec_markers)}")
+        scores.append(bec_score)
+        # Fold into the social-engineering signal so the orchestrator's
+        # struct_socialeng rung escalates it to suspicious.
+        se_score = max(se_score, bec_score)
+        if "bec_opener" not in se_categories:
+            se_categories = se_categories + ["bec_opener"]
 
     # --- Brand impersonation ---
     if sd:
@@ -361,6 +535,11 @@ async def run_structural(parsed: dict) -> dict:
         "domain_age_days": age,
         "auth_alignment": alignment if align_score > 0 else "aligned",
         "attachment_risk": att_risk,
+        # Exposed separately so the orchestrator can escalate on scam LANGUAGE even
+        # when the composite (structural weighted 0.30) would otherwise dilute it
+        # and NLP under-read — this is what closes the plain-text-scam gap.
+        "social_engineering_score": se_score,
+        "social_engineering_categories": se_categories,
         "red_flags": [
             {"flag": f, "severity": _flag_severity(f)} for f in findings
         ],

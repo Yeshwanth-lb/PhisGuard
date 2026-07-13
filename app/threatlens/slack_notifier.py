@@ -19,8 +19,6 @@ Reuses SLACK_WEBHOOK_URL from the main settings.
 """
 from __future__ import annotations
 
-import os
-
 import httpx
 import structlog
 
@@ -157,7 +155,8 @@ async def alert_if_critical(
     Returns True if an alert was sent.
     """
     if not webhook_url:
-        webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
+        from app.config import settings
+        webhook_url = getattr(settings, "slack_webhook_url", "")
     if not webhook_url:
         return False
 
@@ -193,7 +192,8 @@ async def send_cycle_summary(
 ) -> None:
     """Send a brief cycle summary to Slack if anything notable happened."""
     if not webhook_url:
-        webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
+        from app.config import settings
+        webhook_url = getattr(settings, "slack_webhook_url", "")
     if not webhook_url:
         return
     if confirmed_count == 0 and critical_zones_count == 0:

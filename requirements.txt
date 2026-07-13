@@ -1,3 +1,8 @@
+# Pinned <81: MLflow (and other libs) still import pkg_resources, which newer
+# setuptools removes — an unpinned setuptools breaks MLflow verdict logging on a
+# clean image rebuild. This was a prior in-container hotfix; pinning it here bakes
+# it into the image so `docker compose build` reproduces a working stack.
+setuptools==80.10.2
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.7.1
@@ -44,7 +49,18 @@ mlflow==2.13.2
 google-api-python-client==2.134.0
 google-auth==2.30.0
 google-auth-httplib2==0.2.0
+google-cloud-pubsub==2.21.5
 aiosmtpd==1.4.6
+
+# Optional deployment datastore — the primary store (app/storage.py) runs on
+# SQLite by default and on PostgreSQL when DATABASE_URL is set. psycopg is only
+# imported on the Postgres path, so it's a no-op for the default SQLite setup.
+psycopg[binary]==3.2.1
+
+# Redis client — powers the L1 OSINT cache (app/layer1/cache.py, previously a
+# silent no-op because the lib was missing) and the multi-worker coordination in
+# app/redis_state.py (scheduler leader-lock + shared rate-limit counters).
+redis==5.0.7
 
 # Testing
 pytest==8.2.2
@@ -60,6 +76,14 @@ cryptography==42.0.8
 # Layer 1 v2 detection upgrades
 dnspython==2.8.0
 dkimpy==1.1.8
+
+# Bombing triage — critical-sender DMARC alignment.
+# dkimpy (above) does the real cryptographic DKIM-alignment check; pyspf does the real
+# SPF check (against the live SMTP peer IP). Trust = DKIM-aligned OR SPF-aligned.
+# checkdmarc is an OPTIONAL corroborator (published-policy lookup only); critical_sender.py
+# imports each gracefully and works without it, so these can be omitted in minimal installs.
+pyspf==2.0.14
+checkdmarc==5.7.4
 
 # Layer 2 NLP - Gemini SDK
 google-genai==0.8.0

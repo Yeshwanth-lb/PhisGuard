@@ -4,16 +4,17 @@ Auto-populated when phishing is detected. Layer 1 consults this
 table as a hard block before any external OSINT calls.
 """
 import os
-import sqlite3
 import time
+
+from app import db as _db
 
 DB_PATH = os.path.join("data", "denylist.db")
 
 
-def _conn() -> sqlite3.Connection:
-    os.makedirs("data", exist_ok=True)
-    c = sqlite3.connect(DB_PATH)
-    c.execute("""CREATE TABLE IF NOT EXISTS denylist (
+def _conn():
+    # Backend-agnostic (SQLite default / Postgres when DATABASE_URL set) via app.db.
+    c = _db.connect(DB_PATH)
+    c.execute(_db.ddl("""CREATE TABLE IF NOT EXISTS denylist (
         kind TEXT NOT NULL,
         value TEXT NOT NULL,
         reason TEXT,
@@ -23,7 +24,7 @@ def _conn() -> sqlite3.Connection:
         hit_count INTEGER DEFAULT 0,
         last_hit REAL,
         PRIMARY KEY (kind, value)
-    )""")
+    )"""))
     c.execute("CREATE INDEX IF NOT EXISTS idx_kind_active ON denylist(kind, active)")
     c.commit()
     return c
@@ -36,8 +37,9 @@ def add_entry(kind: str, value: str, reason: str = "", added_by: str = "auto") -
     c = _conn()
     try:
         c.execute(
-            "INSERT OR REPLACE INTO denylist (kind, value, reason, added_at, added_by, active) VALUES (?, ?, ?, ?, ?, 1)",
-            (kind, value, reason, time.time(), added_by),
+            _db.upsert("denylist", ["kind", "value", "reason", "added_at", "added_by", "active"],
+                       ["kind", "value"]),
+            (kind, value, reason, time.time(), added_by, 1),
         )
         c.commit()
         return True

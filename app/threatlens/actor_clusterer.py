@@ -9,7 +9,7 @@ No external calls, no LLM — pure scan-data processing.
 import hashlib
 import json
 import os
-import sqlite3
+from app import db as _db
 import time
 
 from app.layer4_soar.campaign_detector import (
@@ -27,7 +27,8 @@ _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 #   shared_ip + shared_asn = 0.45 + 0.30 = 0.75 ≥ 0.72  (shared C2 infrastructure clusters)
 #   domain_base alone      = 0.40 < 0.72  (different-intent same-domain stays separate)
 _W_DOMAIN = 0.40
-_W_INTENT = 0.35
+_W_INTENT = 0.75   # intent-dominant: same attack-playbook merges into one campaign even
+                   # across different sender domains (consolidates tiny near-duplicate clusters)
 _W_IP     = 0.45
 _W_ASN    = 0.30
 
@@ -120,8 +121,7 @@ def _extract_iocs(scan: dict) -> IoCSet:
 def _load_scans_from_db(db_path: str) -> list[dict]:
     """Load all phishing + suspicious scans from the scans table."""
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = _db.connect(db_path)
         rows = conn.execute(
             """SELECT id, ts, verdict, sender, data_json
                FROM scans

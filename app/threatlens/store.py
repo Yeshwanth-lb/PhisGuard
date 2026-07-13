@@ -6,21 +6,19 @@ are never touched.
 """
 import json
 import os
-import sqlite3
 import threading
 
+from app import db as _db
 from app.threatlens.models import ActorCluster, AdversaryProfile, Finding, IoCSet, OrgThreatAssessment, TTP, CorroboratedClaim, TTPObservation
 
 _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 _lock = threading.Lock()
 
 
-def _conn(db_path: str) -> sqlite3.Connection:
-    parent = os.path.dirname(os.path.abspath(db_path))
-    os.makedirs(parent, exist_ok=True)
-    c = sqlite3.connect(db_path, check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    return c
+def _conn(db_path: str):
+    # Backend-agnostic (SQLite default / Postgres when DATABASE_URL set) via app.db.
+    # Rows behave like sqlite3.Row on both backends.
+    return _db.connect(db_path)
 
 
 def init_db(db_path: str = _DB_PATH) -> None:
@@ -44,12 +42,15 @@ def init_db(db_path: str = _DB_PATH) -> None:
                     last_profiled_at  REAL DEFAULT NULL
                 )
             """)
-            # Phase 5 migration: add last_profiled_at to existing tables
-            try:
-                c.execute("ALTER TABLE actor_clusters ADD COLUMN last_profiled_at REAL DEFAULT NULL")
-                c.commit()
-            except Exception:
-                pass  # column already exists
+            # Phase 5 migration: add last_profiled_at to pre-existing SQLite tables.
+            # SQLite-only: on Postgres the column is always present from CREATE
+            # above, and a failing ALTER would poison the transaction.
+            if not _db.is_postgres():
+                try:
+                    c.execute("ALTER TABLE actor_clusters ADD COLUMN last_profiled_at REAL DEFAULT NULL")
+                    c.commit()
+                except Exception:
+                    pass  # column already exists
             c.execute("""
                 CREATE TABLE IF NOT EXISTS actor_profiles (
                     id                  TEXT PRIMARY KEY,
@@ -123,13 +124,10 @@ def upsert_cluster(cluster: ActorCluster, db_path: str = _DB_PATH) -> None:
             ).fetchone()
             created_at = row["created_at"] if row else cluster.created_at
 
-            c.execute("""
-                INSERT OR REPLACE INTO actor_clusters
-                    (id, created_at, updated_at, first_seen, last_seen,
-                     member_scan_ids, dominant_intent, ioc_json, target_json,
-                     signature_json, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
+            c.execute(_db.upsert("actor_clusters",
+                ["id", "created_at", "updated_at", "first_seen", "last_seen",
+                 "member_scan_ids", "dominant_intent", "ioc_json", "target_json",
+                 "signature_json", "status"], "id"), (
                 cluster.id,
                 created_at,
                 cluster.updated_at,
@@ -147,7 +145,7 @@ def upsert_cluster(cluster: ActorCluster, db_path: str = _DB_PATH) -> None:
             c.close()
 
 
-def _row_to_cluster(row: sqlite3.Row) -> ActorCluster:
+def _row_to_cluster(row) -> ActorCluster:
     return ActorCluster(
         id=row["id"],
         created_at=row["created_at"],
@@ -238,7 +236,7 @@ def upsert_profile(profile: AdversaryProfile, db_path: str = _DB_PATH) -> None:
             c.close()
 
 
-def _row_to_profile(row: sqlite3.Row) -> AdversaryProfile:
+def _row_to_profile(row) -> AdversaryProfile:
     ttps = [TTP(**t) for t in json.loads(row["ttp_json"] or "[]")]
     evidence = []
     for e in json.loads(row["evidence_json"] or "[]"):
@@ -314,11 +312,9 @@ def upsert_ttp_observation(obs: TTPObservation, db_path: str = _DB_PATH) -> None
     with _lock:
         c = _conn(db_path)
         try:
-            c.execute("""
-                INSERT OR REPLACE INTO ttp_observations
-                    (id, cluster_id, attack_id, tactic, surface_zone, evidence_ref, observed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
+            c.execute(_db.upsert("ttp_observations",
+                ["id", "cluster_id", "attack_id", "tactic", "surface_zone",
+                 "evidence_ref", "observed_at"], "id"), (
                 obs.id,
                 obs.cluster_id,
                 obs.attack_id,
@@ -389,13 +385,10 @@ def upsert_org_assessment(assessment: OrgThreatAssessment, db_path: str = _DB_PA
     with _lock:
         c = _conn(db_path)
         try:
-            c.execute("""
-                INSERT OR REPLACE INTO org_threat_assessment
-                    (id, generated_at, adversary_landscape, surface_pressure_json,
-                     sector_pressure_json, strategic_intent, top_campaigns_json,
-                     source_profile_ids, confidence, evidence_json, summary, model)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
+            c.execute(_db.upsert("org_threat_assessment",
+                ["id", "generated_at", "adversary_landscape", "surface_pressure_json",
+                 "sector_pressure_json", "strategic_intent", "top_campaigns_json",
+                 "source_profile_ids", "confidence", "evidence_json", "summary", "model"], "id"), (
                 assessment.id,
                 assessment.generated_at,
                 assessment.adversary_landscape,
@@ -464,11 +457,13 @@ def _ensure_feedback_table(c) -> None:
             submitted_by TEXT DEFAULT 'soc'
         )
     """)
-    # Migrate: add cluster_id to pre-existing tables
-    try:
-        c.execute("ALTER TABLE profile_feedback ADD COLUMN cluster_id TEXT")
-    except Exception:
-        pass  # column already exists
+    # Migrate: add cluster_id to pre-existing SQLite tables (Postgres has it from
+    # CREATE above; a failing ALTER there would poison the transaction).
+    if not _db.is_postgres():
+        try:
+            c.execute("ALTER TABLE profile_feedback ADD COLUMN cluster_id TEXT")
+        except Exception:
+            pass  # column already exists
 
 
 def save_profile_feedback(

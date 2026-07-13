@@ -68,8 +68,12 @@ def ensure_subscription(settings, t_path: str) -> str | None:
     logger.info("sub_created", path=sub_path)
     return sub_path
 
-def register_watch(settings, t_path: str) -> dict | None:
-    svc = _build_service(settings)
+def register_watch(settings, t_path: str, user_email: str | None = None) -> dict | None:
+    """user_email: register the watch on this specific mailbox instead of the
+    single settings.google_admin_impersonate_email — same optional-override
+    pattern as gmail_client._build_service, so fleet_watch can call this once
+    per discovered domain user."""
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return None
     try:
@@ -77,19 +81,22 @@ def register_watch(settings, t_path: str) -> dict | None:
             userId="me",
             body={"topicName": t_path, "labelIds": ["INBOX"], "labelFilterAction": "include"},
         ).execute()
-        logger.info("gmail_watch_registered", expiry=resp.get("expiration"))
+        logger.info("gmail_watch_registered", expiry=resp.get("expiration"), user_email=user_email)
         return resp
     except Exception as exc:
-        logger.warning("gmail_watch_err", error=str(exc))
+        logger.warning("gmail_watch_err", error=str(exc), user_email=user_email)
         return None
 
-def setup_gmail_watch(settings) -> dict:
-    """Full idempotent setup: notification channel + watch registration."""
+def setup_gmail_watch(settings, user_email: str | None = None) -> dict:
+    """Full idempotent setup: notification channel + watch registration.
+    The topic/subscription are domain-wide (shared), the watch itself is
+    per-mailbox — Gmail requires a separate watch() call per user you want
+    notifications for, even though they can all publish to the same topic."""
     t_path = ensure_topic(settings)
     if not t_path:
         return {"ok": False, "error": "topic_failed"}
     sub_path = ensure_subscription(settings, t_path)
-    watch = register_watch(settings, t_path)
+    watch = register_watch(settings, t_path, user_email=user_email)
     return {
         "ok": bool(watch),
         "topic": t_path,
@@ -98,20 +105,20 @@ def setup_gmail_watch(settings) -> dict:
         "history_id": watch.get("historyId") if watch else None,
     }
 
-def renew_gmail_watch(settings) -> dict:
-    """Renew an expiring Gmail watch (call daily)."""
+def renew_gmail_watch(settings, user_email: str | None = None) -> dict:
+    """Renew an expiring Gmail watch (call daily, or per fleet_watch's schedule)."""
     t_path = f"projects/{settings.google_cloud_project}/topics/{settings.gmail_queue_topic}"
-    watch = register_watch(settings, t_path)
+    watch = register_watch(settings, t_path, user_email=user_email)
     return {"ok": bool(watch), "watch_expiry": watch.get("expiration") if watch else None}
 
-def stop_gmail_watch(settings) -> bool:
-    svc = _build_service(settings)
+def stop_gmail_watch(settings, user_email: str | None = None) -> bool:
+    svc = _build_service(settings, user_email=user_email)
     if not svc:
         return False
     try:
         svc.users().stop(userId="me").execute()
-        logger.info("gmail_watch_stopped")
+        logger.info("gmail_watch_stopped", user_email=user_email)
         return True
     except Exception as exc:
-        logger.warning("gmail_stop_err", error=str(exc))
+        logger.warning("gmail_stop_err", error=str(exc), user_email=user_email)
         return False

@@ -45,8 +45,10 @@ def client():
 
 
 def _token(client, role: str = "analyst") -> str:
-    r = client.post("/token", json={"api_key": "dev-key", "sub": "tester", "role": role})
-    return r.json().get("access_token", "")
+    # /token no longer honors a client-chosen role (server decides it); mint the
+    # role-specific token directly for tests.
+    from app.security.auth import create_token
+    return create_token({"sub": "tester", "role": role})
 
 
 def _auth(client, role: str = "analyst") -> dict:

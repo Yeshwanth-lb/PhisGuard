@@ -4,7 +4,8 @@ Called after every profiling cycle. Upserts nodes and relationships so
 the Neo4j graph always reflects current profile state.
 
 Neo4j Browser: http://localhost:7474
-  Login: neo4j / changeme123
+  Login: settings.neo4j_user / settings.neo4j_password (NEO4J_USER / NEO4J_PASSWORD
+  in .env — defaults to neo4j / changeme123, matching docker-compose's NEO4J_AUTH).
 
 Useful Cypher queries in the browser:
   // All threat clusters
@@ -23,15 +24,11 @@ Useful Cypher queries in the browser:
 """
 from __future__ import annotations
 
-import os
-
 import structlog
 
-logger = structlog.get_logger()
+from app.config import settings
 
-_NEO4J_URI  = os.environ.get("NEO4J_URI",  "bolt://neo4j:7687")
-_NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-_NEO4J_PASS = os.environ.get("NEO4J_PASS", "changeme123")
+logger = structlog.get_logger()
 
 # Relationship type map: edge type → Cypher relationship type
 _REL_TYPES = {
@@ -53,7 +50,9 @@ async def push_graph(nodes: list[dict], edges: list[dict]) -> dict:
         return {"skipped": True, "reason": "neo4j package not installed"}
 
     try:
-        driver = AsyncGraphDatabase.driver(_NEO4J_URI, auth=(_NEO4J_USER, _NEO4J_PASS))
+        driver = AsyncGraphDatabase.driver(
+            settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
+        )
         await driver.verify_connectivity()
     except Exception as exc:
         logger.warning("neo4j_unavailable", error=str(exc)[:80])
@@ -113,6 +112,6 @@ async def push_graph(nodes: list[dict], edges: list[dict]) -> dict:
         "neo4j_push_done",
         nodes=nodes_written,
         edges=edges_written,
-        uri=_NEO4J_URI,
+        uri=settings.neo4j_uri,
     )
     return {"nodes": nodes_written, "edges": edges_written}

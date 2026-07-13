@@ -59,6 +59,12 @@ Output schema:
 }
 """
 
+_REPAIR_PROMPT = """\
+The previous response was not valid JSON (it may have been truncated or contained
+prose). Return ONLY the corrected, complete JSON object — no explanation, no markdown.
+Previous response:
+"""
+
 
 def _max_profile_confidence(profiles) -> str:
     if not profiles:
@@ -128,10 +134,21 @@ async def assess(db_path: str = _DB_PATH) -> OrgThreatAssessment:
     )
 
     llm = get_llm_client()
-    raw = await llm.complete(_SYSTEM_PROMPT, user_prompt, max_tokens=1000)
 
+    # First attempt — generous token budget; the schema (landscape + surface/sector
+    # pressure maps + campaigns array + summary) overflows a 1k cap and truncates.
+    raw = await llm.complete(_SYSTEM_PROMPT, user_prompt, max_tokens=2000)
     assessment = _parse(raw, profiles, max_conf, llm.model, db_path)
+
+    # Repair attempt — same pattern as the profiler: a single truncated/invalid
+    # response is re-sent for correction before giving up to the fallback.
+    if not assessment and raw:
+        logger.warning("org_assessor_parse_failed_attempting_repair")
+        raw2 = await llm.complete(_SYSTEM_PROMPT, _REPAIR_PROMPT + raw, max_tokens=2000)
+        assessment = _parse(raw2, profiles, max_conf, llm.model, db_path)
+
     if not assessment:
+        logger.warning("org_assessor_fallback_triggered")
         assessment = _fallback(profiles, db_path)
 
     store.upsert_org_assessment(assessment, db_path=db_path)

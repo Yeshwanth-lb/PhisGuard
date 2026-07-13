@@ -1,31 +1,33 @@
-"""SQLite-backed storage for scan results."""
+"""Primary datastore for scan results. Backend-agnostic via app.db:
+SQLite by default (WAL, unchanged dev/demo behavior), PostgreSQL when
+DATABASE_URL is set (deployment — real concurrent-write durability)."""
 import json
 import os
-import sqlite3
 import threading
 import time
+
+from app import db as _db
 
 _DB_PATH = os.environ.get('PHISHGUARD_DB_PATH', 'data/phishguard.db')
 _lock = threading.Lock()
 
 
 def _conn():
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(_DB_PATH, check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    return c
+    # app.db.connect handles WAL/pragmas for SQLite and psycopg for Postgres, and
+    # returns rows that behave like sqlite3.Row on both backends.
+    return _db.connect(_DB_PATH)
 
 
 def init_db():
     with _lock:
         c = _conn()
-        c.execute('''CREATE TABLE IF NOT EXISTS trusted_domains (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS trusted_domains (
             domain TEXT PRIMARY KEY,
             added_at REAL NOT NULL,
             added_by TEXT DEFAULT 'user',
             note TEXT DEFAULT ''
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+        )'''))
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS feedback (
             id TEXT PRIMARY KEY,
             scan_id TEXT NOT NULL,
             original_verdict TEXT,
@@ -33,9 +35,9 @@ def init_db():
             notes TEXT DEFAULT '',
             submitted_at REAL NOT NULL,
             submitted_by TEXT DEFAULT 'soc'
-        )''')
+        )'''))
         # Pending SOC review queue — suspicious emails held for analyst approval
-        c.execute('''CREATE TABLE IF NOT EXISTS pending_review (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS pending_review (
             id TEXT PRIMARY KEY,
             scan_id TEXT,
             ts REAL NOT NULL,
@@ -48,9 +50,9 @@ def init_db():
             status TEXT DEFAULT 'pending',
             reviewed_by TEXT,
             reviewed_at REAL
-        )''')
+        )'''))
         c.execute('CREATE INDEX IF NOT EXISTS idx_pr_status ON pending_review(status)')
-        c.execute('''CREATE TABLE IF NOT EXISTS scans (
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS scans (
             id TEXT PRIMARY KEY,
             ts REAL NOT NULL,
             verdict TEXT NOT NULL,
@@ -62,9 +64,39 @@ def init_db():
             data_json TEXT NOT NULL,
             released INTEGER DEFAULT 0,
             deleted INTEGER DEFAULT 0
-        )''')
+        )'''))
         c.execute('CREATE INDEX IF NOT EXISTS idx_ts ON scans(ts DESC)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_verdict ON scans(verdict)')
+        # Durable staging buffer for the bombing triage engine. Tier-2 (noise) and
+        # Tier-3 (uncertain) mail is parked here during an active bomb and released
+        # — labeled — when the window expires. NOTHING is held indefinitely. Buffer
+        # is persisted (not in-memory) specifically so it survives a restart
+        # mid-bomb. raw_email is stored so the message can be delivered intact;
+        # bodies are never logged (see privacy rule), only stored at rest like
+        # pending_review already does.
+        c.execute(_db.ddl('''CREATE TABLE IF NOT EXISTS bombing_buffer (
+            id TEXT PRIMARY KEY,
+            recipient TEXT NOT NULL,
+            scan_id TEXT,
+            timestamp REAL NOT NULL,
+            tier TEXT CHECK(tier IN ('important','noise','uncertain')),
+            released INTEGER DEFAULT 0,
+            raw_email BLOB NOT NULL,
+            sender_domain TEXT,
+            subject TEXT,
+            claimed_at REAL,
+            delivered_at REAL
+        )'''))
+        c.execute('CREATE INDEX IF NOT EXISTS idx_buffer_recipient_released '
+                  'ON bombing_buffer(recipient, released)')
+        # Migrate older SQLite buffer tables that predate claimed_at/delivered_at.
+        # SQLite-only: Postgres deployments start fresh with the full schema above.
+        if not _db.is_postgres():
+            _cols = {r[1] for r in c.execute("PRAGMA table_info(bombing_buffer)").fetchall()}
+            if "claimed_at" not in _cols:
+                c.execute("ALTER TABLE bombing_buffer ADD COLUMN claimed_at REAL")
+            if "delivered_at" not in _cols:
+                c.execute("ALTER TABLE bombing_buffer ADD COLUMN delivered_at REAL")
         c.commit()
         c.close()
 
@@ -74,9 +106,9 @@ def save_scan(scan_id, result, parsed):
         c = _conn()
         body = parsed.get('body_text', '') or ''
         prev = body[:300] if body else ''
-        c.execute('''INSERT OR REPLACE INTO scans
-            (id, ts, verdict, confidence, blocked_at, sender, subject, body_preview, data_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        c.execute(_db.upsert('scans',
+            ['id', 'ts', 'verdict', 'confidence', 'blocked_at', 'sender', 'subject',
+             'body_preview', 'data_json'], 'id'),
             (scan_id,
              time.time(),
              result.get('verdict', 'unknown'),
@@ -176,11 +208,11 @@ def save_pending_review(pending_id: str, scan_id: str, verdict: str, confidence:
     with _lock:
         c = _conn()
         try:
-            c.execute('''INSERT OR REPLACE INTO pending_review
-                (id, scan_id, ts, verdict, confidence, sender, subject, original_rcpt, raw_email, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')''',
+            c.execute(_db.upsert('pending_review',
+                ['id', 'scan_id', 'ts', 'verdict', 'confidence', 'sender', 'subject',
+                 'original_rcpt', 'raw_email', 'status'], 'id'),
                 (pending_id, scan_id, time.time(), verdict, float(confidence),
-                 sender, subject, original_rcpt, raw_email))
+                 sender, subject, original_rcpt, raw_email, 'pending'))
             c.commit()
             return True
         except Exception as exc:
@@ -235,7 +267,7 @@ def add_trusted_domain(domain: str, note: str = '', added_by: str = 'user') -> b
     with _lock:
         c = _conn()
         try:
-            c.execute('INSERT OR REPLACE INTO trusted_domains (domain, added_at, added_by, note) VALUES (?, ?, ?, ?)',
+            c.execute(_db.upsert('trusted_domains', ['domain', 'added_at', 'added_by', 'note'], 'domain'),
                       (domain.lower().strip(), time.time(), added_by, note))
             c.commit()
             return True
@@ -271,6 +303,191 @@ def save_feedback(scan_id: str, original_verdict: str, corrected_verdict: str,
             return False
         finally:
             c.close()
+
+
+# ── Bombing triage buffer ──────────────────────────────────────────────────────
+# Helpers for the durable staging buffer (see bombing_buffer table in init_db).
+# tier is one of: 'important' | 'noise' | 'uncertain'. Tier-1 ('important') mail is
+# delivered instantly and normally never buffered; the column is permitted for
+# completeness / audit. Writes persist synchronously before the SMTP receipt is
+# acknowledged — no ack-before-persist.
+
+_BUFFER_COLS = ["id", "recipient", "scan_id", "timestamp", "tier",
+                "released", "raw_email", "sender_domain", "subject"]
+
+
+def buffer_add(buffer_id: str, recipient: str, scan_id: str, tier: str,
+               raw_email: bytes, sender_domain: str = "", subject: str = "",
+               timestamp: float | None = None) -> bool:
+    with _lock:
+        c = _conn()
+        try:
+            c.execute(_db.upsert('bombing_buffer',
+                ['id', 'recipient', 'scan_id', 'timestamp', 'tier', 'released',
+                 'raw_email', 'sender_domain', 'subject'], 'id'),
+                (buffer_id, (recipient or "").strip().lower(), scan_id,
+                 timestamp if timestamp is not None else time.time(),
+                 tier, 0, raw_email, sender_domain, subject))
+            c.commit()
+            return True
+        except Exception as exc:
+            import structlog
+            structlog.get_logger().warning("buffer_add_err", error=str(exc))
+            return False
+        finally:
+            c.close()
+
+
+def buffer_list_for_recipient(recipient: str, released: int = 0) -> list[dict]:
+    """Buffered messages for a recipient, oldest first. released=0 → still held."""
+    with _lock:
+        c = _conn()
+        rows = c.execute(
+            '''SELECT id, recipient, scan_id, timestamp, tier, released,
+               raw_email, sender_domain, subject
+               FROM bombing_buffer WHERE recipient = ? AND released = ?
+               ORDER BY timestamp ASC''',
+            ((recipient or "").strip().lower(), released),
+        ).fetchall()
+        c.close()
+        return [dict(zip(_BUFFER_COLS, r)) for r in rows]
+
+
+def buffer_mark_released(buffer_id: str) -> bool:
+    """Mark a row as truly DELIVERED (released + delivered_at set). Only delivered rows
+    are eligible for purge."""
+    with _lock:
+        c = _conn()
+        c.execute("UPDATE bombing_buffer SET released = 1, "
+                  "claimed_at = COALESCE(claimed_at, ?), delivered_at = ? WHERE id = ?",
+                  (time.time(), time.time(), buffer_id))
+        c.commit()
+        c.close()
+        return True
+
+
+def buffer_claim(buffer_id: str) -> bool:
+    """Atomically claim a buffered row for release (flip released 0→1 + stamp claimed_at).
+    Returns True only if THIS caller won the claim. Safe across concurrent release workers
+    / uvicorn worker processes: the conditional UPDATE is serialized by SQLite, so exactly
+    one caller sees rowcount==1 — preventing double-delivery. A claim is NOT a delivery;
+    delivered_at stays NULL until buffer_mark_released, so a crash between claim and
+    delivery is recoverable via buffer_reclaim_stale (no silent drop)."""
+    with _lock:
+        c = _conn()
+        cur = c.execute(
+            "UPDATE bombing_buffer SET released = 1, claimed_at = ? "
+            "WHERE id = ? AND released = 0",
+            (time.time(), buffer_id),
+        )
+        c.commit()
+        won = cur.rowcount == 1
+        c.close()
+        return won
+
+
+def buffer_unclaim(buffer_id: str) -> bool:
+    """Revert a claim (released 1→0, clear claimed_at) so the message is retried next
+    cycle — used when delivery fails after claiming, so nothing is dropped."""
+    with _lock:
+        c = _conn()
+        c.execute("UPDATE bombing_buffer SET released = 0, claimed_at = NULL "
+                  "WHERE id = ? AND delivered_at IS NULL", (buffer_id,))
+        c.commit()
+        c.close()
+        return True
+
+
+def buffer_reclaim_stale(stale_secs: float) -> int:
+    """Recover rows claimed but never delivered (a worker crashed mid-delivery): reset
+    them to unreleased so the next cycle retries. Returns how many were reclaimed.
+    This is what makes the durable-buffer 'never drop' guarantee hold across crashes."""
+    with _lock:
+        c = _conn()
+        cutoff = time.time() - stale_secs
+        cur = c.execute(
+            "UPDATE bombing_buffer SET released = 0, claimed_at = NULL "
+            "WHERE released = 1 AND delivered_at IS NULL AND claimed_at < ?",
+            (cutoff,),
+        )
+        n = cur.rowcount
+        c.commit()
+        c.close()
+        if n:
+            import structlog
+            structlog.get_logger().warning("buffer_reclaimed_stale", count=n)
+        return n
+
+
+def buffer_purge_expired(older_than_secs: float = 86400) -> int:
+    """Delete only truly-DELIVERED buffer rows older than the cutoff. Claimed-but-not-
+    delivered rows (delivered_at IS NULL) are never purged — they get reclaimed instead,
+    so nothing is dropped. Returns count."""
+    with _lock:
+        c = _conn()
+        cutoff = time.time() - older_than_secs
+        cur = c.execute(
+            "DELETE FROM bombing_buffer WHERE delivered_at IS NOT NULL AND timestamp < ?",
+            (cutoff,),
+        )
+        n = cur.rowcount
+        c.commit()
+        c.close()
+        return n
+
+
+def buffer_list_due(older_than_secs: float) -> list[dict]:
+    """Unreleased buffered mail older than the window, across ALL recipients,
+    oldest first — the release worker's work-list."""
+    with _lock:
+        c = _conn()
+        cutoff = time.time() - older_than_secs
+        rows = c.execute(
+            '''SELECT id, recipient, scan_id, timestamp, tier, released,
+               raw_email, sender_domain, subject
+               FROM bombing_buffer WHERE released = 0 AND timestamp < ?
+               ORDER BY timestamp ASC''',
+            (cutoff,),
+        ).fetchall()
+        c.close()
+        return [dict(zip(_BUFFER_COLS, r)) for r in rows]
+
+
+def buffer_active_recipients() -> list[str]:
+    """Recipients with at least one unreleased buffered message (for surfacing)."""
+    with _lock:
+        c = _conn()
+        rows = c.execute(
+            "SELECT DISTINCT recipient FROM bombing_buffer WHERE released = 0"
+        ).fetchall()
+        c.close()
+        return [r[0] for r in rows]
+
+
+def buffer_count_for_recipient(recipient: str, released: int = 0) -> int:
+    """Number of buffered (default: unreleased) messages held for a recipient — used to
+    bound the buffer per inbox (overflow valve)."""
+    with _lock:
+        c = _conn()
+        n = c.execute(
+            "SELECT COUNT(*) FROM bombing_buffer WHERE recipient = ? AND released = ?",
+            ((recipient or "").strip().lower(), released),
+        ).fetchone()[0]
+        c.close()
+        return int(n)
+
+
+def buffer_counts_by_tier(recipient: str, released: int = 0) -> dict:
+    """Per-tier counts of buffered mail for a recipient (for /health surfacing)."""
+    with _lock:
+        c = _conn()
+        rows = c.execute(
+            '''SELECT tier, COUNT(*) FROM bombing_buffer
+               WHERE recipient = ? AND released = ? GROUP BY tier''',
+            ((recipient or "").strip().lower(), released),
+        ).fetchall()
+        c.close()
+        return {r[0]: r[1] for r in rows}
 
 
 init_db()
